@@ -312,15 +312,28 @@ def _insert_bars(instrument: str, df: pd.DataFrame, timeframe: str):
 
 
 def _load_bars(instrument: str, days: int, timeframe: str) -> pd.DataFrame:
-    tbl = _table(instrument, timeframe)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     # Plain connection (tuple rows). pd.read_sql + RealDictCursor can fabricate bogus rows
     # (e.g. column names as values) when the result set is empty.
     conn = _pg_connect(dict_rows=False)
     if conn is None:
-        log.warning("_load_bars: DB unavailable — returning empty DataFrame")
-        return pd.DataFrame()
-    _load_sql = f"""
+        log.warning("_load_bars: DB unavailable — fetching from OANDA")
+        meta = INSTRUMENTS.get(instrument)
+        if meta is None:
+            return pd.DataFrame()
+        mins_bar = _MINS_PER_BAR.get(timeframe, 5)
+        approx_bars = max(100, int((days * 24 * 60) / mins_bar) + 50)
+        df = _fetch_oanda(
+            meta["symbol"],
+            GRANULARITY_MAP.get(timeframe, "M5"),
+            approx_bars,
+        )
+        if df.empty:
+            return df
+        df = df.loc[df.index >= cutoff]
+    else:
+        tbl = _table(instrument, timeframe)
+        _load_sql = f"""
             SELECT "time" AS ts,
                    "open" AS "open",
                    "high" AS "high",
@@ -331,16 +344,16 @@ def _load_bars(instrument: str, days: int, timeframe: str) -> pd.DataFrame:
             WHERE "time" >= %s
             ORDER BY "time"
             """
-    try:
-        df = pd.read_sql(
-            _load_sql,
-            conn,
-            params=(cutoff,),
-            parse_dates=["ts"],
-            index_col="ts",
-        )
-    finally:
-        conn.close()
+        try:
+            df = pd.read_sql(
+                _load_sql,
+                conn,
+                params=(cutoff,),
+                parse_dates=["ts"],
+                index_col="ts",
+            )
+        finally:
+            conn.close()
     for col in ["open", "high", "low", "close", "volume"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")

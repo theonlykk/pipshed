@@ -25,37 +25,47 @@
     <div id="error-banner" class="error-banner" style="display:none" role="alert"></div>
 
     <div id="chart-wrapper" class="chart-wrapper">
+      <details class="chart-settings">
+        <summary class="chart-settings__gear" aria-label="Chart settings">⚙</summary>
+        <div class="chart-settings__dropdown">
+          <div class="chart-settings__section size-row" aria-label="Window size">
+            <span class="size-label">Size</span>
+            <div class="size-btn-group">
+              <button type="button" class="size-btn" data-size="20">20</button>
+              <button type="button" class="size-btn" data-size="30">30</button>
+              <button type="button" class="size-btn" data-size="50">50</button>
+              <button type="button" class="size-btn" data-size="75">75</button>
+              <button type="button" class="size-btn active" data-size="100">100</button>
+            </div>
+          </div>
+          <div class="chart-settings__section gear-row">
+            <label class="vol-label"><input type="checkbox" id="vol-toggle" /> Volume</label>
+            <label class="notional-label">Notional USD <input type="number" id="notional-input" min="100" max="1000000" step="100" value="1000" /></label>
+          </div>
+        </div>
+      </details>
       <img id="chart-img" class="chart-img" alt="Price chart" style="display:none" />
       <div id="chart-placeholder" class="chart-placeholder">Loading chart…</div>
       <div id="tooltip" class="tooltip" style="display:none"></div>
     </div>
 
-    <div id="equity-card" class="equity-card" style="display:none">
-      <img id="equity-img" class="equity-img" alt="Equity curve" />
-    </div>
-
-    <div class="window-row">
-      <span id="window-label" class="window-label">Window 1 / 1</span>
-      <div class="window-btns">
-        <button type="button" id="btn-shift-left" class="win-btn" title="Earlier">←</button>
-        <button type="button" id="btn-prev" class="win-btn" title="Previous window">◀</button>
-        <button type="button" id="btn-next" class="win-btn" title="Next window">▶</button>
-        <button type="button" id="btn-shift-right" class="win-btn" title="Later">→</button>
+    <div class="equity-nav-panel">
+      <div class="equity-nav-panel__chart">
+        <div id="equity-card" class="equity-card" style="display:none">
+          <img id="equity-img" class="equity-img" alt="Equity curve" />
+        </div>
       </div>
-    </div>
-
-    <div class="size-row" aria-label="Window size">
-      <span class="size-label">Size</span>
-      <button type="button" class="size-btn" data-size="20">20</button>
-      <button type="button" class="size-btn" data-size="30">30</button>
-      <button type="button" class="size-btn active" data-size="50">50</button>
-      <button type="button" class="size-btn" data-size="75">75</button>
-      <button type="button" class="size-btn" data-size="100">100</button>
-    </div>
-
-    <div class="gear-row">
-      <label class="vol-label"><input type="checkbox" id="vol-toggle" /> Volume</label>
-      <label class="notional-label">Notional USD <input type="number" id="notional-input" min="100" max="1000000" step="100" value="1000" /></label>
+      <div class="equity-nav-panel__nav" aria-label="Window navigation">
+        <div class="win-nav-row win-nav-row--jump">
+          <button type="button" id="btn-shift-left" class="win-btn win-btn--jump" title="Jump earlier">⇤</button>
+          <button type="button" id="btn-shift-right" class="win-btn win-btn--jump" title="Jump later">⇥</button>
+        </div>
+        <div class="win-nav-row win-nav-row--step">
+          <button type="button" id="btn-prev" class="win-btn win-btn--step" title="Previous window">←</button>
+          <button type="button" id="btn-next" class="win-btn win-btn--step" title="Next window">→</button>
+        </div>
+        <span id="window-label" class="window-label window-label--below-nav">Window 1 / 1</span>
+      </div>
     </div>
 
     <nav class="main-tabs" role="tablist">

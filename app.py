@@ -60,6 +60,7 @@ IMAGE_CACHE_TTL_SEC = 300
 DEFAULT_NOTIONAL_USD = 1000
 _MIN_NOTIONAL_USD = 100
 _MAX_NOTIONAL_USD = 1_000_000
+SLIPPAGE = 0.0005
 
 _VALID_FILTERS = {
     "bb", "rsi", "macd", "ema", "bb_width", "volume_spike",
@@ -299,6 +300,63 @@ def _equity_dollar_per_pip(instrument: str, notional: float, last_close: float) 
     return float(notional) * 0.0001
 
 
+def compute_atr_wilder(
+    high: np.ndarray | pd.Series,
+    low: np.ndarray | pd.Series,
+    close: np.ndarray | pd.Series,
+    period: int = 14,
+) -> np.ndarray:
+    """
+    Wilder ATR — same TR + RMA recipe as indicators.atr (logic duplicated here).
+    """
+    high = np.asarray(high, dtype=float)
+    low = np.asarray(low, dtype=float)
+    close = np.asarray(close, dtype=float)
+    n = len(high)
+    out = np.full(n, np.nan)
+    if n < period + 1:
+        return out
+    tr = np.empty(n)
+    tr[0] = high[0] - low[0]
+    for i in range(1, n):
+        hl = high[i] - low[i]
+        hc = abs(high[i] - close[i - 1])
+        lc = abs(low[i] - close[i - 1])
+        tr[i] = hl if hl >= hc and hl >= lc else (hc if hc >= lc else lc)
+    seed = 0.0
+    for i in range(period):
+        seed += tr[i]
+    seed /= period
+    out[period - 1] = seed
+    prev = seed
+    for i in range(period, n):
+        v = (prev * (period - 1) + tr[i]) / period
+        out[i] = v
+        prev = v
+    return out
+
+
+def h1_atr_aligned_to_df(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    Resample to H1 OHLC, Wilder ATR(period) on H1, forward-fill to df.index.
+    """
+    if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    o = df["open"].resample("1h", label="left", closed="left").first()
+    h = df["high"].resample("1h", label="left", closed="left").max()
+    lo = df["low"].resample("1h", label="left", closed="left").min()
+    c = df["close"].resample("1h", label="left", closed="left").last()
+    h1 = pd.concat([o, h, lo, c], axis=1)
+    h1.columns = ["open", "high", "low", "close"]
+    h1 = h1.dropna(how="all")
+    if len(h1) < period + 1:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    atr_h1 = compute_atr_wilder(h1["high"], h1["low"], h1["close"], period)
+    s = pd.Series(atr_h1, index=h1.index)
+    combined = s.reindex(s.index.union(df.index)).sort_index().ffill()
+    return combined.reindex(df.index)
+
+
 def _evaluate_tree_at_bar(
     tree: dict,
     df: pd.DataFrame,
@@ -412,8 +470,9 @@ def _compute_stats(df: pd.DataFrame, active_patterns: list, instrument: str) -> 
         return empty
 
     n = len(df)
-    closes = df["close"].to_numpy(dtype=float)
     atrs = df["atr"].to_numpy(dtype=float)
+    opens = df["open"].to_numpy(dtype=float)
+    atr_h1_full = h1_atr_aligned_to_df(df).to_numpy(dtype=float)
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     signals = df["signal"].to_numpy(dtype=np.int8)
@@ -429,12 +488,15 @@ def _compute_stats(df: pd.DataFrame, active_patterns: list, instrument: str) -> 
         sig = int(signals[i])
         if sig == 0:
             continue
-        atr_val = atrs[i]
-        if np.isnan(atr_val) or atr_val == 0.0:
+        atr_tf = atrs[i]
+        if np.isnan(atr_tf) or atr_tf == 0.0:
             continue
-        entry = closes[i + 1]
-        tp = entry + sig * TP_ATR_MULT * atr_val
-        sl = entry - sig * SL_ATR_MULT * atr_val
+        ah = atr_h1_full[i]
+        sl_tp_atr = float(ah) if np.isfinite(ah) and ah != 0.0 else float(atr_tf)
+        base_open = float(opens[i + 1])
+        entry = base_open + SLIPPAGE if sig == 1 else base_open - SLIPPAGE
+        tp = entry + sig * TP_ATR_MULT * sl_tp_atr
+        sl = entry - sig * SL_ATR_MULT * sl_tp_atr
         total += 1
         if df.index[i] >= now_cutoff:
             signals_30d += 1
@@ -444,21 +506,21 @@ def _compute_stats(df: pd.DataFrame, active_patterns: list, instrument: str) -> 
             if sig == 1:
                 if highs[j] >= tp:
                     wins += 1
-                    outcome_pips = TP_ATR_MULT * atr_val / pip
+                    outcome_pips = TP_ATR_MULT * sl_tp_atr / pip
                     hit = True
                     break
                 if lows[j] <= sl:
-                    outcome_pips = -SL_ATR_MULT * atr_val / pip
+                    outcome_pips = -SL_ATR_MULT * sl_tp_atr / pip
                     hit = True
                     break
             else:
                 if lows[j] <= tp:
                     wins += 1
-                    outcome_pips = TP_ATR_MULT * atr_val / pip
+                    outcome_pips = TP_ATR_MULT * sl_tp_atr / pip
                     hit = True
                     break
                 if highs[j] >= sl:
-                    outcome_pips = -SL_ATR_MULT * atr_val / pip
+                    outcome_pips = -SL_ATR_MULT * sl_tp_atr / pip
                     hit = True
                     break
         if hit:
@@ -544,6 +606,8 @@ def _compute_equity_curve(
     pip = INSTRUMENTS[instrument]["pip"]
     closes = df["close"].to_numpy(dtype=float)
     atrs = df["atr"].to_numpy(dtype=float)
+    opens = df["open"].to_numpy(dtype=float)
+    atr_h1_full = h1_atr_aligned_to_df(df).to_numpy(dtype=float)
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     signals = df["signal"].to_numpy(dtype=np.int8, copy=True)
@@ -625,26 +689,29 @@ def _compute_equity_curve(
         sig = int(signals[i])
         if sig == 0:
             continue
-        atr_val = atrs[i]
-        if np.isnan(atr_val) or atr_val == 0.0:
+        atr_tf = atrs[i]
+        if np.isnan(atr_tf) or atr_tf == 0.0:
             continue
-        entry = closes[i + 1]
-        tp = entry + sig * TP_ATR_MULT * atr_val
-        sl = entry - sig * SL_ATR_MULT * atr_val
+        ah = atr_h1_full[i]
+        sl_tp_atr = float(ah) if np.isfinite(ah) and ah != 0.0 else float(atr_tf)
+        base_open = float(opens[i + 1])
+        entry = base_open + SLIPPAGE if sig == 1 else base_open - SLIPPAGE
+        tp = entry + sig * TP_ATR_MULT * sl_tp_atr
+        sl = entry - sig * SL_ATR_MULT * sl_tp_atr
         for j in range(i + 2, min(i + MAX_HOLD_BARS, n)):
             if sig == 1:
                 if highs[j] >= tp:
-                    pnl[i] = TP_ATR_MULT * atr_val / pip
+                    pnl[i] = TP_ATR_MULT * sl_tp_atr / pip
                     break
                 if lows[j] <= sl:
-                    pnl[i] = -SL_ATR_MULT * atr_val / pip
+                    pnl[i] = -SL_ATR_MULT * sl_tp_atr / pip
                     break
             else:
                 if lows[j] <= tp:
-                    pnl[i] = TP_ATR_MULT * atr_val / pip
+                    pnl[i] = TP_ATR_MULT * sl_tp_atr / pip
                     break
                 if highs[j] >= sl:
-                    pnl[i] = -SL_ATR_MULT * atr_val / pip
+                    pnl[i] = -SL_ATR_MULT * sl_tp_atr / pip
                     break
 
     x = np.arange(n)

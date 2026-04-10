@@ -600,13 +600,12 @@ def _index_hours_utc(idx: pd.DatetimeIndex) -> np.ndarray:
 
 
 def _kz_active_array(index: pd.DatetimeIndex, kz_selected: set[str]) -> np.ndarray:
-    """True per bar if UTC time falls in any selected KZ window; all True if no KZ pills."""
+    """True per bar if UTC time falls in any KZ window: selected pills, or all four if none selected."""
     n = len(index)
-    if not kz_selected:
-        return np.ones(n, dtype=bool)
     hours = _index_hours_utc(index)
     out = np.zeros(n, dtype=bool)
-    for k in kz_selected:
+    keys = kz_selected if kz_selected else set(_KZ_UTC_WINDOWS.keys())
+    for k in keys:
         win = _KZ_UTC_WINDOWS.get(k)
         if win is None:
             continue

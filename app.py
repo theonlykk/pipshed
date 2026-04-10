@@ -75,6 +75,14 @@ _ALL_PATTERNS = set(PATTERN_REGISTRY.keys())
 
 _LIT_PLACEHOLDER_KEYS = frozenset({"sweep", "fvg", "bos", "order_block", "smt"})
 
+# Kill-zone pill keys → UTC hour window [start, end) on bar timestamp
+_KZ_UTC_WINDOWS: dict[str, tuple[int, int]] = {
+    "kz_london": (7, 9),
+    "kz_newyork": (12, 14),
+    "kz_london_close": (15, 16),
+    "kz_asia": (0, 2),
+}
+
 _REVERSAL_PATTERNS = [
     "shooting_star", "hammer", "hanging_man", "inverted_hammer",
     "engulfing", "morning_star", "evening_star", "piercing_dark_cloud",
@@ -583,6 +591,78 @@ def _signal_array_for_raw_pill(df: pd.DataFrame, raw_key: str) -> np.ndarray | N
     return None
 
 
+def _index_hours_utc(idx: pd.DatetimeIndex) -> np.ndarray:
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    else:
+        idx = idx.tz_convert("UTC")
+    return idx.hour.to_numpy(dtype=np.int32)
+
+
+def _kz_active_array(index: pd.DatetimeIndex, kz_selected: set[str]) -> np.ndarray:
+    """True per bar if UTC time falls in any selected KZ window; all True if no KZ pills."""
+    n = len(index)
+    if not kz_selected:
+        return np.ones(n, dtype=bool)
+    hours = _index_hours_utc(index)
+    out = np.zeros(n, dtype=bool)
+    for k in kz_selected:
+        win = _KZ_UTC_WINDOWS.get(k)
+        if win is None:
+            continue
+        lo, hi = win
+        out |= (hours >= lo) & (hours < hi)
+    return out
+
+
+def _regime_non_kz_confluence_keys(regime: list) -> list[str]:
+    expanded = _expand_key_list(list(regime or []))
+    seen: set[str] = set()
+    out: list[str] = []
+    for k in expanded:
+        if not isinstance(k, str) or not k:
+            continue
+        if k.startswith("kz_"):
+            continue
+        if k in _LIT_PLACEHOLDER_KEYS:
+            continue
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(k)
+    return out
+
+
+def _add_regime_context_columns(df: pd.DataFrame, regime: list) -> None:
+    """kz_active, regime_bull, regime_bear for chart shading (UTC KZs + regime confluence)."""
+    n = len(df)
+    if n == 0:
+        return
+    idx = df.index
+    kz_sel = {str(k) for k in (regime or []) if isinstance(k, str) and k.startswith("kz_")}
+    if isinstance(idx, pd.DatetimeIndex):
+        df["kz_active"] = _kz_active_array(idx, kz_sel)
+    else:
+        df["kz_active"] = True
+
+    keys = _regime_non_kz_confluence_keys(regime)
+    if not keys:
+        df["regime_bull"] = np.zeros(n, dtype=bool)
+        df["regime_bear"] = np.zeros(n, dtype=bool)
+        return
+
+    bull = np.ones(n, dtype=bool)
+    bear = np.ones(n, dtype=bool)
+    for k in keys:
+        arr = _signal_array_for_raw_pill(df, k)
+        if arr is None:
+            continue
+        bull &= arr == 1
+        bear &= arr == -1
+    df["regime_bull"] = bull
+    df["regime_bear"] = bear
+
+
 def _compute_equity_curve(
     df: pd.DataFrame,
     active_patterns: list,
@@ -1060,6 +1140,8 @@ def _run_chart_pipeline(
         pass
     else:
         df["signal"] = np.zeros(len(df), dtype=np.int8)
+
+    _add_regime_context_columns(df, regime)
 
     all_filters = filters + patterns_union
     window = window_selector_fn(df, all_filters)

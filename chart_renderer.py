@@ -232,6 +232,92 @@ def _draw_candles(ax, opens, highs, lows, closes):
         ax.add_patch(rect)
 
 
+def _draw_regime_context_shading(
+    ax,
+    window_df: pd.DataFrame,
+    highs: np.ndarray,
+    lows: np.ndarray,
+) -> None:
+    """
+    Background by kz_active / regime_bull / regime_bear (columns from app pipeline).
+    Grey axvspan outside KZ; tiled arrow glyphs inside KZ by confluence state.
+    """
+    n = len(window_df)
+    if n == 0 or "kz_active" not in window_df.columns:
+        return
+    kz = window_df["kz_active"].fillna(False).to_numpy(dtype=bool)
+    bull = (
+        window_df["regime_bull"].fillna(True).to_numpy(dtype=bool)
+        if "regime_bull" in window_df.columns
+        else np.ones(n, dtype=bool)
+    )
+    bear = (
+        window_df["regime_bear"].fillna(True).to_numpy(dtype=bool)
+        if "regime_bear" in window_df.columns
+        else np.ones(n, dtype=bool)
+    )
+    states = np.empty(n, dtype=np.int8)
+    for i in range(n):
+        if not kz[i]:
+            states[i] = 0
+        elif bull[i] and not bear[i]:
+            states[i] = 1
+        elif bear[i] and not bull[i]:
+            states[i] = 2
+        elif bull[i] and bear[i]:
+            states[i] = 3
+        else:
+            states[i] = 4
+
+    y_lo = float(np.nanmin(lows))
+    y_hi = float(np.nanmax(highs))
+    if not np.isfinite(y_lo) or not np.isfinite(y_hi):
+        return
+    y_mid = 0.5 * (y_lo + y_hi)
+
+    i = 0
+    while i < n:
+        st = int(states[i])
+        j = i
+        while j < n and int(states[j]) == st:
+            j += 1
+        i0, i1 = i, j - 1
+        x0, x1 = float(i0) - 0.5, float(i1) + 0.5
+        span_bars = i1 - i0 + 1
+        step = max(0.85, span_bars / 8.0)
+
+        if st == 0:
+            ax.axvspan(x0, x1, facecolor="#888888", alpha=0.10, zorder=1)
+        elif st == 1:
+            xv = i0
+            while xv <= i1 + 1e-6:
+                ax.text(
+                    xv, y_mid, "↑",
+                    ha="center", va="center", fontsize=13,
+                    color="#2e7d32", alpha=0.08, zorder=1,
+                )
+                xv += step
+        elif st == 2:
+            xv = i0
+            while xv <= i1 + 1e-6:
+                ax.text(
+                    xv, y_mid, "↓",
+                    ha="center", va="center", fontsize=13,
+                    color="#c62828", alpha=0.08, zorder=1,
+                )
+                xv += step
+        elif st == 3:
+            xv = i0
+            while xv <= i1 + 1e-6:
+                ax.text(
+                    xv, y_mid, "↕",
+                    ha="center", va="center", fontsize=13,
+                    color="#888888", alpha=0.08, zorder=1,
+                )
+                xv += step
+        i = j
+
+
 def _annotate_patterns(ax, df, active_patterns, highs, lows):
     """Coloured borders + symbols on pattern candles; brackets on multi-candle."""
     from patterns import PATTERN_LABELS
@@ -724,6 +810,7 @@ def render_chart(window_df: pd.DataFrame,
             )
 
     _draw_candles(ax_price, opens, highs, lows, closes)
+    _draw_regime_context_shading(ax_price, window_df, highs, lows)
 
     if signals is not None:
         _draw_trade_entry_markers(ax_price, x, highs, lows, signals, pip)

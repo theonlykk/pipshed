@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pipshed — FXMatrix Live</title>
+  <style>
+    :root {
+      --bg:        #0d0d0d;
+      --surface:   #161616;
+      --border:    #2a2a2a;
+      --text:      #e8e8e8;
+      --muted:     #666;
+      --green:     #00c853;
+      --red:       #ff1744;
+      --amber:     #ffa000;
+      --blue:      #2979ff;
+      --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+      --font-sans: 'Inter', system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+    .logo span { color: var(--green); }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+    }
+    .status-badge.live   { color: var(--green); border-color: var(--green); }
+    .status-badge.lost   { color: var(--red);   border-color: var(--red); }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .status-badge.live .status-dot { animation: pulse 1.5s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+
+    /* ── Instance selector ── */
+    .instance-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+    .instance-btn {
+      padding: 6px 16px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .instance-btn.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    /* ── Grid layout ── */
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 24px;
+    }
+    .card-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .card-value {
+      font-family: var(--font-mono);
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .card-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+      font-family: var(--font-mono);
+    }
+
+    .positive { color: var(--green); }
+    .negative { color: var(--red); }
+    .neutral  { color: var(--text); }
+
+    /* ── Equity vs Balance ── */
+    .equity-card {
+      grid-column: span 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+    }
+    .equity-block { flex: 1; }
+    .equity-divider {
+      width: 1px;
+      height: 60px;
+      background: var(--border);
+    }
+    .drawdown-bar-wrap {
+      flex: 2;
+    }
+    .drawdown-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .drawdown-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .drawdown-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s ease, background 0.4s;
+    }
+    .drawdown-pct {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      margin-top: 6px;
+      color: var(--muted);
+    }
+
+    /* ── Pod cards ── */
+    .pod-card .layers {
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .pod-card .pod-pnl {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      margin-top: 4px;
+    }
+    .pod-card .pod-dist {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .pod-card .pod-dist span {
+      font-family: var(--font-mono);
+      color: var(--amber);
+    }
+
+    /* ── API gauge ── */
+    .gauge-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .gauge-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: var(--green);
+      transition: width 0.4s ease, background 0.4s;
+    }
+    .gauge-value {
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      margin-top: 24px;
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">pip<span>shed</span></div>
+  <div class="status-badge lost" id="statusBadge">
+    <div class="status-dot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+</div>
+
+<div class="instance-bar">
+  <button class="instance-btn active" onclick="setInstance('MM')" id="btn-MM">MARKET MAKER</button>
+  <button class="instance-btn" onclick="setInstance('SNIPER')" id="btn-SNIPER">SNIPER</button>
+</div>
+
+<!-- Row 1: Equity vs Balance -->
+<div class="grid" style="margin-bottom:16px">
+  <div class="card equity-card">
+    <div class="equity-block">
+      <div class="card-label">Equity</div>
+      <div class="card-value" id="equity">—</div>
+      <div class="card-sub" id="equityTime">—</div>
+    </div>
+    <div class="equity-divider"></div>
+    <div class="equity-block">
+      <div class="card-label">Balance</div>
+      <div class="card-value neutral" id="balance">—</div>
+      <div class="card-sub" id="marginLevel">Margin: —</div>
+    </div>
+    <div class="equity-divider"></div>
+    <div class="drawdown-bar-wrap">
+      <div class="drawdown-label">Drawdown</div>
+      <div class="drawdown-bar-bg">
+        <div class="drawdown-bar-fill" id="ddBar" style="width:0%"></div>
+      </div>
+      <div class="drawdown-pct" id="ddPct">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Row 2: Pod cards -->
+<div class="grid-3">
+  <div class="card pod-card" id="pod-EURUSD">
+    <div class="card-label">EURUSD</div>
+    <div class="layers" id="eu-layers">—</div>
+    <div class="pod-pnl" id="eu-pnl">—</div>
+    <div class="pod-dist">Target: <span id="eu-dist">—</span></div>
+  </div>
+  <div class="card pod-card" id="pod-GBPUSD">
+    <div class="card-label">GBPUSD</div>
+    <div class="layers" id="gu-layers">—</div>
+    <div class="pod-pnl" id="gu-pnl">—</div>
+    <div class="pod-dist">Target: <span id="gu-dist">—</span></div>
+  </div>
+  <div class="card pod-card" id="pod-EURGBP">
+    <div class="card-label">EURGBP</div>
+    <div class="layers" id="eg-layers">—</div>
+    <div class="pod-pnl" id="eg-pnl">—</div>
+    <div class="pod-dist">Target: <span id="eg-dist">—</span></div>
+  </div>
+</div>
+
+<!-- Row 3: Engine state -->
+<div class="grid-3">
+  <div class="card">
+    <div class="card-label">Execution Mode</div>
+    <div class="card-value" id="execMode" style="font-size:18px;margin-top:4px">—</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Quote Spread</div>
+    <div class="card-value gauge-value" id="quoteSpread">—</div>
+    <div class="card-sub">bps</div>
+  </div>
+  <div class="card">
+    <div class="card-label">API Requests Today</div>
+    <div class="gauge-value" id="apiCount">—</div>
+    <div class="gauge-bar-bg">
+      <div class="gauge-bar-fill" id="apiBar" style="width:0%"></div>
+    </div>
+    <div class="card-sub" id="apiSub">— / 900</div>
+  </div>
+</div>
+
+<div class="footer">
+  <span id="lastUpdate">Last update: —</span>
+  <span id="instanceLabel">Instance: —</span>
+</div>
+
+<script>
+  let currentInstance = 'MM';
+
+  function setInstance(id) {
+    currentInstance = id;
+    document.querySelectorAll('.instance-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-' + id).classList.add('active');
+    fetchAndRender();
+  }
+
+  function fmt(val, decimals = 2) {
+    if (val === null || val === undefined) return '—';
+    return Number(val).toFixed(decimals);
+  }
+
+  function setPnl(el, val) {
+    if (val === null || val === undefined) { el.textContent = '—'; return; }
+    const v = Number(val);
+    el.textContent = (v >= 0 ? '+' : '') + v.toFixed(2);
+    el.className = 'pod-pnl ' + (v >= 0 ? 'positive' : 'negative');
+  }
+
+  function renderPod(prefix, pod) {
+    const layers = pod.layers || 0;
+    const pnl    = pod.net_pnl;
+    const dist   = pod.distance_to_target_pips;
+
+    document.getElementById(prefix + '-layers').textContent =
+      layers + ' layer' + (layers !== 1 ? 's' : '');
+    setPnl(document.getElementById(prefix + '-pnl'), pnl);
+    document.getElementById(prefix + '-dist').textContent =
+      dist !== null && dist !== undefined ? fmt(dist, 1) + ' pips' : '—';
+  }
+
+  function render(data) {
+    const badge    = document.getElementById('statusBadge');
+    const statusTx = document.getElementById('statusText');
+
+    if (data.status === 'connection_lost') {
+      badge.className = 'status-badge lost';
+      statusTx.textContent = 'Connection Lost';
+      return;
+    }
+
+    badge.className = 'status-badge live';
+    statusTx.textContent = 'Live';
+
+    // Equity / Balance
+    const eq  = data.account_metrics?.equity  ?? 0;
+    const bal = data.account_metrics?.balance  ?? 0;
+    const ml  = data.account_metrics?.margin_level_pct ?? 0;
+    const dd  = bal > 0 ? Math.max(0, (bal - eq) / bal * 100) : 0;
+
+    const eqEl = document.getElementById('equity');
+    eqEl.textContent = '$' + fmt(eq);
+    eqEl.className = 'card-value ' + (eq >= bal ? 'positive' : 'negative');
+
+    document.getElementById('balance').textContent    = '$' + fmt(bal);
+    document.getElementById('marginLevel').textContent = 'Margin level: ' + fmt(ml, 1) + '%';
+    document.getElementById('equityTime').textContent  = data.timestamp ?? '—';
+
+    // Drawdown bar
+    const ddBar = document.getElementById('ddBar');
+    const pct   = Math.min(dd, 10); // cap visual at 10% for scale
+    ddBar.style.width      = pct * 10 + '%';
+    ddBar.style.background = dd < 1 ? 'var(--green)' : dd < 3 ? 'var(--amber)' : 'var(--red)';
+    document.getElementById('ddPct').textContent = fmt(dd, 2) + '% drawdown';
+
+    // Pods
+    const pods = data.active_pods ?? {};
+    renderPod('eu', pods.EURUSD ?? {layers:0, net_pnl:0, distance_to_target_pips:null});
+    renderPod('gu', pods.GBPUSD ?? {layers:0, net_pnl:0, distance_to_target_pips:null});
+    renderPod('eg', pods.EURGBP ?? {layers:0, net_pnl:0, distance_to_target_pips:null});
+
+    // Engine state
+    const es = data.engine_state ?? {};
+    document.getElementById('execMode').textContent    = es.execution_mode ?? '—';
+    document.getElementById('quoteSpread').textContent = es.quote_spread
+      ? (es.quote_spread * 10000).toFixed(1)
+      : '—';
+
+    const apiCount = es.daily_api_count ?? 0;
+    const apiPct   = Math.min(apiCount / 900 * 100, 100);
+    const apiBar   = document.getElementById('apiBar');
+    apiBar.style.width      = apiPct + '%';
+    apiBar.style.background = apiPct < 70 ? 'var(--green)' : apiPct < 90 ? 'var(--amber)' : 'var(--red)';
+    document.getElementById('apiCount').textContent = apiCount;
+    document.getElementById('apiSub').textContent   = apiCount + ' / 900';
+
+    // Footer
+    document.getElementById('lastUpdate').textContent  = 'Last update: ' + new Date().toLocaleTimeString();
+    document.getElementById('instanceLabel').textContent = 'Instance: ' + (data.instance_id ?? '—');
+  }
+
+  async function fetchAndRender() {
+    try {
+      const res  = await fetch('/api/telemetry/live?instance=' + currentInstance);
+      const data = await res.json();
+      render(data);
+    } catch (e) {
+      render({ status: 'connection_lost' });
+    }
+  }
+
+  // Poll every 5 seconds
+  fetchAndRender();
+  setInterval(fetchAndRender, 5000);
+</script>
+</body>
+</html>

@@ -230,6 +230,48 @@
       display: flex;
       justify-content: space-between;
     }
+
+    /* ── Closed Pods Table ── */
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 24px 0 12px 0;
+    }
+    .pods-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      font-family: var(--font-mono);
+    }
+    .pods-table th {
+      text-align: left;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 0 12px 8px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .pods-table td {
+      padding: 10px 12px 10px 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      vertical-align: middle;
+    }
+    .pods-table tr:last-child td { border-bottom: none; }
+    .pods-table .win  { color: var(--green); font-weight: 600; }
+    .pods-table .loss { color: var(--red);   font-weight: 600; }
+    .pods-table .dir-long  { color: var(--green); }
+    .pods-table .dir-short { color: var(--red); }
+    .pods-table .empty-row td {
+      text-align: center;
+      color: var(--muted);
+      padding: 24px 0;
+    }
   </style>
 </head>
 <body>
@@ -427,6 +469,82 @@
   // Poll every 5 seconds
   fetchAndRender();
   setInterval(fetchAndRender, 5000);
+</script>
+
+<div class="section-title">Closed Pods — Today</div>
+<div class="card" style="padding: 0 24px;">
+  <table class="pods-table" id="closedPodsTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Instrument</th>
+        <th>Direction</th>
+        <th>Layers</th>
+        <th>Avg Entry</th>
+        <th>Exit</th>
+        <th>Hold</th>
+        <th>P&amp;L</th>
+        <th>Result</th>
+      </tr>
+    </thead>
+    <tbody id="closedPodsBody">
+      <tr class="empty-row"><td colspan="9">No closed pods today</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+// Closed pods polling — separate from live telemetry poll
+async function fetchClosedPods() {
+  try {
+    const res  = await fetch('/api/telemetry/closed?instance=' + currentInstance);
+    const data = await res.json();
+    renderClosedPods(data.records || []);
+  } catch (e) {
+    // silent fail — closed pods are non-critical
+  }
+}
+
+function renderClosedPods(records) {
+  const tbody = document.getElementById('closedPodsBody');
+
+  // Filter to today only (UTC date match)
+  const today = new Date().toISOString().slice(0, 10);
+  const todayRecords = records.filter(r => r.close_time && r.close_time.startsWith(today));
+
+  if (todayRecords.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No closed pods today</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = todayRecords.map(r => {
+    const pnl     = Number(r.gross_pnl || 0);
+    const isWin   = pnl >= 0;
+    const pnlStr  = (isWin ? '+' : '') + pnl.toFixed(2);
+    const result  = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
+    const dirCls  = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
+    const timeStr = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
+    const hold    = r.hold_time_minutes != null ? Math.round(r.hold_time_minutes) + 'm' : '—';
+    const avgEntry = r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—';
+    const exit     = r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—';
+
+    return `<tr>
+      <td>${timeStr}</td>
+      <td>${r.instrument || '—'}</td>
+      <td class="${dirCls}">${r.direction || '—'}</td>
+      <td>${r.layers_closed || '—'}</td>
+      <td>${avgEntry}</td>
+      <td>${exit}</td>
+      <td>${hold}</td>
+      <td class="${isWin ? 'win' : 'loss'}">${pnlStr}</td>
+      <td>${result}</td>
+    </tr>`;
+  }).join('');
+}
+
+// Poll closed pods every 30 seconds
+fetchClosedPods();
+setInterval(fetchClosedPods, 30000);
 </script>
 </body>
 </html>

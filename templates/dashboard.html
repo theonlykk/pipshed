@@ -272,6 +272,25 @@
       color: var(--muted);
       padding: 24px 0;
     }
+
+    /* ── LDAK + Rollover panels ── */
+    .ldak-wrap { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+    .ldak-bar-bg {
+      flex: 1; height: 6px; background: var(--border);
+      border-radius: 3px; overflow: hidden;
+    }
+    .ldak-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s, background 0.4s; }
+    .ldak-label { font-size: 11px; color: var(--muted); width: 24px; font-family: var(--font-mono); }
+    .ldak-val { font-size: 11px; font-family: var(--font-mono); width: 36px; text-align: right; }
+    .rollover-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; padding: 4px 10px; border-radius: 12px;
+      border: 1px solid var(--border); margin-top: 8px;
+    }
+    .rollover-badge.active { color: var(--amber); border-color: var(--amber); }
+    .rollover-badge.inactive { color: var(--muted); border-color: var(--border); }
+    .rollover-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   </style>
 </head>
 <body>
@@ -341,6 +360,28 @@
   <div class="card">
     <div class="card-label">Execution Mode</div>
     <div class="card-value" id="execMode" style="font-size:18px;margin-top:4px">—</div>
+    <div style="margin-top:14px;">
+      <div class="card-label" style="margin-bottom:6px;">LDAK V-Ratios</div>
+      <div class="ldak-wrap">
+        <span class="ldak-label">EU</span>
+        <div class="ldak-bar-bg"><div class="ldak-bar-fill" id="ldakBarEU" style="width:0%"></div></div>
+        <span class="ldak-val" id="ldakValEU">—</span>
+      </div>
+      <div class="ldak-wrap">
+        <span class="ldak-label">GU</span>
+        <div class="ldak-bar-bg"><div class="ldak-bar-fill" id="ldakBarGU" style="width:0%"></div></div>
+        <span class="ldak-val" id="ldakValGU">—</span>
+      </div>
+      <div class="ldak-wrap">
+        <span class="ldak-label">EG</span>
+        <div class="ldak-bar-bg"><div class="ldak-bar-fill" id="ldakBarEG" style="width:0%"></div></div>
+        <span class="ldak-val" id="ldakValEG">—</span>
+      </div>
+      <div class="rollover-badge inactive" id="rolloverBadge">
+        <div class="rollover-dot"></div>
+        <span id="rolloverText">Market Open</span>
+      </div>
+    </div>
   </div>
   <div class="card">
     <div class="card-label">Quote Spread</div>
@@ -439,6 +480,33 @@
     // Engine state
     const es = data.engine_state ?? {};
     document.getElementById('execMode').textContent    = es.execution_mode ?? '—';
+
+    // LDAK V-ratios
+    const vr = es.ldak_vratios || {};
+    ['EU','GU','EG'].forEach(k => {
+      const val = vr[k] != null ? Number(vr[k]) : null;
+      const bar = document.getElementById('ldakBar' + k);
+      const lbl = document.getElementById('ldakVal' + k);
+      if (val !== null) {
+        const pct = Math.min(val / 3.0 * 100, 100);
+        bar.style.width = pct + '%';
+        bar.style.background = val < 1.5 ? 'var(--green)' : val < 2.5 ? 'var(--amber)' : 'var(--red)';
+        lbl.textContent = val.toFixed(2);
+        lbl.style.color = val < 1.5 ? 'var(--green)' : val < 2.5 ? 'var(--amber)' : 'var(--red)';
+      }
+    });
+
+    // Rollover window
+    const rolloverBadge = document.getElementById('rolloverBadge');
+    const rolloverText  = document.getElementById('rolloverText');
+    if (es.rollover_active === true) {
+      rolloverBadge.className = 'rollover-badge active';
+      rolloverText.textContent = 'NY Rollover Active';
+    } else {
+      rolloverBadge.className = 'rollover-badge inactive';
+      rolloverText.textContent = 'Market Open';
+    }
+
     document.getElementById('quoteSpread').textContent = es.quote_spread
       ? (es.quote_spread * 10000).toFixed(1)
       : '—';
@@ -471,7 +539,7 @@
   setInterval(fetchAndRender, 5000);
 </script>
 
-<div class="section-title">Closed Pods — Today</div>
+<div class="section-title">Closed Trades — Today</div>
 <div class="card" style="padding: 0 24px;">
   <table class="pods-table" id="closedPodsTable">
     <thead>

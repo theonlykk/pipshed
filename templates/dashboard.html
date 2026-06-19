@@ -555,6 +555,7 @@
     <thead>
       <tr>
         <th>Time</th>
+        <th>Instance</th>
         <th>Instrument</th>
         <th>Direction</th>
         <th>Layers</th>
@@ -566,18 +567,23 @@
       </tr>
     </thead>
     <tbody id="closedPodsBody">
-      <tr class="empty-row"><td colspan="9">No closed pods today</td></tr>
+      <tr class="empty-row"><td colspan="10">No closed pods today</td></tr>
     </tbody>
   </table>
 </div>
 
 <script>
-// Closed pods polling — separate from live telemetry poll
+// Closed pods polling — fetches MM + SNIPER and merges
 async function fetchClosedPods() {
   try {
-    const res  = await fetch('/api/telemetry/closed?instance=' + currentInstance);
-    const data = await res.json();
-    renderClosedPods(data.records || []);
+    const [mmRes, sniperRes] = await Promise.all([
+      fetch('/api/telemetry/closed?instance=MM'),
+      fetch('/api/telemetry/closed?instance=SNIPER')
+    ]);
+    const mmData     = await mmRes.json();
+    const sniperData = await sniperRes.json();
+    const combined   = (mmData.records || []).concat(sniperData.records || []);
+    renderClosedPods(combined);
   } catch (e) {
     // silent fail — closed pods are non-critical
   }
@@ -590,24 +596,30 @@ function renderClosedPods(records) {
   const today = new Date().toISOString().slice(0, 10);
   const todayRecords = records.filter(r => r.close_time && r.close_time.startsWith(today));
 
+  // Sort newest first
+  todayRecords.sort((a, b) => b.close_time.localeCompare(a.close_time));
+
   if (todayRecords.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No closed pods today</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No closed pods today</td></tr>';
     return;
   }
 
   tbody.innerHTML = todayRecords.map(r => {
-    const pnl     = Number(r.gross_pnl || 0);
-    const isWin   = pnl >= 0;
-    const pnlStr  = (isWin ? '+' : '') + pnl.toFixed(2);
-    const result  = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
-    const dirCls  = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
-    const timeStr = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
-    const hold    = r.hold_time_minutes != null ? Math.round(r.hold_time_minutes) + 'm' : '—';
+    const pnl      = Number(r.gross_pnl || 0);
+    const isWin    = pnl >= 0;
+    const pnlStr   = (isWin ? '+' : '') + pnl.toFixed(2);
+    const result   = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
+    const dirCls   = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
+    const timeStr  = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
+    const hold     = r.hold_time_minutes != null ? Math.round(r.hold_time_minutes) + 'm' : '—';
     const avgEntry = r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—';
     const exit     = r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—';
+    const inst     = r.instance_id || '—';
+    const instCls  = inst === 'MM' ? 'dir-long' : inst === 'SNIPER' ? 'dir-short' : '';
 
     return '<tr>' +
       '<td>' + timeStr + '</td>' +
+      '<td class="' + instCls + '">' + inst + '</td>' +
       '<td>' + (r.instrument || '—') + '</td>' +
       '<td class="' + dirCls + '">' + (r.direction || '—') + '</td>' +
       '<td>' + (r.layers_closed || '—') + '</td>' +

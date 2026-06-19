@@ -498,12 +498,11 @@
         const valStr = val !== null ? val.toFixed(2) : '—';
         // Short label: first 2 chars of each currency in the pair (e.g. EURUSD → EU)
         const shortLabel = k.length >= 6 ? k.slice(0,2) + k.slice(3,5) : k;
-        ldakCont.innerHTML += \`
-          <div class="ldak-wrap">
-            <span class="ldak-label">\${shortLabel}</span>
-            <div class="ldak-bar-bg"><div class="ldak-bar-fill" style="width:\${barPct}%;background:\${color}"></div></div>
-            <span class="ldak-val" style="color:\${color}">\${valStr}</span>
-          </div>\`;
+        ldakCont.innerHTML += '<div class="ldak-wrap">' +
+          '<span class="ldak-label">' + shortLabel + '</span>' +
+          '<div class="ldak-bar-bg"><div class="ldak-bar-fill" style="width:' + barPct + '%;background:' + color + '"></div></div>' +
+          '<span class="ldak-val" style="color:' + color + '">' + valStr + '</span>' +
+          '</div>';
       });
     }
 
@@ -607,17 +606,17 @@ function renderClosedPods(records) {
     const avgEntry = r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—';
     const exit     = r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—';
 
-    return `<tr>
-      <td>${timeStr}</td>
-      <td>${r.instrument || '—'}</td>
-      <td class="${dirCls}">${r.direction || '—'}</td>
-      <td>${r.layers_closed || '—'}</td>
-      <td>${avgEntry}</td>
-      <td>${exit}</td>
-      <td>${hold}</td>
-      <td class="${isWin ? 'win' : 'loss'}">${pnlStr}</td>
-      <td>${result}</td>
-    </tr>`;
+    return '<tr>' +
+      '<td>' + timeStr + '</td>' +
+      '<td>' + (r.instrument || '—') + '</td>' +
+      '<td class="' + dirCls + '">' + (r.direction || '—') + '</td>' +
+      '<td>' + (r.layers_closed || '—') + '</td>' +
+      '<td>' + avgEntry + '</td>' +
+      '<td>' + exit + '</td>' +
+      '<td>' + hold + '</td>' +
+      '<td class="' + (isWin ? 'win' : 'loss') + '">' + pnlStr + '</td>' +
+      '<td>' + result + '</td>' +
+      '</tr>';
   }).join('');
 }
 

@@ -562,7 +562,7 @@
         <th>Avg Entry</th>
         <th>Exit</th>
         <th>Hold</th>
-        <th>P&amp;L</th>
+        <th>Pips</th>
         <th>Result</th>
       </tr>
     </thead>
@@ -605,15 +605,30 @@ function renderClosedPods(records) {
   }
 
   tbody.innerHTML = todayRecords.map(r => {
-    const pnl      = Number(r.gross_pnl || 0);
-    const isWin    = pnl >= 0;
-    const pnlStr   = (isWin ? '+' : '') + pnl.toFixed(2);
-    const result   = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
-    const dirCls   = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
-    const timeStr  = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
-    const hold     = r.hold_time_minutes != null ? Math.round(r.hold_time_minutes) + 'm' : '—';
-    const avgEntry = r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—';
-    const exit     = r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—';
+    // Pip P&L: (exit - entry) * direction, in price units
+    // Direction: LONG = bought, so profit when exit > entry
+    //            SHORT = sold, so profit when exit < entry
+    const avgEntryNum = r.avg_entry_price != null ? Number(r.avg_entry_price) : null;
+    const exitNum     = r.exit_price != null ? Number(r.exit_price) : null;
+    const dirMult     = r.direction === 'LONG' ? 1 : -1;
+
+    let pipsStr = '—';
+    let isWin   = true;
+    if (avgEntryNum !== null && exitNum !== null) {
+      const rawDiff = (exitNum - avgEntryNum) * dirMult;
+      // Convert to pips: multiply by 10000 for most pairs, 100 for JPY
+      const pipMult = (r.instrument && r.instrument.includes('JPY')) ? 100 : 10000;
+      const pips    = rawDiff * pipMult;
+      isWin   = pips >= 0;
+      pipsStr = (isWin ? '+' : '') + pips.toFixed(1) + 'p';
+    }
+
+    const result  = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
+    const dirCls  = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
+    const timeStr = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
+    const hold    = r.hold_time_minutes != null ? Math.round(r.hold_time_minutes) + 'm' : '—';
+    const avgEntry = avgEntryNum !== null ? avgEntryNum.toFixed(5) : '—';
+    const exit     = exitNum !== null ? exitNum.toFixed(5) : '—';
     const inst     = r.instance_id || '—';
     const instCls  = inst === 'MM' ? 'dir-long' : inst === 'SNIPER' ? 'dir-short' : '';
 
@@ -626,7 +641,7 @@ function renderClosedPods(records) {
       '<td>' + avgEntry + '</td>' +
       '<td>' + exit + '</td>' +
       '<td>' + hold + '</td>' +
-      '<td class="' + (isWin ? 'win' : 'loss') + '">' + pnlStr + '</td>' +
+      '<td class="' + (isWin ? 'win' : 'loss') + '">' + pipsStr + '</td>' +
       '<td>' + result + '</td>' +
       '</tr>';
   }).join('');

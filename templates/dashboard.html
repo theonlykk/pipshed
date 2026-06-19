@@ -333,25 +333,25 @@
   </div>
 </div>
 
-<!-- Row 2: Pod cards -->
-<div class="grid-3">
-  <div class="card pod-card" id="pod-EURUSD">
-    <div class="card-label">EURUSD</div>
-    <div class="layers" id="eu-layers">—</div>
-    <div class="pod-pnl" id="eu-pnl">—</div>
-    <div class="pod-dist">Target: <span id="eu-dist">—</span></div>
+<!-- Row 2: Pod cards — ADR-024 V3: slot-indexed, populated dynamically by render() -->
+<div class="grid-3" id="pod-grid">
+  <div class="card pod-card" id="pod-0">
+    <div class="card-label" id="pod-0-label">—</div>
+    <div class="layers" id="pod-0-layers">—</div>
+    <div class="pod-pnl" id="pod-0-pnl">—</div>
+    <div class="pod-dist">Target: <span id="pod-0-dist">—</span></div>
   </div>
-  <div class="card pod-card" id="pod-GBPUSD">
-    <div class="card-label">GBPUSD</div>
-    <div class="layers" id="gu-layers">—</div>
-    <div class="pod-pnl" id="gu-pnl">—</div>
-    <div class="pod-dist">Target: <span id="gu-dist">—</span></div>
+  <div class="card pod-card" id="pod-1">
+    <div class="card-label" id="pod-1-label">—</div>
+    <div class="layers" id="pod-1-layers">—</div>
+    <div class="pod-pnl" id="pod-1-pnl">—</div>
+    <div class="pod-dist">Target: <span id="pod-1-dist">—</span></div>
   </div>
-  <div class="card pod-card" id="pod-EURGBP">
-    <div class="card-label">EURGBP</div>
-    <div class="layers" id="eg-layers">—</div>
-    <div class="pod-pnl" id="eg-pnl">—</div>
-    <div class="pod-dist">Target: <span id="eg-dist">—</span></div>
+  <div class="card pod-card" id="pod-2">
+    <div class="card-label" id="pod-2-label">—</div>
+    <div class="layers" id="pod-2-layers">—</div>
+    <div class="pod-pnl" id="pod-2-pnl">—</div>
+    <div class="pod-dist">Target: <span id="pod-2-dist">—</span></div>
   </div>
 </div>
 
@@ -362,21 +362,8 @@
     <div class="card-value" id="execMode" style="font-size:18px;margin-top:4px">—</div>
     <div style="margin-top:14px;">
       <div class="card-label" style="margin-bottom:6px;">LDAK V-Ratios</div>
-      <div class="ldak-wrap">
-        <span class="ldak-label">EU</span>
-        <div class="ldak-bar-bg"><div class="ldak-bar-fill" id="ldakBarEU" style="width:0%"></div></div>
-        <span class="ldak-val" id="ldakValEU">—</span>
-      </div>
-      <div class="ldak-wrap">
-        <span class="ldak-label">GU</span>
-        <div class="ldak-bar-bg"><div class="ldak-bar-fill" id="ldakBarGU" style="width:0%"></div></div>
-        <span class="ldak-val" id="ldakValGU">—</span>
-      </div>
-      <div class="ldak-wrap">
-        <span class="ldak-label">EG</span>
-        <div class="ldak-bar-bg"><div class="ldak-bar-fill" id="ldakBarEG" style="width:0%"></div></div>
-        <span class="ldak-val" id="ldakValEG">—</span>
-      </div>
+      <!-- ADR-024 V3: LDAK bars populated dynamically by render() via Object.keys() -->
+      <div id="ldak-container"></div>
       <div class="rollover-badge inactive" id="rolloverBadge">
         <div class="rollover-dot"></div>
         <span id="rolloverText">Market Open</span>
@@ -425,15 +412,23 @@
     el.className = 'pod-pnl ' + (v >= 0 ? 'positive' : 'negative');
   }
 
-  function renderPod(prefix, pod) {
+  // ADR-024 V3: slot-indexed pod renderer — prefix is 'pod-N'
+  function renderPod(slotIdx, symbol, pod) {
     const layers = pod.layers || 0;
     const pnl    = pod.net_pnl;
     const dist   = pod.distance_to_target_pips;
+    const prefix = 'pod-' + slotIdx;
 
-    document.getElementById(prefix + '-layers').textContent =
-      layers + ' layer' + (layers !== 1 ? 's' : '');
+    const labelEl = document.getElementById(prefix + '-label');
+    if (labelEl) labelEl.textContent = symbol;
+
+    const layersEl = document.getElementById(prefix + '-layers');
+    if (layersEl) layersEl.textContent = layers + ' layer' + (layers !== 1 ? 's' : '');
+
     setPnl(document.getElementById(prefix + '-pnl'), pnl);
-    document.getElementById(prefix + '-dist').textContent =
+
+    const distEl = document.getElementById(prefix + '-dist');
+    if (distEl) distEl.textContent =
       dist !== null && dist !== undefined ? fmt(dist, 1) + ' pips' : '—';
   }
 
@@ -466,35 +461,51 @@
 
     // Drawdown bar
     const ddBar = document.getElementById('ddBar');
-    const pct   = Math.min(dd, 10); // cap visual at 10% for scale
+    const pct   = Math.min(dd, 10);
     ddBar.style.width      = pct * 10 + '%';
     ddBar.style.background = dd < 1 ? 'var(--green)' : dd < 3 ? 'var(--amber)' : 'var(--red)';
     document.getElementById('ddPct').textContent = fmt(dd, 2) + '% drawdown';
 
-    // Pods
-    const pods = data.active_pods ?? {};
-    renderPod('eu', pods.EURUSD ?? {layers:0, net_pnl:0, distance_to_target_pips:null});
-    renderPod('gu', pods.GBPUSD ?? {layers:0, net_pnl:0, distance_to_target_pips:null});
-    renderPod('eg', pods.EURGBP ?? {layers:0, net_pnl:0, distance_to_target_pips:null});
+    // ADR-024 V3: dynamic pod rendering via Object.keys()
+    const pods    = data.active_pods ?? {};
+    const podKeys = Object.keys(pods);
+    podKeys.forEach((sym, idx) => {
+      if (idx < 3) renderPod(idx, sym, pods[sym]);
+    });
+    // Zero out any slots not present in payload
+    for (let i = podKeys.length; i < 3; i++) {
+      renderPod(i, '—', {layers: 0, net_pnl: 0, distance_to_target_pips: null});
+    }
 
     // Engine state
     const es = data.engine_state ?? {};
     document.getElementById('execMode').textContent    = es.execution_mode ?? '—';
 
-    // LDAK V-ratios
-    const vr = es.ldak_vratios || {};
-    ['EU','GU','EG'].forEach(k => {
-      const val = vr[k] != null ? Number(vr[k]) : null;
-      const bar = document.getElementById('ldakBar' + k);
-      const lbl = document.getElementById('ldakVal' + k);
-      if (val !== null) {
-        const pct = Math.min(val / 3.0 * 100, 100);
-        bar.style.width = pct + '%';
-        bar.style.background = val < 1.5 ? 'var(--green)' : val < 2.5 ? 'var(--amber)' : 'var(--red)';
-        lbl.textContent = val.toFixed(2);
-        lbl.style.color = val < 1.5 ? 'var(--green)' : val < 2.5 ? 'var(--amber)' : 'var(--red)';
-      }
-    });
+    // ADR-024 V3: dynamic LDAK V-ratio bars via Object.keys()
+    const vr       = es.ldak_vratios || {};
+    const vrKeys   = Object.keys(vr);
+    const ldakCont = document.getElementById('ldak-container');
+    if (ldakCont) {
+      // Rebuild LDAK bars dynamically to match whatever triad is active
+      ldakCont.innerHTML = '';
+      vrKeys.forEach(k => {
+        const val  = vr[k] != null ? Number(vr[k]) : null;
+        const barPct = val !== null ? Math.min(val / 3.0 * 100, 100) : 0;
+        const color  = val === null ? 'var(--muted)'
+                     : val < 1.5   ? 'var(--green)'
+                     : val < 2.5   ? 'var(--amber)'
+                     : 'var(--red)';
+        const valStr = val !== null ? val.toFixed(2) : '—';
+        // Short label: first 2 chars of each currency in the pair (e.g. EURUSD → EU)
+        const shortLabel = k.length >= 6 ? k.slice(0,2) + k.slice(3,5) : k;
+        ldakCont.innerHTML += \`
+          <div class="ldak-wrap">
+            <span class="ldak-label">\${shortLabel}</span>
+            <div class="ldak-bar-bg"><div class="ldak-bar-fill" style="width:\${barPct}%;background:\${color}"></div></div>
+            <span class="ldak-val" style="color:\${color}">\${valStr}</span>
+          </div>\`;
+      });
+    }
 
     // Rollover window
     const rolloverBadge = document.getElementById('rolloverBadge');

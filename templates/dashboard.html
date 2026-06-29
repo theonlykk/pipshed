@@ -593,8 +593,13 @@ function renderClosedPods(records) {
   const tbody = document.getElementById('closedPodsBody');
 
   // Filter to today only (UTC date match)
+  // ADR-053: filter on broker trade_date field (broker local time)
+  // Fallback to UTC close_time prefix for legacy records without trade_date
   const today = new Date().toISOString().slice(0, 10);
-  const todayRecords = records.filter(r => r.close_time && r.close_time.startsWith(today));
+  const todayRecords = records.filter(r => {
+    if (r.trade_date) return r.trade_date === today;
+    return r.close_time && r.close_time.startsWith(today);
+  });
 
   // Sort newest first
   todayRecords.sort((a, b) => b.close_time.localeCompare(a.close_time));
@@ -604,7 +609,44 @@ function renderClosedPods(records) {
     return;
   }
 
-  tbody.innerHTML = todayRecords.map(r => {
+  // ADR-053: aggregate per-layer rows into pod-level rows
+  // Group records within 2 seconds on same symbol + direction
+  // layers_closed reads group[0] -- EA already sends absolute pod size (inv_size)
+  // Do NOT sum layers_closed across events -- would multiply the count
+  const grouped = [];
+  const used = new Array(todayRecords.length).fill(false);
+  for (let i = 0; i < todayRecords.length; i++) {
+    if (used[i]) continue;
+    const base = todayRecords[i];
+    const group = [base];
+    used[i] = true;
+    for (let j = i + 1; j < todayRecords.length; j++) {
+      if (used[j]) continue;
+      if (todayRecords[j].instrument !== base.instrument) continue;
+      if (todayRecords[j].direction !== base.direction) continue;
+      const tBase = new Date(base.close_time).getTime();
+      const tJ    = new Date(todayRecords[j].close_time).getTime();
+      if (Math.abs(tBase - tJ) <= 2000) {
+        group.push(todayRecords[j]);
+        used[j] = true;
+      }
+    }
+    // Merge group into single pod record
+    // totalLayers: read from first event (inv_size = absolute pod size, not per-layer count)
+    const totalLayers = group[0].layers_closed || group.length;
+    const totalPnl    = group.reduce((s, x) => s + (x.gross_pnl || 0), 0);
+    const avgEntry    = group[0].avg_entry_price;
+    const exitPrice   = group[0].exit_price;
+    grouped.push({
+      ...group[0],
+      layers_closed: totalLayers,
+      gross_pnl: totalPnl,
+      avg_entry_price: avgEntry,
+      exit_price: exitPrice
+    });
+  }
+
+  tbody.innerHTML = grouped.map(r => {
     // Pip P&L: (exit - entry) * direction, in price units
     // Direction: LONG = bought, so profit when exit > entry
     //            SHORT = sold, so profit when exit < entry

@@ -89,7 +89,8 @@ def telemetry_pod_closed():
     # Atomic LPUSH + LTRIM — newest first, capped at 50, 7-day TTL
     pipe = r.pipeline()
     pipe.lpush(redis_key, json.dumps(payload))
-    pipe.ltrim(redis_key, 0, 49)
+    pipe.ltrim(redis_key, 0, 299)  # bumped from 50 -- MM alone hit 99
+                                    # closed trades on 2026-06-29
     pipe.expire(redis_key, 604800)  # 7 days
     pipe.execute()
 

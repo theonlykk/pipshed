@@ -305,7 +305,8 @@
 
 <div class="instance-bar">
   <button class="instance-btn active" onclick="setInstance('MM')" id="btn-MM">MARKET MAKER</button>
-  <button class="instance-btn" onclick="setInstance('SNIPER')" id="btn-SNIPER">SNIPER</button>
+  <button class="instance-btn" onclick="setInstance('SNIPER_LONG')" id="btn-SNIPER_LONG">SNIPER LONG</button>
+  <button class="instance-btn" onclick="setInstance('SNIPER_SHORT')" id="btn-SNIPER_SHORT">SNIPER SHORT</button>
 </div>
 
 <!-- Row 1: Equity vs Balance -->
@@ -576,13 +577,17 @@
 // Closed pods polling — fetches MM + SNIPER and merges
 async function fetchClosedPods() {
   try {
-    const [mmRes, sniperRes] = await Promise.all([
+    const [mmRes, longRes, shortRes] = await Promise.all([
       fetch('/api/telemetry/closed?instance=MM'),
-      fetch('/api/telemetry/closed?instance=SNIPER')
+      fetch('/api/telemetry/closed?instance=SNIPER_LONG'),
+      fetch('/api/telemetry/closed?instance=SNIPER_SHORT')
     ]);
-    const mmData     = await mmRes.json();
-    const sniperData = await sniperRes.json();
-    const combined   = (mmData.records || []).concat(sniperData.records || []);
+    const mmData    = await mmRes.json();
+    const longData  = await longRes.json();
+    const shortData = await shortRes.json();
+    const combined  = (mmData.records || [])
+                       .concat(longData.records || [])
+                       .concat(shortData.records || []);
     renderClosedPods(combined);
   } catch (e) {
     // silent fail — closed pods are non-critical
@@ -672,7 +677,10 @@ function renderClosedPods(records) {
     const avgEntry = avgEntryNum !== null ? avgEntryNum.toFixed(5) : '—';
     const exit     = exitNum !== null ? exitNum.toFixed(5) : '—';
     const inst     = r.instance_id || '—';
-    const instCls  = inst === 'MM' ? 'dir-long' : inst === 'SNIPER' ? 'dir-short' : '';
+    const instCls  = inst === 'MM' ? 'dir-long'
+                    : inst === 'SNIPER_LONG' ? 'dir-long'
+                    : inst === 'SNIPER_SHORT' ? 'dir-short'
+                    : '';
 
     return '<tr>' +
       '<td>' + timeStr + '</td>' +

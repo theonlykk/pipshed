@@ -318,6 +318,17 @@
     }
     .macro-exposure-symbol { color: var(--text); font-weight: 600; }
     .macro-exposure-value { font-weight: 600; }
+
+    .quote-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+    }
+    .quote-symbol { color: var(--text); font-weight: 600; }
+    .quote-prices { color: var(--muted); }
+    .quote-spread { font-weight: 600; }
   </style>
 </head>
 <body>
@@ -392,6 +403,12 @@
 <div class="card" style="margin-bottom:16px">
   <div class="card-label">Macro Exposure (All Instances)</div>
   <div id="macro-exposure-container" style="margin-top:10px"></div>
+</div>
+
+<!-- New row: Best Working Quotes (cross-instance, all pairs) -->
+<div class="card" style="margin-bottom:16px">
+  <div class="card-label">Best Working Quotes (All Instances)</div>
+  <div id="quotes-container" style="margin-top:10px"></div>
 </div>
 
 <!-- Row 3: Engine state -->
@@ -636,6 +653,29 @@
           '<span class="macro-exposure-value" style="color:' + dirColor + '">' +
             Math.abs(val).toFixed(2) + ' lots ' + dirLabel +
           '</span>' +
+          '</div>';
+      });
+    }
+
+    // --- Best working quotes widget ---
+    const quotes = data.best_quotes || {};
+    const qSymbols = Object.keys(quotes);
+    const qContainer = document.getElementById('quotes-container');
+    if (qContainer) {
+      qContainer.innerHTML = '';
+      qSymbols.forEach(sym => {
+        const q = quotes[sym];
+        const bidStr = q.best_bid !== null ? q.best_bid.toFixed(5) : '—';
+        const offerStr = q.best_offer !== null ? q.best_offer.toFixed(5) : '—';
+        let spreadStr = '—';
+        if (q.best_bid !== null && q.best_offer !== null) {
+          const spreadPips = ((q.best_offer - q.best_bid) / 0.0001).toFixed(1);
+          spreadStr = spreadPips + ' pips';
+        }
+        qContainer.innerHTML += '<div class="quote-row">' +
+          '<span class="quote-symbol">' + sym + '</span>' +
+          '<span class="quote-prices">bid ' + bidStr + ' / offer ' + offerStr + '</span>' +
+          '<span class="quote-spread">' + spreadStr + '</span>' +
           '</div>';
       });
     }

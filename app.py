@@ -114,6 +114,7 @@ def telemetry_aggregate():
     net_exposure = {}       # symbol -> net signed lots (sum of direction * lot_size)
     alerts = []              # [{instance, message}, ...]
     instance_status = {}     # instance -> "live" | "connection_lost"
+    best_quotes = {}  # symbol -> {"best_bid": float|None, "best_offer": float|None}
 
     for inst in instances:
         raw = r.get(f"fxmatrix:state:{inst}")
@@ -131,13 +132,27 @@ def telemetry_aggregate():
                 lot = layer.get("lot_size", 0.0)
                 net_exposure[symbol] = net_exposure.get(symbol, 0.0) + (direction * lot)
 
+        working = data.get("working_orders", {})
+        for symbol, quote in working.items():
+            if symbol not in best_quotes:
+                best_quotes[symbol] = {"best_bid": None, "best_offer": None}
+            bid = quote.get("bid_price")
+            offer = quote.get("offer_price")
+            if bid is not None:
+                if best_quotes[symbol]["best_bid"] is None or bid > best_quotes[symbol]["best_bid"]:
+                    best_quotes[symbol]["best_bid"] = bid
+            if offer is not None:
+                if best_quotes[symbol]["best_offer"] is None or offer < best_quotes[symbol]["best_offer"]:
+                    best_quotes[symbol]["best_offer"] = offer
+
         for msg in data.get("system_alerts", []):
             alerts.append({"instance": inst, "message": msg})
 
     return jsonify({
         "net_exposure": net_exposure,
         "system_alerts": alerts,
-        "instance_status": instance_status
+        "instance_status": instance_status,
+        "best_quotes": best_quotes
     }), 200
 
 

@@ -329,6 +329,42 @@
     .quote-symbol { color: var(--text); font-weight: 600; }
     .quote-prices { color: var(--muted); }
     .quote-spread { font-weight: 600; }
+
+    @media (max-width: 640px) {
+      .grid,
+      .grid-3 {
+        grid-template-columns: 1fr;
+      }
+
+      .card {
+        padding: 14px 16px;
+      }
+
+      .instance-bar {
+        flex-wrap: wrap;
+      }
+
+      .instance-btn {
+        flex: 1 1 auto;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      .quote-row,
+      .macro-exposure-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+      }
+
+      .quote-spread {
+        align-self: flex-end;
+      }
+
+      body {
+        padding: 12px;
+      }
+    }
   </style>
 </head>
 <body>

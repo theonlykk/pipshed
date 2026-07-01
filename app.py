@@ -108,6 +108,39 @@ def telemetry_closed():
     return jsonify({"instance_id": instance_id, "records": records}), 200
 
 
+@app.route("/api/telemetry/aggregate", methods=["GET"])
+def telemetry_aggregate():
+    instances = ["MM", "SNIPER_LONG", "SNIPER_SHORT"]
+    net_exposure = {}       # symbol -> net signed lots (sum of direction * lot_size)
+    alerts = []              # [{instance, message}, ...]
+    instance_status = {}     # instance -> "live" | "connection_lost"
+
+    for inst in instances:
+        raw = r.get(f"fxmatrix:state:{inst}")
+        if raw is None:
+            instance_status[inst] = "connection_lost"
+            continue
+
+        data = json.loads(raw)
+        instance_status[inst] = "live"
+
+        pods = data.get("active_pods", {})
+        for symbol, pod in pods.items():
+            for layer in pod.get("layer_detail", []):
+                direction = layer.get("direction", 0)
+                lot = layer.get("lot_size", 0.0)
+                net_exposure[symbol] = net_exposure.get(symbol, 0.0) + (direction * lot)
+
+        for msg in data.get("system_alerts", []):
+            alerts.append({"instance": inst, "message": msg})
+
+    return jsonify({
+        "net_exposure": net_exposure,
+        "system_alerts": alerts,
+        "instance_status": instance_status
+    }), 200
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

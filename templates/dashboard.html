@@ -291,9 +291,41 @@
     .rollover-badge.active { color: var(--amber); border-color: var(--amber); }
     .rollover-badge.inactive { color: var(--muted); border-color: var(--border); }
     .rollover-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    .system-alert-banner {
+      background: #1a0000;
+      border-bottom: 2px solid var(--red);
+      color: var(--red);
+      padding: 12px 24px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .system-alert-banner .alert-line {
+      font-weight: 400;
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    .macro-exposure-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+    }
+    .macro-exposure-symbol { color: var(--text); font-weight: 600; }
+    .macro-exposure-value { font-weight: 600; }
   </style>
 </head>
 <body>
+
+<div class="system-alert-banner" id="systemAlertBanner" style="display:none;">
+  <span id="systemAlertCount"></span>
+  <div id="systemAlertList"></div>
+</div>
 
 <div class="header">
   <div class="logo">pip<span>shed</span></div>
@@ -354,6 +386,12 @@
     <div class="pod-pnl" id="pod-2-pnl">—</div>
     <div class="pod-dist">Target: <span id="pod-2-dist">—</span></div>
   </div>
+</div>
+
+<!-- New row: Macro Exposure (cross-instance aggregate, ADR-064 Ruling 6) -->
+<div class="card" style="margin-bottom:16px">
+  <div class="card-label">Macro Exposure (All Instances)</div>
+  <div id="macro-exposure-container" style="margin-top:10px"></div>
 </div>
 
 <!-- Row 3: Engine state -->
@@ -548,6 +586,60 @@
   // Poll every 5 seconds
   fetchAndRender();
   setInterval(fetchAndRender, 5000);
+</script>
+
+<script>
+  let lastAlertCount = 0;
+
+  async function fetchAggregate() {
+    try {
+      const res  = await fetch('/api/telemetry/aggregate');
+      const data = await res.json();
+      renderAggregate(data);
+    } catch (e) {
+      // silent fail -- do not clear existing banner/widget state on
+      // a transient fetch error, matches fetchClosedPods() convention
+    }
+  }
+
+  fetchAggregate();
+  setInterval(fetchAggregate, 5000);
+
+  function renderAggregate(data) {
+    // --- System alerts banner ---
+    const banner = document.getElementById('systemAlertBanner');
+    const alerts = data.system_alerts || [];
+    if (alerts.length > 0) {
+      banner.style.display = 'flex';
+      document.getElementById('systemAlertCount').textContent =
+        alerts.length + ' orthogonal exposure ' + (alerts.length === 1 ? 'leak' : 'leaks') + ' detected';
+      const listEl = document.getElementById('systemAlertList');
+      listEl.innerHTML = alerts.map(a =>
+        '<div class="alert-line">[' + a.instance + '] ' + a.message + '</div>'
+      ).join('');
+    } else {
+      banner.style.display = 'none';
+    }
+
+    // --- Macro exposure widget ---
+    const exposure = data.net_exposure || {};
+    const symbols = Object.keys(exposure);
+    const container = document.getElementById('macro-exposure-container');
+    if (container) {
+      container.innerHTML = '';
+      symbols.forEach(sym => {
+        const val = exposure[sym];
+        const dirLabel = val > 0.001 ? 'NET LONG' : val < -0.001 ? 'NET SHORT' : 'FLAT';
+        const dirColor = val > 0.001 ? 'var(--green)' : val < -0.001 ? 'var(--red)' : 'var(--muted)';
+        container.innerHTML += '<div class="macro-exposure-row">' +
+          '<span class="macro-exposure-symbol">' + sym + '</span>' +
+          '<span class="macro-exposure-value" style="color:' + dirColor + '">' +
+            Math.abs(val).toFixed(2) + ' lots ' + dirLabel +
+          '</span>' +
+          '</div>';
+      });
+    }
+  }
 </script>
 
 <div class="section-title">Closed Trades — Today</div>

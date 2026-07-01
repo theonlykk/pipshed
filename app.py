@@ -136,8 +136,8 @@ def telemetry_aggregate():
         for symbol, quote in working.items():
             if symbol not in best_quotes:
                 best_quotes[symbol] = {"best_bid": None, "best_offer": None}
-            bid = quote.get("bid_price")
-            offer = quote.get("offer_price")
+            bid = quote.get("layer0_bid_price")
+            offer = quote.get("layer0_offer_price")
             if bid is not None:
                 if best_quotes[symbol]["best_bid"] is None or bid > best_quotes[symbol]["best_bid"]:
                     best_quotes[symbol]["best_bid"] = bid

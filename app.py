@@ -115,6 +115,7 @@ def telemetry_aggregate():
     alerts = []              # [{instance, message}, ...]
     instance_status = {}     # instance -> "live" | "connection_lost"
     best_quotes = {}  # symbol -> {"best_bid": float|None, "best_offer": float|None}
+    full_best_quotes = {}  # symbol -> {"best_bid", "best_offer", "direction_conflict"}
 
     for inst in instances:
         raw = r.get(f"fxmatrix:state:{inst}")
@@ -131,6 +132,62 @@ def telemetry_aggregate():
                 direction = layer.get("direction", 0)
                 lot = layer.get("lot_size", 0.0)
                 net_exposure[symbol] = net_exposure.get(symbol, 0.0) + (direction * lot)
+
+            layers = pod.get("layer_detail", [])
+            directions = set(
+                layer.get("direction")
+                for layer in layers
+                if layer.get("direction") is not None
+            )
+
+            if symbol not in full_best_quotes:
+                full_best_quotes[symbol] = {
+                    "best_bid": None,
+                    "best_offer": None,
+                    "direction_conflict": False,
+                }
+
+            if len(directions) > 1:
+                full_best_quotes[symbol]["direction_conflict"] = True
+            else:
+                slot_direction = next(iter(directions), None)
+                working = data.get("working_orders", {}).get(symbol, {})
+
+                l0_bid = working.get("layer0_bid_price")
+                l0_offer = working.get("layer0_offer_price")
+                if l0_bid is not None:
+                    cur = full_best_quotes[symbol]["best_bid"]
+                    if cur is None or l0_bid > cur:
+                        full_best_quotes[symbol]["best_bid"] = l0_bid
+                if l0_offer is not None:
+                    cur = full_best_quotes[symbol]["best_offer"]
+                    if cur is None or l0_offer < cur:
+                        full_best_quotes[symbol]["best_offer"] = l0_offer
+
+                if slot_direction is not None:
+                    add_price = working.get("add_next_price")
+                    if add_price is not None:
+                        if slot_direction == 1:
+                            cur = full_best_quotes[symbol]["best_bid"]
+                            if cur is None or add_price > cur:
+                                full_best_quotes[symbol]["best_bid"] = add_price
+                        elif slot_direction == -1:
+                            cur = full_best_quotes[symbol]["best_offer"]
+                            if cur is None or add_price < cur:
+                                full_best_quotes[symbol]["best_offer"] = add_price
+
+                    for exit_order in working.get("exit_orders", []):
+                        exit_price = exit_order.get("price")
+                        if exit_price is None:
+                            continue
+                        if slot_direction == 1:
+                            cur = full_best_quotes[symbol]["best_offer"]
+                            if cur is None or exit_price < cur:
+                                full_best_quotes[symbol]["best_offer"] = exit_price
+                        elif slot_direction == -1:
+                            cur = full_best_quotes[symbol]["best_bid"]
+                            if cur is None or exit_price > cur:
+                                full_best_quotes[symbol]["best_bid"] = exit_price
 
         working = data.get("working_orders", {})
         for symbol, quote in working.items():
@@ -152,7 +209,8 @@ def telemetry_aggregate():
         "net_exposure": net_exposure,
         "system_alerts": alerts,
         "instance_status": instance_status,
-        "best_quotes": best_quotes
+        "best_quotes": best_quotes,
+        "full_best_quotes": full_best_quotes,
     }), 200
 
 

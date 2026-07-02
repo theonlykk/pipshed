@@ -200,6 +200,83 @@
       color: var(--amber);
     }
 
+    #pod-grid {
+      align-items: start;
+    }
+    .pod-card .pod-ldak-row {
+      margin-top: 10px;
+    }
+    .pod-ldak-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 10px;
+      border: 1px solid;
+      font-family: var(--font-mono);
+    }
+    .pod-ldak-badge.pass   { color: var(--green); border-color: var(--green); }
+    .pod-ldak-badge.clamp  { color: var(--amber); border-color: var(--amber); }
+    .pod-ldak-badge.refuse { color: var(--red);   border-color: var(--red); }
+    .pod-layer-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      margin-top: 8px;
+    }
+    .pod-layer-table th {
+      text-align: left;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 0 4px 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .pod-layer-table td {
+      padding: 3px 4px 3px 0;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .pod-layer-table tr:last-child td { border-bottom: none; }
+    .pod-layer-table .dir-buy  { color: var(--green); font-weight: 600; }
+    .pod-layer-table .dir-sell { color: var(--red);   font-weight: 600; }
+    .layer-flag-missing {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #fff;
+      background: var(--red);
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-left: 4px;
+    }
+    .layer-flag-toxic {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--amber);
+      border: 1px solid var(--amber);
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-left: 4px;
+    }
+    .pod-orders-summary {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+    .pod-orders-summary span {
+      color: var(--text);
+    }
+
     /* ── API gauge ── */
     .gauge-bar-bg {
       width: 100%;
@@ -420,18 +497,21 @@
     <div class="layers" id="pod-0-layers">—</div>
     <div class="pod-pnl" id="pod-0-pnl">—</div>
     <div class="pod-dist">Target: <span id="pod-0-dist">—</span></div>
+    <div class="pod-detail" id="pod-0-detail"></div>
   </div>
   <div class="card pod-card" id="pod-1">
     <div class="card-label" id="pod-1-label">—</div>
     <div class="layers" id="pod-1-layers">—</div>
     <div class="pod-pnl" id="pod-1-pnl">—</div>
     <div class="pod-dist">Target: <span id="pod-1-dist">—</span></div>
+    <div class="pod-detail" id="pod-1-detail"></div>
   </div>
   <div class="card pod-card" id="pod-2">
     <div class="card-label" id="pod-2-label">—</div>
     <div class="layers" id="pod-2-layers">—</div>
     <div class="pod-pnl" id="pod-2-pnl">—</div>
     <div class="pod-dist">Target: <span id="pod-2-dist">—</span></div>
+    <div class="pod-detail" id="pod-2-detail"></div>
   </div>
 </div>
 
@@ -505,7 +585,8 @@
   }
 
   // ADR-024 V3: slot-indexed pod renderer — prefix is 'pod-N'
-  function renderPod(slotIdx, symbol, pod) {
+  // ADR-073: per-pod layer_detail, ldak_status, working_orders summary
+  function renderPod(slotIdx, symbol, pod, workingOrder) {
     const layers = pod.layers || 0;
     const pnl    = pod.net_pnl;
     const dist   = pod.distance_to_target_pips;
@@ -522,6 +603,94 @@
     const distEl = document.getElementById(prefix + '-dist');
     if (distEl) distEl.textContent =
       dist !== null && dist !== undefined ? fmt(dist, 1) + ' pips' : '—';
+
+    const detailEl = document.getElementById(prefix + '-detail');
+    if (!detailEl) return;
+    if (layers <= 0) {
+      detailEl.innerHTML = '';
+      return;
+    }
+
+    let detailHtml = '';
+
+    const ldakStatus = (pod.ldak_status || '').toLowerCase();
+    if (ldakStatus === 'pass' || ldakStatus === 'clamp' || ldakStatus === 'refuse') {
+      let ldakLabel = ldakStatus;
+      if (ldakStatus !== 'pass' && pod.ldak_size_mult != null) {
+        ldakLabel = ldakStatus + ' (' + Number(pod.ldak_size_mult).toFixed(2) + ')';
+      }
+      detailHtml += '<div class="pod-ldak-row">' +
+        '<span class="pod-ldak-badge ' + ldakStatus + '">' + ldakLabel + '</span>' +
+        '</div>';
+    }
+
+    const layerDetail = pod.layer_detail || [];
+    if (layerDetail.length > 0) {
+      let layerRows = '';
+      layerDetail.forEach(function(layer) {
+        const dir = layer.direction;
+        let dirLabel = '—';
+        let dirCls = '';
+        if (dir === 1) { dirLabel = 'BUY';  dirCls = 'dir-buy'; }
+        if (dir === -1) { dirLabel = 'SELL'; dirCls = 'dir-sell'; }
+
+        const entry = layer.entry_price != null ? Number(layer.entry_price).toFixed(5) : '—';
+        const exit  = layer.exit_price_fixed != null ? Number(layer.exit_price_fixed).toFixed(5) : '—';
+        const lot   = layer.lot_size != null ? Number(layer.lot_size).toFixed(2) : '—';
+
+        let flags = '';
+        if (layer.resting_exit_missing === true) {
+          flags += '<span class="layer-flag-missing" title="No resting exit order">NO EXIT</span>';
+        }
+        if (layer.is_toxic === true) {
+          flags += '<span class="layer-flag-toxic" title="ADR-040 toxic layer">TOXIC</span>';
+        }
+
+        layerRows += '<tr>' +
+          '<td class="' + dirCls + '">' + dirLabel + flags + '</td>' +
+          '<td>' + entry + '</td>' +
+          '<td>' + exit + '</td>' +
+          '<td>' + lot + '</td>' +
+          '</tr>';
+      });
+      detailHtml += '<table class="pod-layer-table">' +
+        '<thead><tr><th>Dir</th><th>Entry</th><th>Exit</th><th>Lot</th></tr></thead>' +
+        '<tbody>' + layerRows + '</tbody></table>';
+    }
+
+    if (workingOrder) {
+      const orderParts = [];
+      const addNext = workingOrder.add_next_price;
+      if (addNext != null) {
+        orderParts.push('Add next: <span>' + Number(addNext).toFixed(5) + '</span>');
+      }
+      const exits = workingOrder.exit_orders || [];
+      const exitPrices = [];
+      exits.forEach(function(e) {
+        if (e.price != null) exitPrices.push(Number(e.price));
+      });
+      if (exitPrices.length > 0) {
+        const dirs = layerDetail
+          .map(function(l) { return l.direction; })
+          .filter(function(d) { return d != null; });
+        const slotDir = dirs.length > 0 ? dirs[0] : null;
+        let nearest;
+        if (slotDir === 1) {
+          nearest = Math.min.apply(null, exitPrices);
+        } else if (slotDir === -1) {
+          nearest = Math.max.apply(null, exitPrices);
+        } else {
+          nearest = Math.min.apply(null, exitPrices);
+        }
+        const nLabel = exitPrices.length + ' exit' + (exitPrices.length !== 1 ? 's' : '');
+        orderParts.push(nLabel + ', nearest at <span>' + nearest.toFixed(5) + '</span>');
+      }
+      if (orderParts.length > 0) {
+        detailHtml += '<div class="pod-orders-summary">' + orderParts.join('<br>') + '</div>';
+      }
+    }
+
+    detailEl.innerHTML = detailHtml;
   }
 
   function render(data) {
@@ -559,14 +728,15 @@
     document.getElementById('ddPct').textContent = fmt(dd, 2) + '% drawdown';
 
     // ADR-024 V3: dynamic pod rendering via Object.keys()
-    const pods    = data.active_pods ?? {};
-    const podKeys = Object.keys(pods);
+    const pods          = data.active_pods ?? {};
+    const workingOrders = data.working_orders ?? {};
+    const podKeys       = Object.keys(pods);
     podKeys.forEach((sym, idx) => {
-      if (idx < 3) renderPod(idx, sym, pods[sym]);
+      if (idx < 3) renderPod(idx, sym, pods[sym], workingOrders[sym] || null);
     });
     // Zero out any slots not present in payload
     for (let i = podKeys.length; i < 3; i++) {
-      renderPod(i, '—', {layers: 0, net_pnl: 0, distance_to_target_pips: null});
+      renderPod(i, '—', {layers: 0, net_pnl: 0, distance_to_target_pips: null}, null);
     }
 
     // Engine state

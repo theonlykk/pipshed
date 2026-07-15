@@ -460,9 +460,8 @@
 </div>
 
 <div class="instance-bar">
-  <button class="instance-btn active" onclick="setInstance('MM')" id="btn-MM">MARKET MAKER</button>
-  <button class="instance-btn" onclick="setInstance('SNIPER_LONG')" id="btn-SNIPER_LONG">SNIPER LONG</button>
-  <button class="instance-btn" onclick="setInstance('SNIPER_SHORT')" id="btn-SNIPER_SHORT">SNIPER SHORT</button>
+  <button class="instance-btn active" onclick="setInstance('MM_LONG_V2')" id="btn-MM_LONG_V2">MM LONG V2</button>
+  <button class="instance-btn" onclick="setInstance('MM_SHORT_V2')" id="btn-MM_SHORT_V2">MM SHORT V2</button>
 </div>
 
 <!-- Row 1: Equity vs Balance -->
@@ -563,7 +562,7 @@
 </div>
 
 <script>
-  let currentInstance = 'MM';
+  let currentInstance = 'MM_LONG_V2';
 
   function setInstance(id) {
     currentInstance = id;
@@ -783,13 +782,22 @@
       ? (es.quote_spread * 10000).toFixed(1)
       : '—';
 
-    const apiCount = es.daily_api_count ?? 0;
-    const apiPct   = Math.min(apiCount / 900 * 100, 100);
-    const apiBar   = document.getElementById('apiBar');
-    apiBar.style.width      = apiPct + '%';
-    apiBar.style.background = apiPct < 70 ? 'var(--green)' : apiPct < 90 ? 'var(--amber)' : 'var(--red)';
-    document.getElementById('apiCount').textContent = apiCount;
-    document.getElementById('apiSub').textContent   = apiCount + ' / 900';
+    const apiBar = document.getElementById('apiBar');
+    const instanceId = data.instance_id ?? currentInstance;
+    const isV2Instance = instanceId.endsWith('_V2');
+    if (isV2Instance) {
+      document.getElementById('apiCount').textContent = '—';
+      apiBar.style.display = 'none';
+      document.getElementById('apiSub').textContent = 'Not tracked for V2';
+    } else {
+      const apiCount = es.daily_api_count ?? 0;
+      const apiPct   = Math.min(apiCount / 900 * 100, 100);
+      apiBar.style.display = '';
+      apiBar.style.width      = apiPct + '%';
+      apiBar.style.background = apiPct < 70 ? 'var(--green)' : apiPct < 90 ? 'var(--amber)' : 'var(--red)';
+      document.getElementById('apiCount').textContent = apiCount;
+      document.getElementById('apiSub').textContent   = apiCount + ' / 900';
+    }
 
     // Footer
     document.getElementById('lastUpdate').textContent  = 'Last update: ' + new Date().toLocaleTimeString();
@@ -915,19 +923,16 @@
 </div>
 
 <script>
-// Closed pods polling — fetches MM + SNIPER and merges
+// Closed pods polling — fetches both V2 instances and merges
 async function fetchClosedPods() {
   try {
-    const [mmRes, longRes, shortRes] = await Promise.all([
-      fetch('/api/telemetry/closed?instance=MM'),
-      fetch('/api/telemetry/closed?instance=SNIPER_LONG'),
-      fetch('/api/telemetry/closed?instance=SNIPER_SHORT')
+    const [longRes, shortRes] = await Promise.all([
+      fetch('/api/telemetry/closed?instance=MM_LONG_V2'),
+      fetch('/api/telemetry/closed?instance=MM_SHORT_V2')
     ]);
-    const mmData    = await mmRes.json();
     const longData  = await longRes.json();
     const shortData = await shortRes.json();
-    const combined  = (mmData.records || [])
-                       .concat(longData.records || [])
+    const combined  = (longData.records || [])
                        .concat(shortData.records || []);
     renderClosedPods(combined);
   } catch (e) {
@@ -1018,9 +1023,8 @@ function renderClosedPods(records) {
     const avgEntry = avgEntryNum !== null ? avgEntryNum.toFixed(5) : '—';
     const exit     = exitNum !== null ? exitNum.toFixed(5) : '—';
     const inst     = r.instance_id || '—';
-    const instCls  = inst === 'MM' ? 'dir-long'
-                    : inst === 'SNIPER_LONG' ? 'dir-long'
-                    : inst === 'SNIPER_SHORT' ? 'dir-short'
+    const instCls  = inst === 'MM_LONG_V2' ? 'dir-long'
+                    : inst === 'MM_SHORT_V2' ? 'dir-short'
                     : '';
 
     return '<tr>' +

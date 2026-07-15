@@ -55,7 +55,7 @@ def telemetry_push():
 
 @app.route("/api/telemetry/live", methods=["GET"])
 def telemetry_live():
-    instance_id = request.args.get("instance", "MM")
+    instance_id = request.args.get("instance", "MM_LONG_V2")
     redis_key = f"fxmatrix:state:{instance_id}"
 
     raw = r.get(redis_key)
@@ -99,7 +99,7 @@ def telemetry_pod_closed():
 
 @app.route("/api/telemetry/closed", methods=["GET"])
 def telemetry_closed():
-    instance_id = request.args.get("instance", "MM")
+    instance_id = request.args.get("instance", "MM_LONG_V2")
     redis_key = f"fxmatrix:closed_history:{instance_id}"
 
     raw_list = r.lrange(redis_key, 0, -1)
@@ -110,7 +110,7 @@ def telemetry_closed():
 
 @app.route("/api/telemetry/aggregate", methods=["GET"])
 def telemetry_aggregate():
-    instances = ["MM", "SNIPER_LONG", "SNIPER_SHORT"]
+    instances = ["MM_LONG_V2", "MM_SHORT_V2"]
     net_exposure = {}       # symbol -> net signed lots (sum of direction * lot_size)
     alerts = []              # [{instance, message}, ...]
     instance_status = {}     # instance -> "live" | "connection_lost"

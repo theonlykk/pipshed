@@ -349,6 +349,93 @@
       color: var(--muted);
       padding: 24px 0;
     }
+    .closed-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .closed-nav-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .closed-nav-btn {
+      padding: 4px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .closed-nav-btn:hover:not(:disabled) {
+      border-color: var(--blue);
+      color: var(--text);
+    }
+    .closed-nav-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+    .closed-date-label {
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text);
+      min-width: 96px;
+      text-align: center;
+    }
+    .closed-meta {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+    }
+    .closed-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 0 16px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+    }
+    .history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 24px 0 12px 0;
+      flex-wrap: wrap;
+    }
+    .history-header .section-title {
+      margin: 0;
+    }
+    .history-view-bar {
+      display: flex;
+      gap: 8px;
+    }
+    .history-view-btn {
+      padding: 4px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .history-view-btn.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
 
     /* ── LDAK + Rollover panels ── */
     .ldak-wrap { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
@@ -568,7 +655,13 @@
     currentInstance = id;
     document.querySelectorAll('.instance-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-' + id).classList.add('active');
+    closedPage = 1;
+    closedSelectedDate = null;
+    scalpPage = 1;
+    scalpSelectedDate = null;
     fetchAndRender();
+    fetchClosedPods();
+    fetchScalps();
   }
 
   function fmt(val, decimals = 2) {
@@ -899,13 +992,27 @@
   }
 </script>
 
-<div class="section-title">Closed Trades — Today</div>
-<div class="card" style="padding: 0 24px;">
+<div class="history-header">
+  <div class="section-title" id="closedSectionTitle">Closed Trades</div>
+  <div class="history-view-bar">
+    <button class="history-view-btn active" id="btn-view-pods" onclick="setHistoryView('pods')">Pod Closes</button>
+    <button class="history-view-btn" id="btn-view-scalps" onclick="setHistoryView('scalps')">Scalp Exits</button>
+  </div>
+</div>
+
+<div id="closedPodsPanel" class="card" style="padding: 0 24px;">
+  <div class="closed-nav">
+    <div class="closed-nav-left">
+      <button class="closed-nav-btn" id="closedPrevDay" onclick="closedChangeDay(-1)">← Prev day</button>
+      <span class="closed-date-label" id="closedDateLabel">—</span>
+      <button class="closed-nav-btn" id="closedNextDay" onclick="closedChangeDay(1)">Next day →</button>
+    </div>
+    <span class="closed-meta" id="closedMeta">—</span>
+  </div>
   <table class="pods-table" id="closedPodsTable">
     <thead>
       <tr>
         <th>Time</th>
-        <th>Instance</th>
         <th>Instrument</th>
         <th>Direction</th>
         <th>Layers</th>
@@ -917,90 +1024,175 @@
       </tr>
     </thead>
     <tbody id="closedPodsBody">
-      <tr class="empty-row"><td colspan="10">No closed pods today</td></tr>
+      <tr class="empty-row"><td colspan="9">No closed trades</td></tr>
     </tbody>
   </table>
+  <div class="closed-pagination" id="closedPagination" style="display:none">
+    <button class="closed-nav-btn" id="closedPrevPage" onclick="closedChangePage(-1)">← Prev</button>
+    <span id="closedPageLabel">Page 1 of 1</span>
+    <button class="closed-nav-btn" id="closedNextPage" onclick="closedChangePage(1)">Next →</button>
+  </div>
+</div>
+
+<div id="closedScalpsPanel" class="card" style="padding: 0 24px; display: none;">
+  <div class="closed-nav">
+    <div class="closed-nav-left">
+      <button class="closed-nav-btn" id="scalpPrevDay" onclick="scalpChangeDay(-1)">← Prev day</button>
+      <span class="closed-date-label" id="scalpDateLabel">—</span>
+      <button class="closed-nav-btn" id="scalpNextDay" onclick="scalpChangeDay(1)">Next day →</button>
+    </div>
+    <span class="closed-meta" id="scalpMeta">—</span>
+  </div>
+  <table class="pods-table" id="scalpsTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Instrument</th>
+        <th>Direction</th>
+        <th>Entry</th>
+        <th>Exit</th>
+        <th>Layer</th>
+        <th>Stack</th>
+        <th>Pips</th>
+        <th>PnL</th>
+        <th>Result</th>
+      </tr>
+    </thead>
+    <tbody id="scalpsBody">
+      <tr class="empty-row"><td colspan="10">No scalp exits</td></tr>
+    </tbody>
+  </table>
+  <div class="closed-pagination" id="scalpPagination" style="display:none">
+    <button class="closed-nav-btn" id="scalpPrevPage" onclick="scalpChangePage(-1)">← Prev</button>
+    <span id="scalpPageLabel">Page 1 of 1</span>
+    <button class="closed-nav-btn" id="scalpNextPage" onclick="scalpChangePage(1)">Next →</button>
+  </div>
 </div>
 
 <script>
-// Closed pods polling — fetches both V2 instances and merges
+// History view toggle — pod closes vs scalp exits
+let historyView = 'pods';
+
+function setHistoryView(view) {
+  historyView = view;
+  document.getElementById('btn-view-pods').classList.toggle('active', view === 'pods');
+  document.getElementById('btn-view-scalps').classList.toggle('active', view === 'scalps');
+  document.getElementById('closedPodsPanel').style.display = view === 'pods' ? 'block' : 'none';
+  document.getElementById('closedScalpsPanel').style.display = view === 'scalps' ? 'block' : 'none';
+  updateHistorySectionTitle();
+}
+
+function updateHistorySectionTitle() {
+  const title = document.getElementById('closedSectionTitle');
+  if (historyView === 'scalps') {
+    const displayDate = scalpSelectedDate || '—';
+    const isLatest = scalpLatestDate && scalpSelectedDate === scalpLatestDate;
+    title.textContent = isLatest
+      ? 'Scalp Exits — Today'
+      : 'Scalp Exits — ' + displayDate;
+    return;
+  }
+  const displayDate = closedSelectedDate || '—';
+  const isLatest = closedLatestDate && closedSelectedDate === closedLatestDate;
+  title.textContent = isLatest
+    ? 'Closed Trades — Today'
+    : 'Closed Trades — ' + displayDate;
+}
+
+// Closed trades — per-instance, date navigation, paginated
+const CLOSED_PER_PAGE = 10;
+let closedSelectedDate = null;
+let closedPage = 1;
+let closedLatestDate = null;
+let closedTotalPages = 0;
+
+function shiftClosedDate(ymd, days) {
+  const parts = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function closedChangeDay(delta) {
+  if (!closedSelectedDate) return;
+  closedSelectedDate = shiftClosedDate(closedSelectedDate, delta);
+  closedPage = 1;
+  fetchClosedPods();
+}
+
+function closedChangePage(delta) {
+  const next = closedPage + delta;
+  if (next < 1 || (closedTotalPages && next > closedTotalPages)) return;
+  closedPage = next;
+  fetchClosedPods();
+}
+
+function updateClosedNav(data) {
+  const dateLabel = document.getElementById('closedDateLabel');
+  const meta = document.getElementById('closedMeta');
+  const prevDay = document.getElementById('closedPrevDay');
+  const nextDay = document.getElementById('closedNextDay');
+  const pagination = document.getElementById('closedPagination');
+  const prevPage = document.getElementById('closedPrevPage');
+  const nextPage = document.getElementById('closedNextPage');
+  const pageLabel = document.getElementById('closedPageLabel');
+
+  closedLatestDate = (data.available_dates && data.available_dates[0]) || null;
+  if (data.date) closedSelectedDate = data.date;
+
+  const displayDate = closedSelectedDate || '—';
+  updateHistorySectionTitle();
+  dateLabel.textContent = displayDate;
+
+  const total = data.total || 0;
+  closedTotalPages = data.total_pages || 0;
+  meta.textContent = total
+    ? total + ' trade' + (total === 1 ? '' : 's') + ' · ' + data.instance_id
+    : 'No trades · ' + data.instance_id;
+
+  prevDay.disabled = !closedSelectedDate;
+  nextDay.disabled = !closedSelectedDate || !closedLatestDate
+    || closedSelectedDate >= closedLatestDate;
+
+  if (closedTotalPages > 1) {
+    pagination.style.display = 'flex';
+    pageLabel.textContent = 'Page ' + data.page + ' of ' + closedTotalPages;
+    prevPage.disabled = data.page <= 1;
+    nextPage.disabled = data.page >= closedTotalPages;
+  } else {
+    pagination.style.display = 'none';
+  }
+}
+
 async function fetchClosedPods() {
   try {
-    const [longRes, shortRes] = await Promise.all([
-      fetch('/api/telemetry/closed?instance=MM_LONG_V2'),
-      fetch('/api/telemetry/closed?instance=MM_SHORT_V2')
-    ]);
-    const longData  = await longRes.json();
-    const shortData = await shortRes.json();
-    const combined  = (longData.records || [])
-                       .concat(shortData.records || []);
-    renderClosedPods(combined);
+    let url = '/api/telemetry/closed?instance=' + encodeURIComponent(currentInstance)
+      + '&page=' + closedPage
+      + '&per_page=' + CLOSED_PER_PAGE;
+    if (closedSelectedDate) {
+      url += '&date=' + encodeURIComponent(closedSelectedDate);
+    }
+    const res = await fetch(url);
+    const data = await res.json();
+    updateClosedNav(data);
+    renderClosedPods(data.records || []);
   } catch (e) {
-    // silent fail — closed pods are non-critical
+    // silent fail — closed trades are non-critical
   }
 }
 
 function renderClosedPods(records) {
   const tbody = document.getElementById('closedPodsBody');
 
-  // Filter to today only (UTC date match)
-  // ADR-053: filter on broker trade_date field (broker local time)
-  // Fallback to UTC close_time prefix for legacy records without trade_date
-  const today = new Date().toISOString().slice(0, 10);
-  const todayRecords = records.filter(r => {
-    if (r.trade_date) return r.trade_date === today;
-    return r.close_time && r.close_time.startsWith(today);
-  });
-
-  // Sort newest first
-  todayRecords.sort((a, b) => b.close_time.localeCompare(a.close_time));
-
-  if (todayRecords.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No closed pods today</td></tr>';
+  if (records.length === 0) {
+    const msg = closedSelectedDate
+      ? 'No closed trades on ' + closedSelectedDate
+      : 'No closed trades';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">' + msg + '</td></tr>';
     return;
   }
 
-  // ADR-053: aggregate per-layer rows into pod-level rows
-  // Group records within 2 seconds on same symbol + direction
-  // layers_closed reads group[0] -- EA already sends absolute pod size (inv_size)
-  // Do NOT sum layers_closed across events -- would multiply the count
-  const grouped = [];
-  const used = new Array(todayRecords.length).fill(false);
-  for (let i = 0; i < todayRecords.length; i++) {
-    if (used[i]) continue;
-    const base = todayRecords[i];
-    const group = [base];
-    used[i] = true;
-    for (let j = i + 1; j < todayRecords.length; j++) {
-      if (used[j]) continue;
-      if (todayRecords[j].instrument !== base.instrument) continue;
-      if (todayRecords[j].direction !== base.direction) continue;
-      const tBase = new Date(base.close_time).getTime();
-      const tJ    = new Date(todayRecords[j].close_time).getTime();
-      if (Math.abs(tBase - tJ) <= 2000) {
-        group.push(todayRecords[j]);
-        used[j] = true;
-      }
-    }
-    // Merge group into single pod record
-    // totalLayers: read from first event (inv_size = absolute pod size, not per-layer count)
-    const totalLayers = group[0].layers_closed || group.length;
-    const totalPnl    = group.reduce((s, x) => s + (x.gross_pnl || 0), 0);
-    const avgEntry    = group[0].avg_entry_price;
-    const exitPrice   = group[0].exit_price;
-    grouped.push({
-      ...group[0],
-      layers_closed: totalLayers,
-      gross_pnl: totalPnl,
-      avg_entry_price: avgEntry,
-      exit_price: exitPrice
-    });
-  }
-
-  tbody.innerHTML = grouped.map(r => {
-    // Pip P&L: (exit - entry) * direction, in price units
-    // Direction: LONG = bought, so profit when exit > entry
-    //            SHORT = sold, so profit when exit < entry
+  tbody.innerHTML = records.map(r => {
     const avgEntryNum = r.avg_entry_price != null ? Number(r.avg_entry_price) : null;
     const exitNum     = r.exit_price != null ? Number(r.exit_price) : null;
     const dirMult     = r.direction === 'LONG' ? 1 : -1;
@@ -1009,7 +1201,6 @@ function renderClosedPods(records) {
     let isWin   = true;
     if (avgEntryNum !== null && exitNum !== null) {
       const rawDiff = (exitNum - avgEntryNum) * dirMult;
-      // Convert to pips: multiply by 10000 for most pairs, 100 for JPY
       const pipMult = (r.instrument && r.instrument.includes('JPY')) ? 100 : 10000;
       const pips    = rawDiff * pipMult;
       isWin   = pips >= 0;
@@ -1022,14 +1213,9 @@ function renderClosedPods(records) {
     const hold    = r.hold_time_minutes != null ? Math.round(r.hold_time_minutes) + 'm' : '—';
     const avgEntry = avgEntryNum !== null ? avgEntryNum.toFixed(5) : '—';
     const exit     = exitNum !== null ? exitNum.toFixed(5) : '—';
-    const inst     = r.instance_id || '—';
-    const instCls  = inst === 'MM_LONG_V2' ? 'dir-long'
-                    : inst === 'MM_SHORT_V2' ? 'dir-short'
-                    : '';
 
     return '<tr>' +
       '<td>' + timeStr + '</td>' +
-      '<td class="' + instCls + '">' + inst + '</td>' +
       '<td>' + (r.instrument || '—') + '</td>' +
       '<td class="' + dirCls + '">' + (r.direction || '—') + '</td>' +
       '<td>' + (r.layers_closed || '—') + '</td>' +
@@ -1042,9 +1228,138 @@ function renderClosedPods(records) {
   }).join('');
 }
 
-// Poll closed pods every 30 seconds
 fetchClosedPods();
 setInterval(fetchClosedPods, 30000);
+
+// Scalp exits — per-instance, date navigation, paginated
+const SCALP_PER_PAGE = 10;
+let scalpSelectedDate = null;
+let scalpPage = 1;
+let scalpLatestDate = null;
+let scalpTotalPages = 0;
+
+function scalpChangeDay(delta) {
+  if (!scalpSelectedDate) return;
+  scalpSelectedDate = shiftClosedDate(scalpSelectedDate, delta);
+  scalpPage = 1;
+  fetchScalps();
+}
+
+function scalpChangePage(delta) {
+  const next = scalpPage + delta;
+  if (next < 1 || (scalpTotalPages && next > scalpTotalPages)) return;
+  scalpPage = next;
+  fetchScalps();
+}
+
+function updateScalpNav(data) {
+  const dateLabel = document.getElementById('scalpDateLabel');
+  const meta = document.getElementById('scalpMeta');
+  const prevDay = document.getElementById('scalpPrevDay');
+  const nextDay = document.getElementById('scalpNextDay');
+  const pagination = document.getElementById('scalpPagination');
+  const prevPage = document.getElementById('scalpPrevPage');
+  const nextPage = document.getElementById('scalpNextPage');
+  const pageLabel = document.getElementById('scalpPageLabel');
+
+  scalpLatestDate = (data.available_dates && data.available_dates[0]) || null;
+  if (data.date) scalpSelectedDate = data.date;
+
+  const displayDate = scalpSelectedDate || '—';
+  updateHistorySectionTitle();
+  dateLabel.textContent = displayDate;
+
+  const total = data.total || 0;
+  scalpTotalPages = data.total_pages || 0;
+  meta.textContent = total
+    ? total + ' scalp' + (total === 1 ? '' : 's') + ' · ' + data.instance_id
+    : 'No scalps · ' + data.instance_id;
+
+  prevDay.disabled = !scalpSelectedDate;
+  nextDay.disabled = !scalpSelectedDate || !scalpLatestDate
+    || scalpSelectedDate >= scalpLatestDate;
+
+  if (scalpTotalPages > 1) {
+    pagination.style.display = 'flex';
+    pageLabel.textContent = 'Page ' + data.page + ' of ' + scalpTotalPages;
+    prevPage.disabled = data.page <= 1;
+    nextPage.disabled = data.page >= scalpTotalPages;
+  } else {
+    pagination.style.display = 'none';
+  }
+}
+
+async function fetchScalps() {
+  try {
+    let url = '/api/telemetry/scalps?instance=' + encodeURIComponent(currentInstance)
+      + '&page=' + scalpPage
+      + '&per_page=' + SCALP_PER_PAGE;
+    if (scalpSelectedDate) {
+      url += '&date=' + encodeURIComponent(scalpSelectedDate);
+    }
+    const res = await fetch(url);
+    const data = await res.json();
+    updateScalpNav(data);
+    renderScalps(data.records || []);
+  } catch (e) {
+    // silent fail — scalp history is non-critical
+  }
+}
+
+function renderScalps(records) {
+  const tbody = document.getElementById('scalpsBody');
+
+  if (records.length === 0) {
+    const msg = scalpSelectedDate
+      ? 'No scalp exits on ' + scalpSelectedDate
+      : 'No scalp exits';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">' + msg + '</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = records.map(r => {
+    const entryNum = r.entry_price != null ? Number(r.entry_price) : null;
+    const exitNum  = r.exit_price != null ? Number(r.exit_price) : null;
+    const dirMult  = r.direction === 'LONG' ? 1 : -1;
+
+    let pipsStr = '—';
+    let isWin   = true;
+    if (entryNum !== null && exitNum !== null) {
+      const rawDiff = (exitNum - entryNum) * dirMult;
+      const pipMult = (r.instrument && r.instrument.includes('JPY')) ? 100 : 10000;
+      const pips    = rawDiff * pipMult;
+      isWin   = pips >= 0;
+      pipsStr = (isWin ? '+' : '') + pips.toFixed(1) + 'p';
+    }
+
+    const pnlVal = r.gross_pnl != null ? Number(r.gross_pnl) : null;
+    const pnlStr = pnlVal !== null
+      ? (pnlVal >= 0 ? '+' : '') + pnlVal.toFixed(2)
+      : '—';
+    const pnlCls  = pnlVal !== null ? (pnlVal >= 0 ? 'win' : 'loss') : '';
+    const result  = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
+    const dirCls  = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
+    const timeStr = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
+    const entry   = entryNum !== null ? entryNum.toFixed(5) : '—';
+    const exit    = exitNum !== null ? exitNum.toFixed(5) : '—';
+
+    return '<tr>' +
+      '<td>' + timeStr + '</td>' +
+      '<td>' + (r.instrument || '—') + '</td>' +
+      '<td class="' + dirCls + '">' + (r.direction || '—') + '</td>' +
+      '<td>' + entry + '</td>' +
+      '<td>' + exit + '</td>' +
+      '<td>' + (r.layer_depth != null ? r.layer_depth : '—') + '</td>' +
+      '<td>' + (r.stack_depth != null ? r.stack_depth : '—') + '</td>' +
+      '<td class="' + (isWin ? 'win' : 'loss') + '">' + pipsStr + '</td>' +
+      '<td class="' + pnlCls + '">' + pnlStr + '</td>' +
+      '<td>' + result + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+fetchScalps();
+setInterval(fetchScalps, 30000);
 </script>
 </body>
 </html>

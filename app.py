@@ -3,14 +3,19 @@ Pipshed — FXMatrix Live Telemetry Dashboard
 Flask backend: telemetry receiver + state server
 
 Routes:
-  POST /api/telemetry/push   — receives MQL5 payload, writes to Redis
-  GET  /api/telemetry/live   — serves current state to dashboard
-  GET  /                     — dashboard UI
-  GET  /health               — Railway health check
+  POST /api/telemetry/push         — receives MQL5 payload, writes to Redis
+  POST /api/telemetry/pod_closed   — pod-level close history
+  POST /api/telemetry/scalp_closed — per-layer scalp close history
+  GET  /api/telemetry/live         — serves current state to dashboard
+  GET  /api/telemetry/closed       — paginated pod-close history
+  GET  /api/telemetry/scalps       — paginated scalp-close history
+  GET  /                         — dashboard UI
+  GET  /health                   — Railway health check
 """
 
 import json
 import os
+from datetime import datetime
 
 import redis
 from dotenv import load_dotenv
@@ -28,6 +33,8 @@ r = redis.from_url(
 
 TELEMETRY_API_KEY = os.environ.get("TELEMETRY_API_KEY", "")
 REDIS_TTL_SECONDS = 300  # 5 minutes — if VPS drops, key expires
+SCALP_HISTORY_LIST_MAX = 2999  # LTRIM 0..2999 => 3000 entries per instance
+SCALP_HISTORY_TTL_SECONDS = 604800  # 7 days — matches pod history window
 
 
 @app.route("/health")
@@ -97,15 +104,219 @@ def telemetry_pod_closed():
     return jsonify({"status": "ok"}), 200
 
 
+def _closed_record_date(record):
+    trade_date = record.get("trade_date")
+    if trade_date:
+        return trade_date
+    close_time = record.get("close_time", "")
+    return close_time[:10] if close_time else ""
+
+
+def _group_closed_records(records):
+    """Merge per-layer close events within 2s on same symbol + direction."""
+    sorted_records = sorted(
+        records,
+        key=lambda item: item.get("close_time", ""),
+        reverse=True,
+    )
+    grouped = []
+    used = [False] * len(sorted_records)
+    for i, base in enumerate(sorted_records):
+        if used[i]:
+            continue
+        group = [base]
+        used[i] = True
+        base_time = base.get("close_time")
+        base_ms = None
+        if base_time:
+            try:
+                base_ms = int(
+                    datetime.fromisoformat(
+                        base_time.replace("Z", "+00:00")
+                    ).timestamp()
+                    * 1000
+                )
+            except ValueError:
+                base_ms = None
+        for j in range(i + 1, len(sorted_records)):
+            if used[j]:
+                continue
+            other = sorted_records[j]
+            if other.get("instrument") != base.get("instrument"):
+                continue
+            if other.get("direction") != base.get("direction"):
+                continue
+            other_time = other.get("close_time")
+            if not base_time or not other_time or base_ms is None:
+                continue
+            try:
+                other_ms = int(
+                    datetime.fromisoformat(
+                        other_time.replace("Z", "+00:00")
+                    ).timestamp()
+                    * 1000
+                )
+            except ValueError:
+                continue
+            if abs(base_ms - other_ms) > 2000:
+                continue
+            group.append(other)
+            used[j] = True
+        merged = dict(group[0])
+        merged["layers_closed"] = group[0].get("layers_closed") or len(group)
+        merged["gross_pnl"] = sum(item.get("gross_pnl") or 0 for item in group)
+        merged["avg_entry_price"] = group[0].get("avg_entry_price")
+        merged["exit_price"] = group[0].get("exit_price")
+        grouped.append(merged)
+    return grouped
+
+
 @app.route("/api/telemetry/closed", methods=["GET"])
 def telemetry_closed():
     instance_id = request.args.get("instance", "MM_LONG_V2")
-    redis_key = f"fxmatrix:closed_history:{instance_id}"
+    date_filter = request.args.get("date")
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = min(100, max(1, int(request.args.get("per_page", 10))))
+    except (TypeError, ValueError):
+        per_page = 10
 
+    redis_key = f"fxmatrix:closed_history:{instance_id}"
     raw_list = r.lrange(redis_key, 0, -1)
     records = [json.loads(item) for item in raw_list]
 
-    return jsonify({"instance_id": instance_id, "records": records}), 200
+    available_dates = sorted(
+        {date for record in records if (date := _closed_record_date(record))},
+        reverse=True,
+    )
+    selected_date = date_filter or (available_dates[0] if available_dates else None)
+
+    if selected_date:
+        day_records = [
+            record
+            for record in records
+            if _closed_record_date(record) == selected_date
+        ]
+    else:
+        day_records = []
+
+    grouped = _group_closed_records(day_records)
+    total = len(grouped)
+    total_pages = max(1, (total + per_page - 1) // per_page) if total else 0
+    if total_pages:
+        page = min(page, total_pages)
+        start = (page - 1) * per_page
+        page_records = grouped[start : start + per_page]
+    else:
+        page = 1
+        page_records = []
+
+    return jsonify({
+        "instance_id": instance_id,
+        "records": page_records,
+        "date": selected_date,
+        "available_dates": available_dates,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+    }), 200
+
+
+@app.route("/api/telemetry/scalp_closed", methods=["POST"])
+def telemetry_scalp_closed():
+    auth = request.headers.get("Authorization", "")
+    if not TELEMETRY_API_KEY or auth != f"Bearer {TELEMETRY_API_KEY}":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    instance_id = payload.get("instance_id", "unknown")
+    redis_key = f"fxmatrix:scalp_history:{instance_id}"
+
+    pipe = r.pipeline()
+    pipe.lpush(redis_key, json.dumps(payload))
+    pipe.ltrim(redis_key, 0, SCALP_HISTORY_LIST_MAX)
+    pipe.expire(redis_key, SCALP_HISTORY_TTL_SECONDS)
+    pipe.execute()
+
+    return jsonify({"status": "ok"}), 200
+
+
+def _paginate_history_records(records, date_filter, page, per_page, transform=None):
+    available_dates = sorted(
+        {date for record in records if (date := _closed_record_date(record))},
+        reverse=True,
+    )
+    selected_date = date_filter or (available_dates[0] if available_dates else None)
+
+    if selected_date:
+        day_records = [
+            record
+            for record in records
+            if _closed_record_date(record) == selected_date
+        ]
+    else:
+        day_records = []
+
+    if transform:
+        day_records = transform(day_records)
+
+    total = len(day_records)
+    total_pages = max(1, (total + per_page - 1) // per_page) if total else 0
+    if total_pages:
+        page = min(page, total_pages)
+        start = (page - 1) * per_page
+        page_records = day_records[start : start + per_page]
+    else:
+        page = 1
+        page_records = []
+
+    return {
+        "records": page_records,
+        "date": selected_date,
+        "available_dates": available_dates,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+    }
+
+
+@app.route("/api/telemetry/scalps", methods=["GET"])
+def telemetry_scalps():
+    instance_id = request.args.get("instance", "MM_LONG_V2")
+    date_filter = request.args.get("date")
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = min(100, max(1, int(request.args.get("per_page", 10))))
+    except (TypeError, ValueError):
+        per_page = 10
+
+    redis_key = f"fxmatrix:scalp_history:{instance_id}"
+    raw_list = r.lrange(redis_key, 0, -1)
+    records = [json.loads(item) for item in raw_list]
+
+    def sort_scalps(day_records):
+        return sorted(
+            day_records,
+            key=lambda item: item.get("close_time", ""),
+            reverse=True,
+        )
+
+    result = _paginate_history_records(
+        records, date_filter, page, per_page, transform=sort_scalps
+    )
+    result["instance_id"] = instance_id
+    return jsonify(result), 200
 
 
 @app.route("/api/telemetry/aggregate", methods=["GET"])

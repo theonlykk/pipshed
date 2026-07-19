@@ -321,7 +321,14 @@ def telemetry_scalps():
 
 @app.route("/api/telemetry/aggregate", methods=["GET"])
 def telemetry_aggregate():
-    instances = ["MM_LONG_V2", "MM_SHORT_V2"]
+    instances = [
+        "MM_LONG_V2",
+        "MM_SHORT_V2",
+        "MM_LONG_EURUSD",
+        "MM_SHORT_EURUSD",
+        "MM_LONG_EURGBP",
+        "MM_SHORT_EURGBP",
+    ]
     net_exposure = {}       # symbol -> net signed lots (sum of direction * lot_size)
     alerts = []              # [{instance, message}, ...]
     instance_status = {}     # instance -> "live" | "connection_lost"

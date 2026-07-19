@@ -549,6 +549,10 @@
 <div class="instance-bar">
   <button class="instance-btn active" onclick="setInstance('MM_LONG_V2')" id="btn-MM_LONG_V2">MM LONG V2</button>
   <button class="instance-btn" onclick="setInstance('MM_SHORT_V2')" id="btn-MM_SHORT_V2">MM SHORT V2</button>
+  <button class="instance-btn" onclick="setInstance('MM_LONG_EURUSD')" id="btn-MM_LONG_EURUSD">MM LONG EURUSD</button>
+  <button class="instance-btn" onclick="setInstance('MM_SHORT_EURUSD')" id="btn-MM_SHORT_EURUSD">MM SHORT EURUSD</button>
+  <button class="instance-btn" onclick="setInstance('MM_LONG_EURGBP')" id="btn-MM_LONG_EURGBP">MM LONG EURGBP</button>
+  <button class="instance-btn" onclick="setInstance('MM_SHORT_EURGBP')" id="btn-MM_SHORT_EURGBP">MM SHORT EURGBP</button>
 </div>
 
 <!-- Row 1: Equity vs Balance -->
@@ -877,7 +881,7 @@
 
     const apiBar = document.getElementById('apiBar');
     const instanceId = data.instance_id ?? currentInstance;
-    const isV2Instance = instanceId.endsWith('_V2');
+    const isV2Instance = instanceId.startsWith('MM_LONG_') || instanceId.startsWith('MM_SHORT_');
     if (isV2Instance) {
       document.getElementById('apiCount').textContent = '—';
       apiBar.style.display = 'none';

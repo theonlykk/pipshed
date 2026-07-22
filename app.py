@@ -334,6 +334,8 @@ def telemetry_aggregate():
     instance_status = {}     # instance -> "live" | "connection_lost"
     best_quotes = {}  # symbol -> {"best_bid": float|None, "best_offer": float|None}
     full_best_quotes = {}  # symbol -> {"best_bid", "best_offer", "direction_conflict"}
+    account_daily_api_count = 0
+    account_daily_api_warning = False
 
     for inst in instances:
         raw = r.get(f"fxmatrix:state:{inst}")
@@ -343,6 +345,13 @@ def telemetry_aggregate():
 
         data = json.loads(raw)
         instance_status[inst] = "live"
+
+        es = data.get("engine_state", {})
+        api_count = es.get("account_daily_api_count")
+        if isinstance(api_count, (int, float)):
+            account_daily_api_count = max(account_daily_api_count, int(api_count))
+        if es.get("account_daily_api_warning") is True:
+            account_daily_api_warning = True
 
         pods = data.get("active_pods", {})
         for symbol, pod in pods.items():
@@ -429,6 +438,8 @@ def telemetry_aggregate():
         "instance_status": instance_status,
         "best_quotes": best_quotes,
         "full_best_quotes": full_best_quotes,
+        "account_daily_api_count": account_daily_api_count,
+        "account_daily_api_warning": account_daily_api_warning,
     }), 200
 
 

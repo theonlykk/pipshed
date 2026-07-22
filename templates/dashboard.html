@@ -297,6 +297,35 @@
       font-size: 28px;
       font-weight: 700;
     }
+    .api-gauge-card.warn {
+      border-color: var(--amber);
+      box-shadow: 0 0 0 1px rgba(255, 160, 0, 0.25);
+    }
+    .api-gauge-card.critical {
+      border-color: var(--red);
+      box-shadow: 0 0 0 1px rgba(255, 23, 68, 0.25);
+    }
+    .api-warn-badge {
+      display: none;
+      margin-top: 10px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+    .api-warn-badge.soft {
+      display: inline-block;
+      color: #1a1200;
+      background: var(--amber);
+    }
+    .api-warn-badge.hard {
+      display: inline-block;
+      color: #fff;
+      background: var(--red);
+    }
 
     /* ── Footer ── */
     .footer {
@@ -611,6 +640,17 @@
   <div id="macro-exposure-container" style="margin-top:10px"></div>
 </div>
 
+<!-- Account-wide FTMO API request budget (V2 shared counter) -->
+<div class="card api-gauge-card" id="accountApiCard" style="margin-bottom:16px">
+  <div class="card-label">Account API Requests Today (All Instances)</div>
+  <div class="gauge-value" id="accountApiCount" style="margin-top:8px">—</div>
+  <div class="gauge-bar-bg">
+    <div class="gauge-bar-fill" id="accountApiBar" style="width:0%"></div>
+  </div>
+  <div class="card-sub" id="accountApiSub">— / 2,000</div>
+  <div class="api-warn-badge soft" id="accountApiWarnBadge">Soft warn — ≥ 1,800 requests</div>
+</div>
+
 <!-- New row: Best Working Quotes (cross-instance, all pairs) -->
 <div class="card" style="margin-bottom:16px">
   <div class="card-label">Best Working Quotes (All Instances)</div>
@@ -671,6 +711,53 @@
   function fmt(val, decimals = 2) {
     if (val === null || val === undefined) return '—';
     return Number(val).toFixed(decimals);
+  }
+
+  function applyAccountApiGauge(count, limit, softWarn, cardId, countId, barId, subId, badgeId) {
+    const apiLimit = limit ?? 2000;
+    const apiSoftWarn = softWarn ?? 1800;
+    const apiCount = Number(count ?? 0);
+    const apiPct = Math.min(apiCount / apiLimit * 100, 100);
+    let barColor = 'var(--green)';
+    if (apiCount >= apiLimit) {
+      barColor = 'var(--red)';
+    } else if (apiCount >= apiSoftWarn) {
+      barColor = 'var(--amber)';
+    } else if (apiPct >= 70) {
+      barColor = 'var(--amber)';
+    }
+
+    const card = cardId ? document.getElementById(cardId) : null;
+    const bar = barId ? document.getElementById(barId) : null;
+    const countEl = countId ? document.getElementById(countId) : null;
+    const subEl = subId ? document.getElementById(subId) : null;
+    const badge = badgeId ? document.getElementById(badgeId) : null;
+
+    if (bar) {
+      bar.style.width = apiPct + '%';
+      bar.style.background = barColor;
+    }
+    if (countEl) countEl.textContent = apiCount;
+    if (subEl) subEl.textContent = apiCount + ' / ' + apiLimit.toLocaleString();
+
+    if (card) {
+      card.classList.remove('warn', 'critical');
+      if (apiCount >= apiLimit) card.classList.add('critical');
+      else if (apiCount >= apiSoftWarn) card.classList.add('warn');
+    }
+
+    if (badge) {
+      badge.classList.remove('soft', 'hard');
+      if (apiCount >= apiLimit) {
+        badge.classList.add('hard');
+        badge.textContent = 'At FTMO limit — ≥ ' + apiLimit.toLocaleString() + ' requests';
+      } else if (apiCount >= apiSoftWarn) {
+        badge.classList.add('soft');
+        badge.textContent = 'Soft warn — ≥ ' + apiSoftWarn.toLocaleString() + ' requests';
+      }
+    }
+
+    return { apiCount, apiLimit, apiSoftWarn, apiPct, barColor };
   }
 
   function setPnl(el, val) {
@@ -882,10 +969,23 @@
     const apiBar = document.getElementById('apiBar');
     const instanceId = data.instance_id ?? currentInstance;
     const isV2Instance = instanceId.startsWith('MM_LONG_') || instanceId.startsWith('MM_SHORT_');
-    if (isV2Instance) {
+    const accountApiCount = es.account_daily_api_count;
+    if (isV2Instance && accountApiCount != null) {
+      applyAccountApiGauge(
+        accountApiCount,
+        es.account_daily_api_limit ?? 2000,
+        es.account_daily_api_soft_warn ?? 1800,
+        null,
+        'apiCount',
+        'apiBar',
+        'apiSub',
+        null
+      );
+      document.getElementById('apiBar').style.display = '';
+    } else if (isV2Instance) {
       document.getElementById('apiCount').textContent = '—';
       apiBar.style.display = 'none';
-      document.getElementById('apiSub').textContent = 'Not tracked for V2';
+      document.getElementById('apiSub').textContent = 'Awaiting account counter';
     } else {
       const apiCount = es.daily_api_count ?? 0;
       const apiPct   = Math.min(apiCount / 900 * 100, 100);
@@ -967,6 +1067,18 @@
           '</div>';
       });
     }
+
+    // --- Account-wide API request gauge (V2 shared GV counter) ---
+    applyAccountApiGauge(
+      data.account_daily_api_count ?? 0,
+      2000,
+      1800,
+      'accountApiCard',
+      'accountApiCount',
+      'accountApiBar',
+      'accountApiSub',
+      'accountApiWarnBadge'
+    );
 
     // --- Best working quotes widget (full book: Layer 0 + add_next + exits) ---
     const quotes = data.full_best_quotes || {};

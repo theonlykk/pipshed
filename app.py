@@ -9,6 +9,8 @@ Routes:
   GET  /api/telemetry/live         — serves current state to dashboard
   GET  /api/telemetry/closed       — paginated pod-close history
   GET  /api/telemetry/scalps       — paginated scalp-close history
+  GET  /api/telemetry/today_closed — cross-instance broker-today pod closes
+  GET  /api/telemetry/open_positions — cross-instance open pod snapshot
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
 """
@@ -16,6 +18,7 @@ Routes:
 import json
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import redis
 from dotenv import load_dotenv
@@ -35,6 +38,23 @@ TELEMETRY_API_KEY = os.environ.get("TELEMETRY_API_KEY", "")
 REDIS_TTL_SECONDS = 300  # 5 minutes — if VPS drops, key expires
 SCALP_HISTORY_LIST_MAX = 2999  # LTRIM 0..2999 => 3000 entries per instance
 SCALP_HISTORY_TTL_SECONDS = 604800  # 7 days — matches pod history window
+
+ALL_INSTANCES = [
+    "MM_LONG_V2",
+    "MM_SHORT_V2",
+    "MM_LONG_EURUSD",
+    "MM_SHORT_EURUSD",
+    "MM_LONG_EURGBP",
+    "MM_SHORT_EURGBP",
+]
+
+# FTMO / MT5 server time — matches EA trade_date (TimeCurrent() on broker)
+BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
+
+
+def _broker_today():
+    """Return YYYY-MM-DD for the current broker session calendar date."""
+    return datetime.now(ZoneInfo(BROKER_TIMEZONE)).strftime("%Y-%m-%d")
 
 
 @app.route("/health")
@@ -188,20 +208,18 @@ def telemetry_closed():
     raw_list = r.lrange(redis_key, 0, -1)
     records = [json.loads(item) for item in raw_list]
 
+    broker_today = _broker_today()
     available_dates = sorted(
         {date for record in records if (date := _closed_record_date(record))},
         reverse=True,
     )
-    selected_date = date_filter or (available_dates[0] if available_dates else None)
+    selected_date = date_filter or broker_today
 
-    if selected_date:
-        day_records = [
-            record
-            for record in records
-            if _closed_record_date(record) == selected_date
-        ]
-    else:
-        day_records = []
+    day_records = [
+        record
+        for record in records
+        if _closed_record_date(record) == selected_date
+    ]
 
     grouped = _group_closed_records(day_records)
     total = len(grouped)
@@ -218,6 +236,7 @@ def telemetry_closed():
         "instance_id": instance_id,
         "records": page_records,
         "date": selected_date,
+        "broker_today": broker_today,
         "available_dates": available_dates,
         "page": page,
         "per_page": per_page,
@@ -249,20 +268,18 @@ def telemetry_scalp_closed():
 
 
 def _paginate_history_records(records, date_filter, page, per_page, transform=None):
+    broker_today = _broker_today()
     available_dates = sorted(
         {date for record in records if (date := _closed_record_date(record))},
         reverse=True,
     )
-    selected_date = date_filter or (available_dates[0] if available_dates else None)
+    selected_date = date_filter or broker_today
 
-    if selected_date:
-        day_records = [
-            record
-            for record in records
-            if _closed_record_date(record) == selected_date
-        ]
-    else:
-        day_records = []
+    day_records = [
+        record
+        for record in records
+        if _closed_record_date(record) == selected_date
+    ]
 
     if transform:
         day_records = transform(day_records)
@@ -280,6 +297,7 @@ def _paginate_history_records(records, date_filter, page, per_page, transform=No
     return {
         "records": page_records,
         "date": selected_date,
+        "broker_today": broker_today,
         "available_dates": available_dates,
         "page": page,
         "per_page": per_page,
@@ -319,16 +337,90 @@ def telemetry_scalps():
     return jsonify(result), 200
 
 
+@app.route("/api/telemetry/today_closed", methods=["GET"])
+def telemetry_today_closed():
+    """Cross-instance pod closes for the current broker calendar date."""
+    broker_today = _broker_today()
+    all_records = []
+
+    for inst in ALL_INSTANCES:
+        raw_list = r.lrange(f"fxmatrix:closed_history:{inst}", 0, -1)
+        records = [json.loads(item) for item in raw_list]
+        day_records = [
+            record
+            for record in records
+            if _closed_record_date(record) == broker_today
+        ]
+        grouped = _group_closed_records(day_records)
+        for record in grouped:
+            merged = dict(record)
+            merged["instance_id"] = inst
+            all_records.append(merged)
+
+    all_records.sort(key=lambda item: item.get("close_time", ""))
+
+    return jsonify({
+        "broker_today": broker_today,
+        "records": all_records,
+        "total": len(all_records),
+    }), 200
+
+
+@app.route("/api/telemetry/open_positions", methods=["GET"])
+def telemetry_open_positions():
+    """Cross-instance snapshot of every pod with open layers."""
+    positions = []
+    instance_status = {}
+
+    for inst in ALL_INSTANCES:
+        raw = r.get(f"fxmatrix:state:{inst}")
+        if raw is None:
+            instance_status[inst] = "connection_lost"
+            continue
+
+        instance_status[inst] = "live"
+        data = json.loads(raw)
+        pods = data.get("active_pods", {})
+
+        for symbol, pod in pods.items():
+            layer_count = pod.get("layers", 0)
+            if layer_count <= 0:
+                continue
+
+            layer_detail = pod.get("layer_detail", [])
+            direction_int = layer_detail[0].get("direction") if layer_detail else None
+            if direction_int == 1:
+                direction = "LONG"
+            elif direction_int == -1:
+                direction = "SHORT"
+            else:
+                direction = "—"
+
+            avg_entry = layer_detail[0].get("entry_price") if layer_detail else None
+
+            positions.append({
+                "instance_id": inst,
+                "instrument": symbol,
+                "direction": direction,
+                "avg_entry_price": avg_entry,
+                "layers": layer_count,
+                "net_pnl": pod.get("net_pnl"),
+            })
+
+    positions.sort(
+        key=lambda item: (item.get("instrument", ""), item.get("instance_id", ""))
+    )
+
+    return jsonify({
+        "positions": positions,
+        "total": len(positions),
+        "instance_status": instance_status,
+    }), 200
+
+
 @app.route("/api/telemetry/aggregate", methods=["GET"])
 def telemetry_aggregate():
-    instances = [
-        "MM_LONG_V2",
-        "MM_SHORT_V2",
-        "MM_LONG_EURUSD",
-        "MM_SHORT_EURUSD",
-        "MM_LONG_EURGBP",
-        "MM_SHORT_EURGBP",
-    ]
+    instances = ALL_INSTANCES
     net_exposure = {}       # symbol -> net signed lots (sum of direction * lot_size)
     alerts = []              # [{instance, message}, ...]
     instance_status = {}     # instance -> "live" | "connection_lost"

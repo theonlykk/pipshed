@@ -432,6 +432,41 @@
       font-family: var(--font-mono);
       color: var(--muted);
     }
+    /* Teams/Word copy-friendly tables — light cells, plain text, real borders */
+    .teams-section {
+      margin-bottom: 16px;
+    }
+    .teams-section .copy-meta {
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+      margin: 6px 0 10px 0;
+    }
+    .copy-table {
+      border-collapse: collapse;
+      width: 100%;
+      user-select: text;
+      -webkit-user-select: text;
+      font-size: 13px;
+      font-family: var(--font-mono);
+    }
+    .copy-table th,
+    .copy-table td {
+      border: 1px solid #888;
+      padding: 5px 10px;
+      text-align: left;
+      color: #111;
+      background: #fff;
+    }
+    .copy-table th {
+      background: #eee;
+      font-weight: 600;
+    }
+    .copy-table .empty-row td {
+      text-align: center;
+      color: #666;
+      font-style: italic;
+    }
     .history-header {
       display: flex;
       align-items: center;
@@ -657,6 +692,46 @@
   <div id="quotes-container" style="margin-top:10px"></div>
 </div>
 
+<!-- Cross-instance Teams-copyable summary -->
+<div class="card teams-section">
+  <div class="section-title" id="todayAllTitle">Today's Closed Trades (All Instances)</div>
+  <div class="copy-meta" id="todayAllMeta">Loading…</div>
+  <table class="copy-table" id="todayAllTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Pair</th>
+        <th>Direction</th>
+        <th>Entry</th>
+        <th>Exit</th>
+        <th>Pips</th>
+      </tr>
+    </thead>
+    <tbody id="todayAllBody">
+      <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card teams-section">
+  <div class="section-title">Open Positions (All Instances)</div>
+  <div class="copy-meta" id="openPosMeta">Loading…</div>
+  <table class="copy-table" id="openPosTable">
+    <thead>
+      <tr>
+        <th>Pair</th>
+        <th>Direction</th>
+        <th>Entry</th>
+        <th>Layers</th>
+        <th>Net PnL</th>
+      </tr>
+    </thead>
+    <tbody id="openPosBody">
+      <tr class="empty-row"><td colspan="5">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
 <!-- Row 3: Engine state -->
 <div class="grid-3">
   <div class="card">
@@ -711,6 +786,23 @@
   function fmt(val, decimals = 2) {
     if (val === null || val === undefined) return '—';
     return Number(val).toFixed(decimals);
+  }
+
+  // Shared pip derivation — entry/exit/direction based, not gross_pnl
+  function calcPipsFromPrices(instrument, direction, entryPrice, exitPrice) {
+    const entryNum = entryPrice != null ? Number(entryPrice) : null;
+    const exitNum  = exitPrice != null ? Number(exitPrice) : null;
+    if (entryNum === null || exitNum === null) return '—';
+    const dirMult  = direction === 'LONG' ? 1 : -1;
+    const rawDiff  = (exitNum - entryNum) * dirMult;
+    const pipMult  = (instrument && instrument.includes('JPY')) ? 100 : 10000;
+    const pips     = rawDiff * pipMult;
+    const isWin    = pips >= 0;
+    return (isWin ? '+' : '') + pips.toFixed(1) + 'p';
+  }
+
+  function formatCloseTime(closeTime) {
+    return closeTime ? closeTime.slice(0, 16).replace('T', ' ') : '—';
   }
 
   function applyAccountApiGauge(count, limit, softWarn, cardId, countId, barId, subId, badgeId) {
@@ -1033,6 +1125,93 @@
   fetchAggregate();
   setInterval(fetchAggregate, 5000);
 
+  async function fetchTodayAll() {
+    try {
+      const res  = await fetch('/api/telemetry/today_closed');
+      const data = await res.json();
+      renderTodayAll(data);
+    } catch (e) {
+      document.getElementById('todayAllMeta').textContent = 'Failed to load';
+    }
+  }
+
+  function renderTodayAll(data) {
+    const brokerToday = data.broker_today || '—';
+    const total       = data.total || 0;
+    const records     = data.records || [];
+    const title       = document.getElementById('todayAllTitle');
+    const meta        = document.getElementById('todayAllMeta');
+    const tbody       = document.getElementById('todayAllBody');
+
+    title.textContent = "Today's Closed Trades (All Instances) — " + brokerToday;
+    if (total === 0) {
+      meta.textContent = '0 trades on broker date ' + brokerToday;
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No closed trades on ' +
+        brokerToday + ' (broker today)</td></tr>';
+      return;
+    }
+
+    meta.textContent = total + ' trade' + (total === 1 ? '' : 's') +
+      ' across 6 instances · broker date ' + brokerToday;
+
+    tbody.innerHTML = records.map(function(r) {
+      const avgEntry = r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—';
+      const exit     = r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—';
+      const pipsStr  = calcPipsFromPrices(r.instrument, r.direction,
+                                          r.avg_entry_price, r.exit_price);
+      return '<tr>' +
+        '<td>' + formatCloseTime(r.close_time) + '</td>' +
+        '<td>' + (r.instrument || '—') + '</td>' +
+        '<td>' + (r.direction || '—') + '</td>' +
+        '<td>' + avgEntry + '</td>' +
+        '<td>' + exit + '</td>' +
+        '<td>' + pipsStr + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  async function fetchOpenPositions() {
+    try {
+      const res  = await fetch('/api/telemetry/open_positions');
+      const data = await res.json();
+      renderOpenPositions(data);
+    } catch (e) {
+      document.getElementById('openPosMeta').textContent = 'Failed to load';
+    }
+  }
+
+  function renderOpenPositions(data) {
+    const total     = data.total || 0;
+    const positions = data.positions || [];
+    const meta      = document.getElementById('openPosMeta');
+    const tbody     = document.getElementById('openPosBody');
+
+    if (total === 0) {
+      meta.textContent = '0 open pods across 6 instances';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No open positions</td></tr>';
+      return;
+    }
+
+    meta.textContent = total + ' open pod' + (total === 1 ? '' : 's') + ' across 6 instances';
+
+    tbody.innerHTML = positions.map(function(p) {
+      const entry = p.avg_entry_price != null ? Number(p.avg_entry_price).toFixed(5) : '—';
+      const pnl   = p.net_pnl != null ? Number(p.net_pnl).toFixed(2) : '—';
+      return '<tr>' +
+        '<td>' + (p.instrument || '—') + '</td>' +
+        '<td>' + (p.direction || '—') + '</td>' +
+        '<td>' + entry + '</td>' +
+        '<td>' + (p.layers != null ? p.layers : '—') + '</td>' +
+        '<td>' + pnl + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  fetchTodayAll();
+  setInterval(fetchTodayAll, 30000);
+  fetchOpenPositions();
+  setInterval(fetchOpenPositions, 5000);
+
   function renderAggregate(data) {
     // --- System alerts banner ---
     const banner = document.getElementById('systemAlertBanner');
@@ -1188,6 +1367,7 @@
 <script>
 // History view toggle — pod closes vs scalp exits
 let historyView = 'pods';
+let brokerTodayDate = null;
 
 function setHistoryView(view) {
   historyView = view;
@@ -1202,16 +1382,16 @@ function updateHistorySectionTitle() {
   const title = document.getElementById('closedSectionTitle');
   if (historyView === 'scalps') {
     const displayDate = scalpSelectedDate || '—';
-    const isLatest = scalpLatestDate && scalpSelectedDate === scalpLatestDate;
-    title.textContent = isLatest
-      ? 'Scalp Exits — Today'
+    const isBrokerToday = brokerTodayDate && scalpSelectedDate === brokerTodayDate;
+    title.textContent = isBrokerToday
+      ? 'Scalp Exits — Today (' + brokerTodayDate + ')'
       : 'Scalp Exits — ' + displayDate;
     return;
   }
   const displayDate = closedSelectedDate || '—';
-  const isLatest = closedLatestDate && closedSelectedDate === closedLatestDate;
-  title.textContent = isLatest
-    ? 'Closed Trades — Today'
+  const isBrokerToday = brokerTodayDate && closedSelectedDate === brokerTodayDate;
+  title.textContent = isBrokerToday
+    ? 'Closed Trades — Today (' + brokerTodayDate + ')'
     : 'Closed Trades — ' + displayDate;
 }
 
@@ -1254,6 +1434,7 @@ function updateClosedNav(data) {
   const pageLabel = document.getElementById('closedPageLabel');
 
   closedLatestDate = (data.available_dates && data.available_dates[0]) || null;
+  if (data.broker_today) brokerTodayDate = data.broker_today;
   if (data.date) closedSelectedDate = data.date;
 
   const displayDate = closedSelectedDate || '—';
@@ -1262,13 +1443,18 @@ function updateClosedNav(data) {
 
   const total = data.total || 0;
   closedTotalPages = data.total_pages || 0;
-  meta.textContent = total
-    ? total + ' trade' + (total === 1 ? '' : 's') + ' · ' + data.instance_id
-    : 'No trades · ' + data.instance_id;
+  const isBrokerToday = brokerTodayDate && closedSelectedDate === brokerTodayDate;
+  if (total === 0 && isBrokerToday) {
+    meta.textContent = 'No trades on ' + brokerTodayDate + ' (broker today) · ' + data.instance_id;
+  } else if (total === 0) {
+    meta.textContent = 'No trades on ' + displayDate + ' · ' + data.instance_id;
+  } else {
+    meta.textContent = total + ' trade' + (total === 1 ? '' : 's') + ' · ' + data.instance_id;
+  }
 
   prevDay.disabled = !closedSelectedDate;
-  nextDay.disabled = !closedSelectedDate || !closedLatestDate
-    || closedSelectedDate >= closedLatestDate;
+  nextDay.disabled = !closedSelectedDate || !brokerTodayDate
+    || closedSelectedDate >= brokerTodayDate;
 
   if (closedTotalPages > 1) {
     pagination.style.display = 'flex';
@@ -1301,9 +1487,12 @@ function renderClosedPods(records) {
   const tbody = document.getElementById('closedPodsBody');
 
   if (records.length === 0) {
-    const msg = closedSelectedDate
-      ? 'No closed trades on ' + closedSelectedDate
-      : 'No closed trades';
+    const isBrokerToday = brokerTodayDate && closedSelectedDate === brokerTodayDate;
+    let msg = 'No closed trades';
+    if (closedSelectedDate) {
+      msg = 'No closed trades on ' + closedSelectedDate;
+      if (isBrokerToday) msg += ' (broker today)';
+    }
     tbody.innerHTML = '<tr class="empty-row"><td colspan="9">' + msg + '</td></tr>';
     return;
   }
@@ -1311,21 +1500,13 @@ function renderClosedPods(records) {
   tbody.innerHTML = records.map(r => {
     const avgEntryNum = r.avg_entry_price != null ? Number(r.avg_entry_price) : null;
     const exitNum     = r.exit_price != null ? Number(r.exit_price) : null;
-    const dirMult     = r.direction === 'LONG' ? 1 : -1;
-
-    let pipsStr = '—';
-    let isWin   = true;
-    if (avgEntryNum !== null && exitNum !== null) {
-      const rawDiff = (exitNum - avgEntryNum) * dirMult;
-      const pipMult = (r.instrument && r.instrument.includes('JPY')) ? 100 : 10000;
-      const pips    = rawDiff * pipMult;
-      isWin   = pips >= 0;
-      pipsStr = (isWin ? '+' : '') + pips.toFixed(1) + 'p';
-    }
+    const pipsStr     = calcPipsFromPrices(r.instrument, r.direction,
+                                           r.avg_entry_price, r.exit_price);
+    const isWin       = pipsStr !== '—' && !pipsStr.startsWith('-');
 
     const result  = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
     const dirCls  = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
-    const timeStr = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
+    const timeStr = formatCloseTime(r.close_time);
     const hold    = r.hold_time_minutes != null ? Math.round(r.hold_time_minutes) + 'm' : '—';
     const avgEntry = avgEntryNum !== null ? avgEntryNum.toFixed(5) : '—';
     const exit     = exitNum !== null ? exitNum.toFixed(5) : '—';
@@ -1379,6 +1560,7 @@ function updateScalpNav(data) {
   const pageLabel = document.getElementById('scalpPageLabel');
 
   scalpLatestDate = (data.available_dates && data.available_dates[0]) || null;
+  if (data.broker_today) brokerTodayDate = data.broker_today;
   if (data.date) scalpSelectedDate = data.date;
 
   const displayDate = scalpSelectedDate || '—';
@@ -1387,13 +1569,18 @@ function updateScalpNav(data) {
 
   const total = data.total || 0;
   scalpTotalPages = data.total_pages || 0;
-  meta.textContent = total
-    ? total + ' scalp' + (total === 1 ? '' : 's') + ' · ' + data.instance_id
-    : 'No scalps · ' + data.instance_id;
+  const isBrokerToday = brokerTodayDate && scalpSelectedDate === brokerTodayDate;
+  if (total === 0 && isBrokerToday) {
+    meta.textContent = 'No scalps on ' + brokerTodayDate + ' (broker today) · ' + data.instance_id;
+  } else if (total === 0) {
+    meta.textContent = 'No scalps on ' + displayDate + ' · ' + data.instance_id;
+  } else {
+    meta.textContent = total + ' scalp' + (total === 1 ? '' : 's') + ' · ' + data.instance_id;
+  }
 
   prevDay.disabled = !scalpSelectedDate;
-  nextDay.disabled = !scalpSelectedDate || !scalpLatestDate
-    || scalpSelectedDate >= scalpLatestDate;
+  nextDay.disabled = !scalpSelectedDate || !brokerTodayDate
+    || scalpSelectedDate >= brokerTodayDate;
 
   if (scalpTotalPages > 1) {
     pagination.style.display = 'flex';

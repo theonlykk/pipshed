@@ -752,9 +752,9 @@
 <div class="card teams-section">
   <div class="teams-section-header">
     <div class="teams-nav-left">
-      <button type="button" class="closed-nav-btn" id="todayAllPrevDay" onclick="todayAllChangeDay(-1)">← Prev day</button>
+      <button type="button" class="closed-nav-btn" id="todayAllPrevDay">← Prev day</button>
       <span class="teams-date-label" id="todayAllDateLabel">—</span>
-      <button type="button" class="closed-nav-btn" id="todayAllNextDay" onclick="todayAllChangeDay(1)">Next day →</button>
+      <button type="button" class="closed-nav-btn" id="todayAllNextDay">Next day →</button>
     </div>
     <button type="button" class="teams-copy-btn" id="todayAllCopyBtn" onclick="copyTodayAllTable()">Copy table</button>
   </div>
@@ -879,6 +879,13 @@
 
   function formatCloseTime(closeTime) {
     return closeTime ? closeTime.slice(0, 16).replace('T', ' ') : '—';
+  }
+
+  function shiftClosedDate(ymd, days) {
+    const parts = ymd.split('-').map(Number);
+    const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
   }
 
   function applyAccountApiGauge(count, limit, softWarn, cardId, countId, barId, subId, badgeId) {
@@ -1206,6 +1213,7 @@
   let todayAllSelectedDate = null;
   let todayAllEarliestDate = null;
   let todayAllBrokerToday = null;
+  let todayAllFetchSeq = 0;
 
   function buildLightHtmlTable(headers, rows) {
     let html = '<table style="border-collapse:collapse;font-family:Calibri,sans-serif;font-size:11pt;">';
@@ -1305,12 +1313,15 @@
   }
 
   function todayAllChangeDay(delta) {
-    if (!todayAllSelectedDate) return;
-    todayAllSelectedDate = shiftClosedDate(todayAllSelectedDate, delta);
+    const base = todayAllSelectedDate || todayAllBrokerToday
+      || document.getElementById('todayAllDateLabel').textContent;
+    if (!base || base === '—') return;
+    todayAllSelectedDate = shiftClosedDate(base, delta);
     fetchTodayAll();
   }
 
   async function fetchTodayAll() {
+    const seq = ++todayAllFetchSeq;
     try {
       let url = '/api/telemetry/today_closed';
       if (todayAllSelectedDate) {
@@ -1318,8 +1329,10 @@
       }
       const res  = await fetch(url);
       const data = await res.json();
+      if (seq !== todayAllFetchSeq) return;
       renderTodayAll(data);
     } catch (e) {
+      if (seq !== todayAllFetchSeq) return;
       document.getElementById('todayAllMeta').textContent = 'Failed to load';
       document.getElementById('todayAllSummary').textContent = '—';
     }
@@ -1436,6 +1449,13 @@
   setInterval(fetchTodayAll, 30000);
   fetchOpenPositions();
   setInterval(fetchOpenPositions, 5000);
+
+  document.getElementById('todayAllPrevDay').addEventListener('click', function() {
+    todayAllChangeDay(-1);
+  });
+  document.getElementById('todayAllNextDay').addEventListener('click', function() {
+    todayAllChangeDay(1);
+  });
 
   function renderAggregate(data) {
     // --- System alerts banner ---

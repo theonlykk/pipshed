@@ -758,7 +758,7 @@
     </div>
     <button type="button" class="teams-copy-btn" id="todayAllCopyBtn" onclick="copyTodayAllTable()">Copy table</button>
   </div>
-  <div class="section-title" id="todayAllTitle">Closed Trades (All Instances)</div>
+  <div class="section-title" id="todayAllTitle">Today's Scalps (All Instances)</div>
   <div class="teams-summary" id="todayAllSummary">Loading…</div>
   <div class="copy-meta" id="todayAllMeta">Loading…</div>
   <table class="teams-table" id="todayAllTable">
@@ -1323,7 +1323,7 @@
   async function fetchTodayAll() {
     const seq = ++todayAllFetchSeq;
     try {
-      let url = '/api/telemetry/today_closed';
+      let url = '/api/telemetry/today_scalps';
       if (todayAllSelectedDate) {
         url += '?date=' + encodeURIComponent(todayAllSelectedDate);
       }
@@ -1357,8 +1357,8 @@
 
     const isBrokerToday = selectedDate === brokerToday;
     title.textContent = isBrokerToday
-      ? "Today's Closed Trades (All Instances)"
-      : 'Closed Trades (All Instances)';
+      ? "Today's Scalps (All Instances)"
+      : 'Scalp Exits (All Instances)';
     dateLabel.textContent = selectedDate;
 
     prevDay.disabled = !todayAllEarliestDate || selectedDate <= todayAllEarliestDate;
@@ -1367,7 +1367,8 @@
     let netPips = 0;
     let pipsCount = 0;
     todayAllCache.rows = records.map(function(r) {
-      const pipsNum = calcPipsNumeric(r.instrument, r.direction, r.avg_entry_price, r.exit_price);
+      const entry = r.entry_price;
+      const pipsNum = calcPipsNumeric(r.instrument, r.direction, entry, r.exit_price);
       if (pipsNum !== null) {
         netPips += pipsNum;
         pipsCount++;
@@ -1376,13 +1377,13 @@
         formatCloseTime(r.close_time),
         r.instrument || '—',
         r.direction || '—',
-        r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—',
+        entry != null ? Number(entry).toFixed(5) : '—',
         r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—',
-        calcPipsFromPrices(r.instrument, r.direction, r.avg_entry_price, r.exit_price),
+        calcPipsFromPrices(r.instrument, r.direction, entry, r.exit_price),
       ];
     });
 
-    const summaryText = total + ' pod close' + (total === 1 ? '' : 's') +
+    const summaryText = total + ' scalp' + (total === 1 ? '' : 's') +
       ', net ' + (pipsCount ? formatNetPips(netPips) : '—');
     todayAllCache.summary = summaryText;
     summary.textContent = summaryText;
@@ -1390,15 +1391,15 @@
     if (total === 0) {
       const beforeRetention = todayAllEarliestDate && selectedDate < todayAllEarliestDate;
       meta.textContent = beforeRetention
-        ? 'No data retained before ' + todayAllEarliestDate
-        : '0 pod closes on ' + selectedDate + (isBrokerToday ? ' (broker today)' : '');
+        ? 'No scalp data retained before ' + todayAllEarliestDate
+        : '0 scalps on ' + selectedDate + (isBrokerToday ? ' (broker today)' : '');
       tbody.innerHTML = '<tr class="empty-row"><td colspan="6">' +
-        (beforeRetention ? 'No retained history for this date' : 'No pod closes on ' + selectedDate) +
+        (beforeRetention ? 'No retained scalp history for this date' : 'No scalps on ' + selectedDate) +
         '</td></tr>';
       return;
     }
 
-    meta.textContent = total + ' pod close' + (total === 1 ? '' : 's') +
+    meta.textContent = total + ' scalp' + (total === 1 ? '' : 's') +
       ' across 6 instances · ' + selectedDate;
 
     tbody.innerHTML = todayAllCache.rows.map(function(row) {

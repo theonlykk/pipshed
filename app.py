@@ -9,7 +9,8 @@ Routes:
   GET  /api/telemetry/live         — serves current state to dashboard
   GET  /api/telemetry/closed       — paginated pod-close history
   GET  /api/telemetry/scalps       — paginated scalp-close history
-  GET  /api/telemetry/today_closed — cross-instance broker-today pod closes
+  GET  /api/telemetry/today_scalps    — cross-instance broker-today scalp exits
+  GET  /api/telemetry/today_closed    — cross-instance broker-today pod closes
   GET  /api/telemetry/open_positions — cross-instance open pod snapshot
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
@@ -359,6 +360,66 @@ def _collect_closed_history_meta():
     available_dates = sorted(all_dates, reverse=True)
     earliest_date = min(all_dates) if all_dates else None
     return available_dates, earliest_date, per_instance
+
+
+def _collect_scalp_history_meta():
+    """Scan all instance scalp lists — dates present, earliest retained, list lengths."""
+    all_dates = set()
+    per_instance = {}
+
+    for inst in ALL_INSTANCES:
+        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
+        records = [json.loads(item) for item in raw_list]
+        dates = {
+            d for rec in records if (d := _closed_record_date(rec))
+        }
+        all_dates.update(dates)
+        per_instance[inst] = {
+            "list_length": len(records),
+            "earliest_date": min(dates) if dates else None,
+            "latest_date": max(dates) if dates else None,
+            "date_count": len(dates),
+        }
+
+    available_dates = sorted(all_dates, reverse=True)
+    earliest_date = min(all_dates) if all_dates else None
+    return available_dates, earliest_date, per_instance
+
+
+@app.route("/api/telemetry/today_scalps", methods=["GET"])
+def telemetry_today_scalps():
+    """Cross-instance layer exits (scalp_history) for a broker calendar date."""
+    broker_today = _broker_today()
+    date_filter = request.args.get("date")
+    selected_date = date_filter or broker_today
+
+    available_dates, earliest_date, retention = _collect_scalp_history_meta()
+    all_records = []
+
+    for inst in ALL_INSTANCES:
+        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
+        records = [json.loads(item) for item in raw_list]
+        day_records = [
+            record
+            for record in records
+            if _closed_record_date(record) == selected_date
+        ]
+        for record in day_records:
+            merged = dict(record)
+            merged["instance_id"] = inst
+            all_records.append(merged)
+
+    all_records.sort(key=lambda item: item.get("close_time", ""))
+
+    return jsonify({
+        "broker_today": broker_today,
+        "date": selected_date,
+        "available_dates": available_dates,
+        "earliest_date": earliest_date,
+        "retention_by_instance": retention,
+        "records": all_records,
+        "total": len(all_records),
+    }), 200
 
 
 @app.route("/api/telemetry/today_closed", methods=["GET"])

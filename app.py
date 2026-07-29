@@ -337,10 +337,38 @@ def telemetry_scalps():
     return jsonify(result), 200
 
 
+def _collect_closed_history_meta():
+    """Scan all instance lists — dates present, earliest retained, list lengths."""
+    all_dates = set()
+    per_instance = {}
+
+    for inst in ALL_INSTANCES:
+        raw_list = r.lrange(f"fxmatrix:closed_history:{inst}", 0, -1)
+        records = [json.loads(item) for item in raw_list]
+        dates = {
+            d for rec in records if (d := _closed_record_date(rec))
+        }
+        all_dates.update(dates)
+        per_instance[inst] = {
+            "list_length": len(records),
+            "earliest_date": min(dates) if dates else None,
+            "latest_date": max(dates) if dates else None,
+            "date_count": len(dates),
+        }
+
+    available_dates = sorted(all_dates, reverse=True)
+    earliest_date = min(all_dates) if all_dates else None
+    return available_dates, earliest_date, per_instance
+
+
 @app.route("/api/telemetry/today_closed", methods=["GET"])
 def telemetry_today_closed():
-    """Cross-instance pod closes for the current broker calendar date."""
+    """Cross-instance pod closes for a broker calendar date (default: today)."""
     broker_today = _broker_today()
+    date_filter = request.args.get("date")
+    selected_date = date_filter or broker_today
+
+    available_dates, earliest_date, retention = _collect_closed_history_meta()
     all_records = []
 
     for inst in ALL_INSTANCES:
@@ -349,7 +377,7 @@ def telemetry_today_closed():
         day_records = [
             record
             for record in records
-            if _closed_record_date(record) == broker_today
+            if _closed_record_date(record) == selected_date
         ]
         grouped = _group_closed_records(day_records)
         for record in grouped:
@@ -361,6 +389,10 @@ def telemetry_today_closed():
 
     return jsonify({
         "broker_today": broker_today,
+        "date": selected_date,
+        "available_dates": available_dates,
+        "earliest_date": earliest_date,
+        "retention_by_instance": retention,
         "records": all_records,
         "total": len(all_records),
     }), 200

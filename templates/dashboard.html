@@ -432,40 +432,96 @@
       font-family: var(--font-mono);
       color: var(--muted);
     }
-    /* Teams/Word copy-friendly tables — light cells, plain text, real borders */
+    /* Cross-instance summary tables — dark theme on screen, Copy btn for Teams */
     .teams-section {
       margin-bottom: 16px;
+    }
+    .teams-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    .teams-nav-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .teams-date-label {
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text);
+      min-width: 96px;
+      text-align: center;
+    }
+    .teams-section-header .section-title {
+      margin: 0;
+      flex: 1 1 auto;
+    }
+    .teams-copy-btn {
+      padding: 4px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .teams-copy-btn:hover {
+      border-color: var(--blue);
+      color: var(--text);
+    }
+    .teams-copy-btn.copied {
+      border-color: var(--green);
+      color: var(--green);
     }
     .teams-section .copy-meta {
       font-size: 12px;
       font-family: var(--font-mono);
       color: var(--muted);
-      margin: 6px 0 10px 0;
+      margin: 0 0 10px 0;
     }
-    .copy-table {
-      border-collapse: collapse;
-      width: 100%;
-      user-select: text;
-      -webkit-user-select: text;
+    .teams-summary {
       font-size: 13px;
       font-family: var(--font-mono);
+      color: var(--text);
+      margin: 8px 0 6px 0;
+      user-select: text;
+      -webkit-user-select: text;
     }
-    .copy-table th,
-    .copy-table td {
-      border: 1px solid #888;
-      padding: 5px 10px;
+    .teams-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      font-family: var(--font-mono);
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .teams-table th {
       text-align: left;
-      color: #111;
-      background: #fff;
-    }
-    .copy-table th {
-      background: #eee;
+      font-size: 10px;
       font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 0 12px 8px 0;
+      border-bottom: 1px solid var(--border);
     }
-    .copy-table .empty-row td {
+    .teams-table td {
+      padding: 10px 12px 10px 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      vertical-align: middle;
+    }
+    .teams-table tr:last-child td { border-bottom: none; }
+    .teams-table .empty-row td {
       text-align: center;
-      color: #666;
-      font-style: italic;
+      color: var(--muted);
+      padding: 24px 0;
     }
     .history-header {
       display: flex;
@@ -692,11 +748,20 @@
   <div id="quotes-container" style="margin-top:10px"></div>
 </div>
 
-<!-- Cross-instance Teams-copyable summary -->
+<!-- Cross-instance summary (dark on-screen; Copy btn → light HTML/TSV for Teams) -->
 <div class="card teams-section">
-  <div class="section-title" id="todayAllTitle">Today's Closed Trades (All Instances)</div>
+  <div class="teams-section-header">
+    <div class="teams-nav-left">
+      <button type="button" class="closed-nav-btn" id="todayAllPrevDay" onclick="todayAllChangeDay(-1)">← Prev day</button>
+      <span class="teams-date-label" id="todayAllDateLabel">—</span>
+      <button type="button" class="closed-nav-btn" id="todayAllNextDay" onclick="todayAllChangeDay(1)">Next day →</button>
+    </div>
+    <button type="button" class="teams-copy-btn" id="todayAllCopyBtn" onclick="copyTodayAllTable()">Copy table</button>
+  </div>
+  <div class="section-title" id="todayAllTitle">Closed Trades (All Instances)</div>
+  <div class="teams-summary" id="todayAllSummary">Loading…</div>
   <div class="copy-meta" id="todayAllMeta">Loading…</div>
-  <table class="copy-table" id="todayAllTable">
+  <table class="teams-table" id="todayAllTable">
     <thead>
       <tr>
         <th>Time</th>
@@ -714,9 +779,12 @@
 </div>
 
 <div class="card teams-section">
-  <div class="section-title">Open Positions (All Instances)</div>
+  <div class="teams-section-header">
+    <div class="section-title">Open Positions (All Instances)</div>
+    <button type="button" class="teams-copy-btn" id="openPosCopyBtn" onclick="copyOpenPosTable()">Copy table</button>
+  </div>
   <div class="copy-meta" id="openPosMeta">Loading…</div>
-  <table class="copy-table" id="openPosTable">
+  <table class="teams-table" id="openPosTable">
     <thead>
       <tr>
         <th>Pair</th>
@@ -790,15 +858,23 @@
 
   // Shared pip derivation — entry/exit/direction based, not gross_pnl
   function calcPipsFromPrices(instrument, direction, entryPrice, exitPrice) {
+    const n = calcPipsNumeric(instrument, direction, entryPrice, exitPrice);
+    if (n === null) return '—';
+    return (n >= 0 ? '+' : '') + n.toFixed(1) + 'p';
+  }
+
+  function calcPipsNumeric(instrument, direction, entryPrice, exitPrice) {
     const entryNum = entryPrice != null ? Number(entryPrice) : null;
     const exitNum  = exitPrice != null ? Number(exitPrice) : null;
-    if (entryNum === null || exitNum === null) return '—';
+    if (entryNum === null || exitNum === null) return null;
     const dirMult  = direction === 'LONG' ? 1 : -1;
-    const rawDiff  = (exitNum - entryNum) * dirMult;
     const pipMult  = (instrument && instrument.includes('JPY')) ? 100 : 10000;
-    const pips     = rawDiff * pipMult;
-    const isWin    = pips >= 0;
-    return (isWin ? '+' : '') + pips.toFixed(1) + 'p';
+    return (exitNum - entryNum) * dirMult * pipMult;
+  }
+
+  function formatNetPips(net) {
+    if (net === null || net === undefined) return '—';
+    return (net >= 0 ? '+' : '') + net.toFixed(1) + ' pips';
   }
 
   function formatCloseTime(closeTime) {
@@ -1125,48 +1201,195 @@
   fetchAggregate();
   setInterval(fetchAggregate, 5000);
 
+  let todayAllCache = { headers: ['Time', 'Pair', 'Direction', 'Entry', 'Exit', 'Pips'], rows: [], summary: '' };
+  let openPosCache  = { headers: ['Pair', 'Direction', 'Entry', 'Layers', 'Net PnL'], rows: [] };
+  let todayAllSelectedDate = null;
+  let todayAllEarliestDate = null;
+  let todayAllBrokerToday = null;
+
+  function buildLightHtmlTable(headers, rows) {
+    let html = '<table style="border-collapse:collapse;font-family:Calibri,sans-serif;font-size:11pt;">';
+    html += '<tr>';
+    headers.forEach(function(h) {
+      html += '<th style="border:1px solid #888;padding:4px 8px;background:#eee;">' + h + '</th>';
+    });
+    html += '</tr>';
+    rows.forEach(function(row) {
+      html += '<tr>';
+      row.forEach(function(cell) {
+        html += '<td style="border:1px solid #888;padding:4px 8px;background:#fff;">' + cell + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</table>';
+    return html;
+  }
+
+  function copyRowsToClipboard(btnId, headers, rows) {
+    const btn = document.getElementById(btnId);
+    if (!rows.length) {
+      if (btn) {
+        const prev = btn.textContent;
+        btn.textContent = 'Nothing to copy';
+        setTimeout(function() { btn.textContent = prev; }, 1500);
+      }
+      return;
+    }
+    const tsv = [headers.join('\t')].concat(rows.map(function(r) { return r.join('\t'); })).join('\n');
+    const html = buildLightHtmlTable(headers, rows);
+    const done = function() {
+      if (!btn) return;
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(function() {
+        btn.textContent = 'Copy table';
+        btn.classList.remove('copied');
+      }, 2000);
+    };
+    if (navigator.clipboard && window.ClipboardItem) {
+      navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([tsv], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        }),
+      ]).then(done).catch(function() {
+        navigator.clipboard.writeText(tsv).then(done);
+      });
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(tsv).then(done);
+    }
+  }
+
+  function copyTodayAllTable() {
+    const headers = todayAllCache.headers;
+    const rows = todayAllCache.rows;
+    const btn = document.getElementById('todayAllCopyBtn');
+    if (!rows.length && !todayAllCache.summary) {
+      if (btn) {
+        const prev = btn.textContent;
+        btn.textContent = 'Nothing to copy';
+        setTimeout(function() { btn.textContent = prev; }, 1500);
+      }
+      return;
+    }
+    const summaryLine = todayAllCache.summary || '';
+    const tsv = summaryLine
+      ? summaryLine + '\n' + [headers.join('\t')].concat(rows.map(function(r) { return r.join('\t'); })).join('\n')
+      : [headers.join('\t')].concat(rows.map(function(r) { return r.join('\t'); })).join('\n');
+    let html = summaryLine ? '<p style="font-family:Calibri,sans-serif;font-size:11pt;">' + summaryLine + '</p>' : '';
+    html += buildLightHtmlTable(headers, rows);
+    if (navigator.clipboard && window.ClipboardItem) {
+      navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([tsv], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        }),
+      ]).then(function() {
+        if (!btn) return;
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() {
+          btn.textContent = 'Copy table';
+          btn.classList.remove('copied');
+        }, 2000);
+      }).catch(function() {
+        navigator.clipboard.writeText(tsv);
+      });
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(tsv);
+    }
+  }
+
+  function copyOpenPosTable() {
+    copyRowsToClipboard('openPosCopyBtn', openPosCache.headers, openPosCache.rows);
+  }
+
+  function todayAllChangeDay(delta) {
+    if (!todayAllSelectedDate) return;
+    todayAllSelectedDate = shiftClosedDate(todayAllSelectedDate, delta);
+    fetchTodayAll();
+  }
+
   async function fetchTodayAll() {
     try {
-      const res  = await fetch('/api/telemetry/today_closed');
+      let url = '/api/telemetry/today_closed';
+      if (todayAllSelectedDate) {
+        url += '?date=' + encodeURIComponent(todayAllSelectedDate);
+      }
+      const res  = await fetch(url);
       const data = await res.json();
       renderTodayAll(data);
     } catch (e) {
       document.getElementById('todayAllMeta').textContent = 'Failed to load';
+      document.getElementById('todayAllSummary').textContent = '—';
     }
   }
 
   function renderTodayAll(data) {
     const brokerToday = data.broker_today || '—';
+    const selectedDate = data.date || brokerToday;
     const total       = data.total || 0;
     const records     = data.records || [];
     const title       = document.getElementById('todayAllTitle');
+    const summary     = document.getElementById('todayAllSummary');
     const meta        = document.getElementById('todayAllMeta');
     const tbody       = document.getElementById('todayAllBody');
+    const dateLabel   = document.getElementById('todayAllDateLabel');
+    const prevDay     = document.getElementById('todayAllPrevDay');
+    const nextDay     = document.getElementById('todayAllNextDay');
 
-    title.textContent = "Today's Closed Trades (All Instances) — " + brokerToday;
+    todayAllBrokerToday = brokerToday;
+    todayAllEarliestDate = data.earliest_date || null;
+    todayAllSelectedDate = selectedDate;
+
+    const isBrokerToday = selectedDate === brokerToday;
+    title.textContent = isBrokerToday
+      ? "Today's Closed Trades (All Instances)"
+      : 'Closed Trades (All Instances)';
+    dateLabel.textContent = selectedDate;
+
+    prevDay.disabled = !todayAllEarliestDate || selectedDate <= todayAllEarliestDate;
+    nextDay.disabled = !brokerToday || selectedDate >= brokerToday;
+
+    let netPips = 0;
+    let pipsCount = 0;
+    todayAllCache.rows = records.map(function(r) {
+      const pipsNum = calcPipsNumeric(r.instrument, r.direction, r.avg_entry_price, r.exit_price);
+      if (pipsNum !== null) {
+        netPips += pipsNum;
+        pipsCount++;
+      }
+      return [
+        formatCloseTime(r.close_time),
+        r.instrument || '—',
+        r.direction || '—',
+        r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—',
+        r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—',
+        calcPipsFromPrices(r.instrument, r.direction, r.avg_entry_price, r.exit_price),
+      ];
+    });
+
+    const summaryText = total + ' pod close' + (total === 1 ? '' : 's') +
+      ', net ' + (pipsCount ? formatNetPips(netPips) : '—');
+    todayAllCache.summary = summaryText;
+    summary.textContent = summaryText;
+
     if (total === 0) {
-      meta.textContent = '0 trades on broker date ' + brokerToday;
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No closed trades on ' +
-        brokerToday + ' (broker today)</td></tr>';
+      const beforeRetention = todayAllEarliestDate && selectedDate < todayAllEarliestDate;
+      meta.textContent = beforeRetention
+        ? 'No data retained before ' + todayAllEarliestDate
+        : '0 pod closes on ' + selectedDate + (isBrokerToday ? ' (broker today)' : '');
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">' +
+        (beforeRetention ? 'No retained history for this date' : 'No pod closes on ' + selectedDate) +
+        '</td></tr>';
       return;
     }
 
-    meta.textContent = total + ' trade' + (total === 1 ? '' : 's') +
-      ' across 6 instances · broker date ' + brokerToday;
+    meta.textContent = total + ' pod close' + (total === 1 ? '' : 's') +
+      ' across 6 instances · ' + selectedDate;
 
-    tbody.innerHTML = records.map(function(r) {
-      const avgEntry = r.avg_entry_price != null ? Number(r.avg_entry_price).toFixed(5) : '—';
-      const exit     = r.exit_price != null ? Number(r.exit_price).toFixed(5) : '—';
-      const pipsStr  = calcPipsFromPrices(r.instrument, r.direction,
-                                          r.avg_entry_price, r.exit_price);
-      return '<tr>' +
-        '<td>' + formatCloseTime(r.close_time) + '</td>' +
-        '<td>' + (r.instrument || '—') + '</td>' +
-        '<td>' + (r.direction || '—') + '</td>' +
-        '<td>' + avgEntry + '</td>' +
-        '<td>' + exit + '</td>' +
-        '<td>' + pipsStr + '</td>' +
-        '</tr>';
+    tbody.innerHTML = todayAllCache.rows.map(function(row) {
+      return '<tr>' + row.map(function(cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
     }).join('');
   }
 
@@ -1186,6 +1409,16 @@
     const meta      = document.getElementById('openPosMeta');
     const tbody     = document.getElementById('openPosBody');
 
+    openPosCache.rows = positions.map(function(p) {
+      return [
+        p.instrument || '—',
+        p.direction || '—',
+        p.avg_entry_price != null ? Number(p.avg_entry_price).toFixed(5) : '—',
+        p.layers != null ? String(p.layers) : '—',
+        p.net_pnl != null ? Number(p.net_pnl).toFixed(2) : '—',
+      ];
+    });
+
     if (total === 0) {
       meta.textContent = '0 open pods across 6 instances';
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No open positions</td></tr>';
@@ -1194,16 +1427,8 @@
 
     meta.textContent = total + ' open pod' + (total === 1 ? '' : 's') + ' across 6 instances';
 
-    tbody.innerHTML = positions.map(function(p) {
-      const entry = p.avg_entry_price != null ? Number(p.avg_entry_price).toFixed(5) : '—';
-      const pnl   = p.net_pnl != null ? Number(p.net_pnl).toFixed(2) : '—';
-      return '<tr>' +
-        '<td>' + (p.instrument || '—') + '</td>' +
-        '<td>' + (p.direction || '—') + '</td>' +
-        '<td>' + entry + '</td>' +
-        '<td>' + (p.layers != null ? p.layers : '—') + '</td>' +
-        '<td>' + pnl + '</td>' +
-        '</tr>';
+    tbody.innerHTML = openPosCache.rows.map(function(row) {
+      return '<tr>' + row.map(function(cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
     }).join('');
   }
 

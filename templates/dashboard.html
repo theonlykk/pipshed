@@ -1465,7 +1465,7 @@
     if (alerts.length > 0) {
       banner.style.display = 'flex';
       document.getElementById('systemAlertCount').textContent =
-        alerts.length + ' orthogonal exposure ' + (alerts.length === 1 ? 'leak' : 'leaks') + ' detected';
+        alerts.length + ' system alert' + (alerts.length === 1 ? '' : 's');
       const listEl = document.getElementById('systemAlertList');
       listEl.innerHTML = alerts.map(a =>
         '<div class="alert-line">[' + a.instance + '] ' + a.message + '</div>'

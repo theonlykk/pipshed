@@ -70,7 +70,7 @@
     .instance-bar {
       display: flex;
       gap: 8px;
-      margin-bottom: 24px;
+      flex-wrap: wrap;
     }
     .instance-btn {
       padding: 6px 16px;
@@ -88,6 +88,124 @@
       border-color: var(--blue);
       color: #fff;
     }
+    .instance-btn.no-data {
+      opacity: 0.45;
+      border-style: dashed;
+    }
+    .instance-group {
+      margin-bottom: 16px;
+    }
+    .instance-group-label {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    /* ── Signal vs Dumb A/B comparison strip (screenshot-legible) ── */
+    .arm-compare-strip {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .arm-compare-col {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .arm-compare-col.signal { border-top: 4px solid var(--blue); }
+    .arm-compare-col.dumb   { border-top: 4px solid var(--muted); }
+    .arm-compare-col.halted {
+      border-color: var(--red);
+      background: #1a0808;
+    }
+    .arm-compare-col.no-data {
+      border-style: dashed;
+      opacity: 0.85;
+    }
+    .arm-compare-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .arm-compare-status {
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 10px;
+      letter-spacing: -0.02em;
+    }
+    .arm-compare-status.running { color: var(--green); }
+    .arm-compare-status.halted  { color: #fff; text-transform: uppercase; }
+    .arm-compare-status.no-data { color: var(--muted); font-style: italic; }
+    .arm-compare-detail {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      font-family: var(--font-mono);
+    }
+    .arm-compare-metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 16px;
+    }
+    .arm-metric-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
+    .arm-metric-value {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .arm-metric-value.mtm-positive { color: var(--green); }
+    .arm-metric-value.mtm-negative { color: var(--red); }
+    .arm-metric-span2 { grid-column: span 2; }
+
+    /* ── Per-arm instance summary cards ── */
+    .arm-cards-section { margin-bottom: 20px; }
+    .arm-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .arm-instance-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .arm-instance-card.no-data { opacity: 0.5; border-style: dashed; }
+    .arm-instance-card.has-alert { border-color: var(--red); }
+    .arm-instance-name {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .arm-instance-stat {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .arm-instance-stat strong { color: var(--text); font-weight: 600; }
 
     /* ── Grid layout ── */
     .grid {
@@ -616,8 +734,18 @@
 
     @media (max-width: 640px) {
       .grid,
-      .grid-3 {
+      .grid-3,
+      .arm-cards-grid {
         grid-template-columns: 1fr;
+      }
+      .arm-compare-strip {
+        grid-template-columns: 1fr;
+      }
+      .arm-compare-status {
+        font-size: 22px;
+      }
+      .arm-metric-value {
+        font-size: 18px;
       }
 
       .card {
@@ -666,13 +794,63 @@
   </div>
 </div>
 
-<div class="instance-bar">
-  <button class="instance-btn active" onclick="setInstance('MM_LONG_V2')" id="btn-MM_LONG_V2">MM LONG V2</button>
-  <button class="instance-btn" onclick="setInstance('MM_SHORT_V2')" id="btn-MM_SHORT_V2">MM SHORT V2</button>
-  <button class="instance-btn" onclick="setInstance('MM_LONG_EURUSD')" id="btn-MM_LONG_EURUSD">MM LONG EURUSD</button>
-  <button class="instance-btn" onclick="setInstance('MM_SHORT_EURUSD')" id="btn-MM_SHORT_EURUSD">MM SHORT EURUSD</button>
-  <button class="instance-btn" onclick="setInstance('MM_LONG_EURGBP')" id="btn-MM_LONG_EURGBP">MM LONG EURGBP</button>
-  <button class="instance-btn" onclick="setInstance('MM_SHORT_EURGBP')" id="btn-MM_SHORT_EURGBP">MM SHORT EURGBP</button>
+<!-- Signal vs Dumb A/B comparison (headline — screenshot legible) -->
+<div class="arm-compare-strip" id="armCompareStrip">
+  <div class="arm-compare-col signal" id="armCompareSignal">
+    <div class="arm-compare-title">Signal arm</div>
+    <div class="arm-compare-status running" id="armSignalStatus">SIGNAL: …</div>
+    <div class="arm-compare-detail" id="armSignalDetail">Loading…</div>
+    <div class="arm-compare-metrics">
+      <div><div class="arm-metric-label">Open layers</div><div class="arm-metric-value" id="armSignalLayers">—</div></div>
+      <div><div class="arm-metric-label">Fills / Scalps today</div><div class="arm-metric-value" id="armSignalActivity">—</div></div>
+      <div class="arm-metric-span2"><div class="arm-metric-label">API today</div><div class="arm-metric-value" id="armSignalApi">—</div></div>
+      <div class="arm-metric-span2"><div class="arm-metric-label">Net MTM</div><div class="arm-metric-value" id="armSignalMtm">—</div></div>
+    </div>
+  </div>
+  <div class="arm-compare-col dumb" id="armCompareDumb">
+    <div class="arm-compare-title">Dumb arm</div>
+    <div class="arm-compare-status no-data" id="armDumbStatus">DUMB: …</div>
+    <div class="arm-compare-detail" id="armDumbDetail">Loading…</div>
+    <div class="arm-compare-metrics">
+      <div><div class="arm-metric-label">Open layers</div><div class="arm-metric-value" id="armDumbLayers">—</div></div>
+      <div><div class="arm-metric-label">Fills / Scalps today</div><div class="arm-metric-value" id="armDumbActivity">—</div></div>
+      <div class="arm-metric-span2"><div class="arm-metric-label">API today</div><div class="arm-metric-value" id="armDumbApi">—</div></div>
+      <div class="arm-metric-span2"><div class="arm-metric-label">Net MTM</div><div class="arm-metric-value" id="armDumbMtm">—</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="instance-group">
+  <div class="instance-group-label">Signal instances</div>
+  <div class="instance-bar" id="instanceBarSignal">
+    <button class="instance-btn active" onclick="setInstance('MM_LONG_V2')" id="btn-MM_LONG_V2">MM LONG V2</button>
+    <button class="instance-btn" onclick="setInstance('MM_SHORT_V2')" id="btn-MM_SHORT_V2">MM SHORT V2</button>
+    <button class="instance-btn" onclick="setInstance('MM_LONG_EURUSD')" id="btn-MM_LONG_EURUSD">MM LONG EURUSD</button>
+    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURUSD')" id="btn-MM_SHORT_EURUSD">MM SHORT EURUSD</button>
+    <button class="instance-btn" onclick="setInstance('MM_LONG_EURGBP')" id="btn-MM_LONG_EURGBP">MM LONG EURGBP</button>
+    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURGBP')" id="btn-MM_SHORT_EURGBP">MM SHORT EURGBP</button>
+  </div>
+</div>
+<div class="instance-group">
+  <div class="instance-group-label">Dumb instances (A/B straddle)</div>
+  <div class="instance-bar" id="instanceBarDumb">
+    <button class="instance-btn" onclick="setInstance('MM_LONG_V2_DUMB')" id="btn-MM_LONG_V2_DUMB">MM LONG V2 DUMB</button>
+    <button class="instance-btn" onclick="setInstance('MM_SHORT_V2_DUMB')" id="btn-MM_SHORT_V2_DUMB">MM SHORT V2 DUMB</button>
+    <button class="instance-btn" onclick="setInstance('MM_LONG_EURUSD_DUMB')" id="btn-MM_LONG_EURUSD_DUMB">MM LONG EURUSD DUMB</button>
+    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURUSD_DUMB')" id="btn-MM_SHORT_EURUSD_DUMB">MM SHORT EURUSD DUMB</button>
+    <button class="instance-btn" onclick="setInstance('MM_LONG_EURGBP_DUMB')" id="btn-MM_LONG_EURGBP_DUMB">MM LONG EURGBP DUMB</button>
+    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURGBP_DUMB')" id="btn-MM_SHORT_EURGBP_DUMB">MM SHORT EURGBP DUMB</button>
+  </div>
+</div>
+
+<!-- Per-arm instance summary cards (aggregate) -->
+<div class="arm-cards-section">
+  <div class="instance-group-label">Instance summary — Signal</div>
+  <div class="arm-cards-grid" id="armCardsSignal"></div>
+</div>
+<div class="arm-cards-section">
+  <div class="instance-group-label">Instance summary — Dumb</div>
+  <div class="arm-cards-grid" id="armCardsDumb"></div>
 </div>
 
 <!-- Row 1: Equity vs Balance -->
@@ -821,12 +999,12 @@
     <div class="card-sub">bps</div>
   </div>
   <div class="card">
-    <div class="card-label">API Requests Today</div>
+    <div class="card-label">API Requests Today (this instance)</div>
     <div class="gauge-value" id="apiCount">—</div>
     <div class="gauge-bar-bg">
       <div class="gauge-bar-fill" id="apiBar" style="width:0%"></div>
     </div>
-    <div class="card-sub" id="apiSub">— / 900</div>
+    <div class="card-sub" id="apiSub">— / 2,000</div>
   </div>
 </div>
 
@@ -837,6 +1015,13 @@
 
 <script>
   let currentInstance = 'MM_LONG_V2';
+  const SIGNAL_INSTANCES = [
+    'MM_LONG_V2', 'MM_SHORT_V2', 'MM_LONG_EURUSD',
+    'MM_SHORT_EURUSD', 'MM_LONG_EURGBP', 'MM_SHORT_EURGBP'
+  ];
+  const DUMB_INSTANCES = SIGNAL_INSTANCES.map(function(i) { return i + '_DUMB'; });
+  const TRACKED_INSTANCE_COUNT = SIGNAL_INSTANCES.length + DUMB_INSTANCES.length;
+  const API_DAILY_LIMIT = 2000;
 
   function setInstance(id) {
     currentInstance = id;
@@ -1144,12 +1329,33 @@
     const apiBar = document.getElementById('apiBar');
     const instanceId = data.instance_id ?? currentInstance;
     const isV2Instance = instanceId.startsWith('MM_LONG_') || instanceId.startsWith('MM_SHORT_');
-    const accountApiCount = es.account_daily_api_count;
-    if (isV2Instance && accountApiCount != null) {
+    const instApiCount = es.instance_daily_api_count;
+    const apiLimit = es.account_daily_api_limit ?? es.instance_daily_api_limit ?? API_DAILY_LIMIT;
+    const apiSoftWarn = es.account_daily_api_soft_warn ?? 1800;
+
+    if (isV2Instance && instApiCount != null) {
       applyAccountApiGauge(
-        accountApiCount,
-        es.account_daily_api_limit ?? 2000,
-        es.account_daily_api_soft_warn ?? 1800,
+        instApiCount,
+        apiLimit,
+        apiSoftWarn,
+        null,
+        'apiCount',
+        'apiBar',
+        'apiSub',
+        null
+      );
+      document.getElementById('apiBar').style.display = '';
+      const acctCount = es.account_daily_api_count;
+      if (acctCount != null && acctCount !== instApiCount) {
+        document.getElementById('apiSub').textContent =
+          instApiCount.toLocaleString() + ' / ' + apiLimit.toLocaleString() +
+          ' (account ' + acctCount.toLocaleString() + ')';
+      }
+    } else if (isV2Instance && es.account_daily_api_count != null) {
+      applyAccountApiGauge(
+        es.account_daily_api_count,
+        apiLimit,
+        apiSoftWarn,
         null,
         'apiCount',
         'apiBar',
@@ -1400,7 +1606,7 @@
     }
 
     meta.textContent = total + ' scalp' + (total === 1 ? '' : 's') +
-      ' across 6 instances · ' + selectedDate;
+      ' across ' + TRACKED_INSTANCE_COUNT + ' instances · ' + selectedDate;
 
     tbody.innerHTML = todayAllCache.rows.map(function(row) {
       return '<tr>' + row.map(function(cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
@@ -1434,12 +1640,12 @@
     });
 
     if (total === 0) {
-      meta.textContent = '0 open pods across 6 instances';
+      meta.textContent = '0 open pods across ' + TRACKED_INSTANCE_COUNT + ' instances';
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No open positions</td></tr>';
       return;
     }
 
-    meta.textContent = total + ' open pod' + (total === 1 ? '' : 's') + ' across 6 instances';
+    meta.textContent = total + ' open pod' + (total === 1 ? '' : 's') + ' across ' + TRACKED_INSTANCE_COUNT + ' instances';
 
     tbody.innerHTML = openPosCache.rows.map(function(row) {
       return '<tr>' + row.map(function(cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
@@ -1458,7 +1664,96 @@
     todayAllChangeDay(1);
   });
 
+  function renderArmCompareColumn(armKey, prefix, summary, apiLimit) {
+    const col = document.getElementById('armCompare' + prefix);
+    const statusEl = document.getElementById('arm' + prefix + 'Status');
+    const detailEl = document.getElementById('arm' + prefix + 'Detail');
+    const layersEl = document.getElementById('arm' + prefix + 'Layers');
+    const activityEl = document.getElementById('arm' + prefix + 'Activity');
+    const apiEl = document.getElementById('arm' + prefix + 'Api');
+    const mtmEl = document.getElementById('arm' + prefix + 'Mtm');
+
+    if (!summary || !statusEl) return;
+
+    const armLabel = armKey.toUpperCase();
+    const status = summary.status || 'no_data';
+    col.className = 'arm-compare-col ' + armKey + (status === 'halted' ? ' halted' : status === 'no_data' ? ' no-data' : '');
+
+    statusEl.className = 'arm-compare-status ' + (status === 'running' ? 'running' : status === 'halted' ? 'halted' : 'no-data');
+    if (status === 'no_data') {
+      statusEl.textContent = armLabel + ': NO DATA';
+    } else if (status === 'halted') {
+      statusEl.textContent = armLabel + ': ' + (summary.status_label || 'HALTED');
+    } else {
+      statusEl.textContent = armLabel + ': ' + (summary.status_label || 'RUNNING');
+    }
+
+    detailEl.textContent = summary.status_detail || '';
+
+    if (status === 'no_data') {
+      layersEl.textContent = '—';
+      activityEl.textContent = '—';
+      apiEl.textContent = '— / ' + apiLimit.toLocaleString();
+      mtmEl.textContent = '—';
+      mtmEl.className = 'arm-metric-value';
+      return;
+    }
+
+    layersEl.textContent = summary.open_long_layers + ' long / ' + summary.open_short_layers + ' short';
+    activityEl.textContent = summary.fills_today + ' fills / ' + summary.scalps_today + ' scalps';
+    apiEl.textContent = (summary.instance_daily_api_count ?? 0).toLocaleString() + ' / ' + apiLimit.toLocaleString();
+
+    const mtm = summary.net_mtm ?? 0;
+    mtmEl.textContent = (mtm >= 0 ? '+' : '') + Number(mtm).toFixed(2);
+    mtmEl.className = 'arm-metric-value' + (mtm > 0.005 ? ' mtm-positive' : mtm < -0.005 ? ' mtm-negative' : '');
+  }
+
+  function renderArmInstanceCards(containerId, instances, cards, statusMap) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = instances.map(function(inst) {
+      const card = cards[inst] || {};
+      const conn = card.connection || 'no_data';
+      const isLive = conn === 'live';
+      const hasAlert = (card.alerts || []).length > 0;
+      let cls = 'arm-instance-card';
+      if (!isLive) cls += ' no-data';
+      if (hasAlert) cls += ' has-alert';
+
+      const mtm = card.net_mtm ?? 0;
+      const mtmStr = isLive ? ((mtm >= 0 ? '+' : '') + Number(mtm).toFixed(2)) : '—';
+      const apiStr = isLive ? (card.instance_daily_api_count ?? 0).toLocaleString() : '—';
+      const connLabel = isLive ? 'live' : 'no data';
+      const alertStr = hasAlert ? '<br><span style="color:var(--red)">' + card.alerts[0] + '</span>' : '';
+
+      if (statusMap && statusMap[inst] === 'connection_lost') {
+        document.getElementById('btn-' + inst)?.classList.add('no-data');
+      } else {
+        document.getElementById('btn-' + inst)?.classList.remove('no-data');
+      }
+
+      return '<div class="' + cls + '">' +
+        '<div class="arm-instance-name">' + inst.replace(/_/g, ' ') + '</div>' +
+        '<div class="arm-instance-stat">' +
+          '<strong>' + connLabel + '</strong> · ' +
+          (isLive ? (card.open_long_layers + 'L / ' + card.open_short_layers + 'S') : '—') + '<br>' +
+          'MTM <strong>' + mtmStr + '</strong> · API <strong>' + apiStr + '</strong>' +
+          alertStr +
+        '</div></div>';
+    }).join('');
+  }
+
   function renderAggregate(data) {
+    const apiLimit = data.account_daily_api_limit ?? API_DAILY_LIMIT;
+    const armSummaries = data.arm_summaries || {};
+    const instanceCards = data.instance_cards || {};
+    const instanceStatus = data.instance_status || {};
+
+    renderArmCompareColumn('signal', 'Signal', armSummaries.signal, apiLimit);
+    renderArmCompareColumn('dumb', 'Dumb', armSummaries.dumb, apiLimit);
+    renderArmInstanceCards('armCardsSignal', SIGNAL_INSTANCES, instanceCards, instanceStatus);
+    renderArmInstanceCards('armCardsDumb', DUMB_INSTANCES, instanceCards, instanceStatus);
+
     // --- System alerts banner ---
     const banner = document.getElementById('systemAlertBanner');
     const alerts = data.system_alerts || [];
@@ -1496,7 +1791,7 @@
     // --- Account-wide API request gauge (V2 shared GV counter) ---
     applyAccountApiGauge(
       data.account_daily_api_count ?? 0,
-      2000,
+      apiLimit,
       1800,
       'accountApiCard',
       'accountApiCount',

@@ -49,6 +49,9 @@ ALL_INSTANCES = [
     "MM_SHORT_EURGBP",
 ]
 
+DUMB_INSTANCES = [f"{inst}_DUMB" for inst in ALL_INSTANCES]
+TRACKED_INSTANCES = ALL_INSTANCES + DUMB_INSTANCES
+
 # FTMO / MT5 server time — matches EA trade_date (TimeCurrent() on broker)
 BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
 
@@ -56,6 +59,192 @@ BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
 def _broker_today():
     """Return YYYY-MM-DD for the current broker session calendar date."""
     return datetime.now(ZoneInfo(BROKER_TIMEZONE)).strftime("%Y-%m-%d")
+
+
+def _instance_arm(instance_id):
+    """Tag instance as signal or dumb arm via the _DUMB suffix."""
+    return "dumb" if instance_id.endswith("_DUMB") else "signal"
+
+
+def _count_history_for_date(redis_key, selected_date):
+    """Count history list entries whose trade/close date matches selected_date."""
+    raw_list = r.lrange(redis_key, 0, -1)
+    count = 0
+    for item in raw_list:
+        record = json.loads(item)
+        if _closed_record_date(record) == selected_date:
+            count += 1
+    return count
+
+
+def _parse_ta_signal(msg):
+    """Extract signal= value from a TA | CRITICAL alert, if present."""
+    upper = msg.upper()
+    marker = "SIGNAL="
+    idx = upper.find(marker)
+    if idx < 0:
+        return None
+    tail = msg[idx + len(marker):].strip()
+    for sep in (" ", "|"):
+        if sep in tail:
+            tail = tail.split(sep)[0]
+    return tail.strip() or None
+
+
+def _classify_alert_messages(messages):
+    """Return (is_halted, halt_kind, halt_detail) from system alert strings."""
+    # These must match the EA's ACTUAL alert prefixes (fxmatrix: CB|CRITICAL,
+    # TA|CRITICAL, HALT|, BCC|). Do NOT invent tokens; verify against the EA
+    # source when alert formats change.
+    halt_cb = False
+    halt_ta = False
+    halt_instance = False
+    cb_detail = ""
+    ta_detail = ""
+    halt_detail = ""
+
+    for msg in messages:
+        upper = msg.upper()
+        if "BCC |" in upper:
+            continue
+
+        if "CB | CRITICAL" in upper:
+            halt_cb = True
+            if not cb_detail:
+                cb_detail = msg
+        elif "TA | CRITICAL" in upper:
+            halt_ta = True
+            signal = _parse_ta_signal(msg)
+            if not ta_detail:
+                ta_detail = f"Trigger A: {signal}" if signal else msg
+        elif "HALT |" in upper:
+            halt_instance = True
+            if not halt_detail:
+                halt_detail = msg
+
+    is_halted = halt_cb or halt_ta or halt_instance
+
+    if halt_cb:
+        return is_halted, "cb", cb_detail or "Equity floor circuit breaker"
+    if halt_ta:
+        return is_halted, "ta", ta_detail or "Trigger A anomaly"
+    if halt_instance:
+        return is_halted, "halt", halt_detail or "Instance halted"
+    return False, None, ""
+
+
+def _summarize_instance_state(instance_id, raw_payload, broker_today):
+    """Build per-instance card fields from a live redis payload (or None)."""
+    if raw_payload is None:
+        return {
+            "instance_id": instance_id,
+            "arm": _instance_arm(instance_id),
+            "connection": "no_data",
+            "open_long_layers": 0,
+            "open_short_layers": 0,
+            "net_mtm": 0.0,
+            "instance_daily_api_count": 0,
+            "alerts": [],
+        }
+
+    data = json.loads(raw_payload)
+    es = data.get("engine_state", {})
+    open_long = 0
+    open_short = 0
+    net_mtm = 0.0
+
+    for pod in data.get("active_pods", {}).values():
+        net_mtm += float(pod.get("net_pnl") or 0.0)
+        for layer in pod.get("layer_detail", []):
+            direction = layer.get("direction", 0)
+            if direction == 1:
+                open_long += 1
+            elif direction == -1:
+                open_short += 1
+
+    inst_api = es.get("instance_daily_api_count")
+    inst_api_count = int(inst_api) if isinstance(inst_api, (int, float)) else 0
+
+    return {
+        "instance_id": instance_id,
+        "arm": _instance_arm(instance_id),
+        "connection": "live",
+        "open_long_layers": open_long,
+        "open_short_layers": open_short,
+        "net_mtm": round(net_mtm, 2),
+        "instance_daily_api_count": inst_api_count,
+        "alerts": list(data.get("system_alerts", [])),
+    }
+
+
+def _summarize_arm(instances, broker_today):
+    """Aggregate operator-facing totals for one arm (signal or dumb)."""
+    open_long = 0
+    open_short = 0
+    scalps_today = 0
+    fills_today = 0
+    instance_daily_api_count = 0
+    net_mtm = 0.0
+    instances_live = 0
+    all_alerts = []
+
+    for inst in instances:
+        raw = r.get(f"fxmatrix:state:{inst}")
+        card = _summarize_instance_state(inst, raw, broker_today)
+        if card["connection"] != "live":
+            continue
+
+        instances_live += 1
+        open_long += card["open_long_layers"]
+        open_short += card["open_short_layers"]
+        net_mtm += card["net_mtm"]
+        instance_daily_api_count += card["instance_daily_api_count"]
+        all_alerts.extend(card["alerts"])
+
+        scalps_today += _count_history_for_date(
+            f"fxmatrix:scalp_history:{inst}", broker_today
+        )
+        fills_today += _count_history_for_date(
+            f"fxmatrix:closed_history:{inst}", broker_today
+        )
+
+    is_halted, halt_kind, halt_detail = _classify_alert_messages(all_alerts)
+
+    if instances_live == 0:
+        status = "no_data"
+        status_label = "NO DATA"
+        status_detail = "No telemetry received for this arm"
+    elif is_halted and halt_kind == "cb":
+        status = "halted"
+        status_label = "HALTED — circuit breaker"
+        status_detail = halt_detail or "Equity floor circuit breaker (CB | CRITICAL)"
+    elif is_halted and halt_kind == "ta":
+        status = "halted"
+        status_label = "HALTED — trigger A"
+        status_detail = halt_detail or "Trigger A anomaly (TA | CRITICAL)"
+    elif is_halted:
+        status = "halted"
+        status_label = "HALTED — instance halt"
+        status_detail = halt_detail or "Instance halted (HALT |)"
+    else:
+        status = "running"
+        status_label = "RUNNING"
+        status_detail = f"{instances_live}/{len(instances)} instances live"
+
+    return {
+        "arm": _instance_arm(instances[0]) if instances else "unknown",
+        "status": status,
+        "status_label": status_label,
+        "status_detail": status_detail,
+        "open_long_layers": open_long,
+        "open_short_layers": open_short,
+        "fills_today": fills_today,
+        "scalps_today": scalps_today,
+        "instance_daily_api_count": instance_daily_api_count,
+        "net_mtm": round(net_mtm, 2),
+        "instances_live": instances_live,
+        "instances_total": len(instances),
+    }
 
 
 @app.route("/health")
@@ -343,7 +532,7 @@ def _collect_closed_history_meta():
     all_dates = set()
     per_instance = {}
 
-    for inst in ALL_INSTANCES:
+    for inst in TRACKED_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:closed_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         dates = {
@@ -367,7 +556,7 @@ def _collect_scalp_history_meta():
     all_dates = set()
     per_instance = {}
 
-    for inst in ALL_INSTANCES:
+    for inst in TRACKED_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         dates = {
@@ -396,7 +585,7 @@ def telemetry_today_scalps():
     available_dates, earliest_date, retention = _collect_scalp_history_meta()
     all_records = []
 
-    for inst in ALL_INSTANCES:
+    for inst in TRACKED_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         day_records = [
@@ -432,7 +621,7 @@ def telemetry_today_closed():
     available_dates, earliest_date, retention = _collect_closed_history_meta()
     all_records = []
 
-    for inst in ALL_INSTANCES:
+    for inst in TRACKED_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:closed_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         day_records = [
@@ -465,7 +654,7 @@ def telemetry_open_positions():
     positions = []
     instance_status = {}
 
-    for inst in ALL_INSTANCES:
+    for inst in TRACKED_INSTANCES:
         raw = r.get(f"fxmatrix:state:{inst}")
         if raw is None:
             instance_status[inst] = "connection_lost"
@@ -513,10 +702,12 @@ def telemetry_open_positions():
 
 @app.route("/api/telemetry/aggregate", methods=["GET"])
 def telemetry_aggregate():
-    instances = ALL_INSTANCES
+    instances = TRACKED_INSTANCES
+    broker_today = _broker_today()
     net_exposure = {}       # symbol -> net signed lots (sum of direction * lot_size)
-    alerts = []              # [{instance, message}, ...]
+    alerts = []              # [{instance, message, arm}, ...]
     instance_status = {}     # instance -> "live" | "connection_lost"
+    instance_cards = {}    # instance -> per-instance summary for grouped cards
     best_quotes = {}  # symbol -> {"best_bid": float|None, "best_offer": float|None}
     full_best_quotes = {}  # symbol -> {"best_bid", "best_offer", "direction_conflict"}
     account_daily_api_count = 0
@@ -524,12 +715,16 @@ def telemetry_aggregate():
 
     for inst in instances:
         raw = r.get(f"fxmatrix:state:{inst}")
+        card = _summarize_instance_state(inst, raw, broker_today)
+        instance_cards[inst] = card
+
         if raw is None:
             instance_status[inst] = "connection_lost"
             continue
 
         data = json.loads(raw)
         instance_status[inst] = "live"
+        arm = _instance_arm(inst)
 
         es = data.get("engine_state", {})
         api_count = es.get("account_daily_api_count")
@@ -615,16 +810,24 @@ def telemetry_aggregate():
                     best_quotes[symbol]["best_offer"] = offer
 
         for msg in data.get("system_alerts", []):
-            alerts.append({"instance": inst, "message": msg})
+            alerts.append({"instance": inst, "arm": arm, "message": msg})
+
+    arm_summaries = {
+        "signal": _summarize_arm(ALL_INSTANCES, broker_today),
+        "dumb": _summarize_arm(DUMB_INSTANCES, broker_today),
+    }
 
     return jsonify({
         "net_exposure": net_exposure,
         "system_alerts": alerts,
         "instance_status": instance_status,
+        "instance_cards": instance_cards,
+        "arm_summaries": arm_summaries,
         "best_quotes": best_quotes,
         "full_best_quotes": full_best_quotes,
         "account_daily_api_count": account_daily_api_count,
         "account_daily_api_warning": account_daily_api_warning,
+        "account_daily_api_limit": 2000,
     }), 200
 
 

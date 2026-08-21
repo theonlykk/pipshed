@@ -254,8 +254,11 @@
     .neutral  { color: var(--text); }
 
     /* ── Equity vs Balance ── */
+    .equity-mae-row {
+      grid-template-columns: 1.15fr 0.95fr;
+      align-items: stretch;
+    }
     .equity-card {
-      grid-column: span 2;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -295,6 +298,68 @@
       font-size: 13px;
       margin-top: 6px;
       color: var(--muted);
+    }
+
+    /* ── Intraday low-water (MAE) — screenshot-critical ── */
+    .mae-card {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+      border-left: 3px solid var(--amber);
+    }
+    .mae-headline-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .mae-block { flex: 1; min-width: 120px; }
+    .mae-block-dist { flex: 1.4; min-width: 140px; }
+    .mae-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .mae-value-lg {
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .mae-dist-value {
+      font-size: 36px;
+      font-weight: 800;
+    }
+    .mae-dist-critical {
+      color: var(--red);
+      font-weight: 900;
+    }
+    .mae-dist-warning {
+      color: var(--amber);
+      font-weight: 900;
+    }
+    .mae-dist-ok {
+      color: var(--green);
+    }
+    .mae-card-critical {
+      border-left-color: var(--red);
+      border-color: var(--red);
+    }
+    .mae-mtm-row {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    .mae-pairs-line {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
     }
 
     /* ── Pod cards ── */
@@ -735,7 +800,8 @@
     @media (max-width: 640px) {
       .grid,
       .grid-3,
-      .arm-cards-grid {
+      .arm-cards-grid,
+      .equity-mae-row {
         grid-template-columns: 1fr;
       }
       .arm-compare-strip {
@@ -853,8 +919,8 @@
   <div class="arm-cards-grid" id="armCardsDumb"></div>
 </div>
 
-<!-- Row 1: Equity vs Balance -->
-<div class="grid" style="margin-bottom:16px">
+<!-- Row 1: Equity vs Balance + Intraday low-water -->
+<div class="grid equity-mae-row" style="margin-bottom:16px">
   <div class="card equity-card">
     <div class="equity-block">
       <div class="card-label">Equity</div>
@@ -875,6 +941,24 @@
       </div>
       <div class="drawdown-pct" id="ddPct">—</div>
     </div>
+  </div>
+  <div class="card mae-card">
+    <div class="mae-headline-row">
+      <div class="mae-block">
+        <div class="mae-label">Intraday Low</div>
+        <div class="mae-value-lg" id="maeEquityLow">—</div>
+        <div class="card-sub" id="maeDayKey">—</div>
+      </div>
+      <div class="mae-block mae-block-dist">
+        <div class="mae-label">Dist to Floor</div>
+        <div class="mae-value-lg mae-dist-value" id="maeDistFloor">—</div>
+      </div>
+    </div>
+    <div>
+      <div class="mae-label">MTM Trough / Peak</div>
+      <div class="mae-mtm-row" id="maeMtmSwing">— / —</div>
+    </div>
+    <div class="mae-pairs-line" id="maePairTroughs">GBPUSD: — · EURUSD: — · EURGBP: —</div>
   </div>
 </div>
 
@@ -1039,6 +1123,52 @@
   function fmt(val, decimals = 2) {
     if (val === null || val === undefined) return '—';
     return Number(val).toFixed(decimals);
+  }
+
+  function fmtMoney(val) {
+    if (val === null || val === undefined) return '—';
+    const n = Number(val);
+    const prefix = n < 0 ? '-$' : '$';
+    return prefix + fmt(Math.abs(n));
+  }
+
+  function renderIntradayMae(mae) {
+    mae = mae || {};
+    document.getElementById('maeEquityLow').textContent =
+      fmtMoney(mae.mae_equity_low);
+    document.getElementById('maeDayKey').textContent =
+      mae.mae_day_key ? mae.mae_day_key : '—';
+
+    const distEl = document.getElementById('maeDistFloor');
+    const dist = mae.mae_equity_low_dist_to_floor;
+    distEl.textContent = fmtMoney(dist);
+    distEl.className = 'mae-value-lg mae-dist-value';
+    const maeCard = document.querySelector('.mae-card');
+    if (maeCard) maeCard.classList.remove('mae-card-critical');
+    if (dist !== null && dist !== undefined) {
+      if (dist <= 250) {
+        distEl.classList.add('mae-dist-critical');
+        if (maeCard) maeCard.classList.add('mae-card-critical');
+      } else if (dist <= 1000) {
+        distEl.classList.add('mae-dist-warning');
+      } else {
+        distEl.classList.add('mae-dist-ok');
+      }
+    }
+
+    const trough = mae.mae_open_mtm_trough;
+    const peak = mae.mae_open_mtm_peak;
+    document.getElementById('maeMtmSwing').textContent =
+      fmtMoney(trough) + ' / ' + fmtMoney(peak);
+
+    const pairLine = [
+      ['GBPUSD', mae.mae_pair_mtm_trough_gbpusd],
+      ['EURUSD', mae.mae_pair_mtm_trough_eurusd],
+      ['EURGBP', mae.mae_pair_mtm_trough_eurgbp],
+    ].map(function(pair) {
+      return pair[0] + ': ' + fmtMoney(pair[1]);
+    }).join(' · ');
+    document.getElementById('maePairTroughs').textContent = pairLine;
   }
 
   // Shared pip derivation — entry/exit/direction based, not gross_pnl
@@ -1239,6 +1369,10 @@
   function render(data) {
     const badge    = document.getElementById('statusBadge');
     const statusTx = document.getElementById('statusText');
+
+    if (Object.prototype.hasOwnProperty.call(data, 'intraday_mae')) {
+      renderIntradayMae(data.intraday_mae);
+    }
 
     if (data.status === 'connection_lost') {
       badge.className = 'status-badge lost';
@@ -1748,6 +1882,10 @@
     const armSummaries = data.arm_summaries || {};
     const instanceCards = data.instance_cards || {};
     const instanceStatus = data.instance_status || {};
+
+    if (Object.prototype.hasOwnProperty.call(data, 'intraday_mae')) {
+      renderIntradayMae(data.intraday_mae);
+    }
 
     renderArmCompareColumn('signal', 'Signal', armSummaries.signal, apiLimit);
     renderArmCompareColumn('dumb', 'Dumb', armSummaries.dumb, apiLimit);

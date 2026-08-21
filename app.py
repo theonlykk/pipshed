@@ -66,6 +66,76 @@ def _instance_arm(instance_id):
     return "dumb" if instance_id.endswith("_DUMB") else "signal"
 
 
+def _round_mae_float(value):
+    """Round a telemetry MAE float for display, or None if absent."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 2)
+    return None
+
+
+def _empty_intraday_mae():
+    """Absent-data MAE payload — UI renders these as '--', never a 500."""
+    return {
+        "source_instance": None,
+        "mae_equity_low": None,
+        "mae_equity_low_dist_to_floor": None,
+        "mae_open_mtm_trough": None,
+        "mae_open_mtm_peak": None,
+        "mae_pair_mtm_trough_gbpusd": None,
+        "mae_pair_mtm_trough_eurusd": None,
+        "mae_pair_mtm_trough_eurgbp": None,
+        "mae_day_key": None,
+    }
+
+
+def _mae_from_engine_state(es, instance_id):
+    """Pull account-level MAE from one engine_state. Do not sum across instances."""
+    mae = _empty_intraday_mae()
+    if not isinstance(es, dict):
+        return mae
+    day_key = es.get("mae_day_key")
+    mae.update({
+        "source_instance": instance_id,
+        "mae_equity_low": _round_mae_float(es.get("mae_equity_low")),
+        "mae_equity_low_dist_to_floor": _round_mae_float(
+            es.get("mae_equity_low_dist_to_floor")
+        ),
+        "mae_open_mtm_trough": _round_mae_float(es.get("mae_open_mtm_trough")),
+        "mae_open_mtm_peak": _round_mae_float(es.get("mae_open_mtm_peak")),
+        "mae_pair_mtm_trough_gbpusd": _round_mae_float(
+            es.get("mae_pair_mtm_trough_gbpusd")
+        ),
+        "mae_pair_mtm_trough_eurusd": _round_mae_float(
+            es.get("mae_pair_mtm_trough_eurusd")
+        ),
+        "mae_pair_mtm_trough_eurgbp": _round_mae_float(
+            es.get("mae_pair_mtm_trough_eurgbp")
+        ),
+        "mae_day_key": day_key.strip() if isinstance(day_key, str) and day_key.strip() else None,
+    })
+    return mae
+
+
+def _read_intraday_mae():
+    """Account-level intraday MAE from one live instance (prefer signal arm).
+
+    MAE fields are identical across a running arm — never sum across the fleet.
+    """
+    # Prefer signal-arm instances; fall back to dumb if none are live.
+    for inst in ALL_INSTANCES + DUMB_INSTANCES:
+        raw = r.get(f"fxmatrix:state:{inst}")
+        if raw is None:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        return _mae_from_engine_state(data.get("engine_state", {}), inst)
+    return _empty_intraday_mae()
+
+
 def _count_history_for_date(redis_key, selected_date):
     """Count history list entries whose trade/close date matches selected_date."""
     raw_list = r.lrange(redis_key, 0, -1)
@@ -276,11 +346,17 @@ def telemetry_live():
     redis_key = f"fxmatrix:state:{instance_id}"
 
     raw = r.get(redis_key)
+    intraday_mae = _read_intraday_mae()
     if raw is None:
-        return jsonify({"status": "connection_lost", "instance_id": instance_id}), 200
+        return jsonify({
+            "status": "connection_lost",
+            "instance_id": instance_id,
+            "intraday_mae": intraday_mae,
+        }), 200
 
     data = json.loads(raw)
     data["status"] = "live"
+    data["intraday_mae"] = intraday_mae
     return jsonify(data), 200
 
 
@@ -712,6 +788,9 @@ def telemetry_aggregate():
     full_best_quotes = {}  # symbol -> {"best_bid", "best_offer", "direction_conflict"}
     account_daily_api_count = 0
     account_daily_api_warning = False
+    # Account-level MAE: capture from the first live instance only (SIGNAL
+    # instances are listed first in TRACKED_INSTANCES). Never sum these.
+    intraday_mae = None
 
     for inst in instances:
         raw = r.get(f"fxmatrix:state:{inst}")
@@ -727,6 +806,8 @@ def telemetry_aggregate():
         arm = _instance_arm(inst)
 
         es = data.get("engine_state", {})
+        if intraday_mae is None:
+            intraday_mae = _mae_from_engine_state(es, inst)
         api_count = es.get("account_daily_api_count")
         if isinstance(api_count, (int, float)):
             account_daily_api_count = max(account_daily_api_count, int(api_count))
@@ -828,6 +909,7 @@ def telemetry_aggregate():
         "account_daily_api_count": account_daily_api_count,
         "account_daily_api_warning": account_daily_api_warning,
         "account_daily_api_limit": 2000,
+        "intraday_mae": intraday_mae or _empty_intraday_mae(),
     }), 200
 
 

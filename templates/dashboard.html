@@ -739,6 +739,12 @@
       border-color: var(--blue);
       color: #fff;
     }
+    .history-view-hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      line-height: 1.4;
+    }
 
     /* ── LDAK + Rollover panels ── */
     .ldak-wrap { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
@@ -1969,9 +1975,10 @@
 <div class="history-header">
   <div class="section-title" id="closedSectionTitle">Closed Trades</div>
   <div class="history-view-bar">
-    <button class="history-view-btn active" id="btn-view-pods" onclick="setHistoryView('pods')">Pod Closes</button>
-    <button class="history-view-btn" id="btn-view-scalps" onclick="setHistoryView('scalps')">Scalp Exits</button>
+    <button class="history-view-btn active" id="btn-view-pods" onclick="setHistoryView('pods')" title="Full-stack flat closes (whole pod harvested)">Pod Closes</button>
+    <button class="history-view-btn" id="btn-view-scalps" onclick="setHistoryView('scalps')" title="Per-layer LIFO harvests (grid partial closes)">Scalp Exits</button>
   </div>
+  <div class="history-view-hint" id="historyViewHint">Pod Closes: full-stack flat closes (whole pod harvested). Scalp Exits: per-layer LIFO harvests — check here for grid arm activity.</div>
 </div>
 
 <div id="closedPodsPanel" class="card" style="padding: 0 24px;">

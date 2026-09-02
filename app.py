@@ -479,7 +479,12 @@ def telemetry_closed():
         {date for record in records if (date := _closed_record_date(record))},
         reverse=True,
     )
-    selected_date = date_filter or broker_today
+    if date_filter:
+        selected_date = date_filter
+    elif broker_today in available_dates:
+        selected_date = broker_today
+    else:
+        selected_date = available_dates[0] if available_dates else broker_today
 
     day_records = [
         record
@@ -539,7 +544,12 @@ def _paginate_history_records(records, date_filter, page, per_page, transform=No
         {date for record in records if (date := _closed_record_date(record))},
         reverse=True,
     )
-    selected_date = date_filter or broker_today
+    if date_filter:
+        selected_date = date_filter
+    elif broker_today in available_dates:
+        selected_date = broker_today
+    else:
+        selected_date = available_dates[0] if available_dates else broker_today
 
     day_records = [
         record

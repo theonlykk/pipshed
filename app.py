@@ -52,6 +52,15 @@ ALL_INSTANCES = [
 DUMB_INSTANCES = [f"{inst}_DUMB" for inst in ALL_INSTANCES]
 TRACKED_INSTANCES = ALL_INSTANCES + DUMB_INSTANCES
 
+GRIND_INSTANCES = [
+    "GRIND_GBPUSD_OPT",
+    "GRIND_GBPUSD_ALT",
+    "GRIND_EURUSD_OPT",
+    "GRIND_EURUSD_ALT",
+    "GRIND_EURGBP_OPT",
+    "GRIND_EURGBP_ALT",
+]
+
 # FTMO / MT5 server time — matches EA trade_date (TimeCurrent() on broker)
 BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
 
@@ -244,6 +253,115 @@ def _summarize_instance_state(instance_id, raw_payload, broker_today):
         "net_mtm": round(net_mtm, 2),
         "instance_daily_api_count": inst_api_count,
         "alerts": list(data.get("system_alerts", [])),
+    }
+
+
+def _grind_bool(value):
+    """Coerce fxgrind heartbeat booleans (JSON true/false or legacy strings)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() == "true"
+    return False
+
+
+def _summarize_grind_instance_state(instance_id, raw_payload):
+    """Build per-instance card fields from a flat fxgrind heartbeat (or None)."""
+    empty = {
+        "instance_id": instance_id,
+        "connection": "no_data",
+        "slot": None,
+        "open_layers_long": None,
+        "open_layers_short": None,
+        "fills": None,
+        "scalps": None,
+        "api_count": None,
+        "api_counter_broken": None,
+        "cap_blocked": None,
+        "halted": None,
+        "halt_reason": None,
+        "recon_ok": None,
+        "invariant_ok": None,
+        "cap_leg_a": None,
+        "cap_leg_b": None,
+        "cap_total_leg_a": None,
+        "cap_total_leg_b": None,
+        "peer_read_failed": None,
+        "magic": None,
+        "width_pips": None,
+        "add_pips": None,
+        "exit_pips": None,
+        "max_layers": None,
+        "cap_leg_a_name": None,
+        "cap_leg_b_name": None,
+    }
+    if raw_payload is None:
+        return empty
+
+    data = json.loads(raw_payload)
+
+    def _int_or_none(key):
+        val = data.get(key)
+        if isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            return int(val)
+        return None
+
+    def _float_or_none(key):
+        val = data.get(key)
+        if isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            return round(float(val), 4)
+        return None
+
+    magic_val = data.get("magic")
+    magic_out = None
+    if isinstance(magic_val, (int, float)):
+        magic_out = int(magic_val)
+    elif isinstance(magic_val, str) and magic_val.strip():
+        try:
+            magic_out = int(magic_val)
+        except ValueError:
+            magic_out = magic_val
+
+    slot_val = data.get("slot")
+    slot_out = slot_val.strip() if isinstance(slot_val, str) and slot_val.strip() else None
+
+    halt_reason = data.get("halt_reason")
+    halt_reason_out = halt_reason if isinstance(halt_reason, str) and halt_reason else None
+
+    cap_a_name = data.get("cap_leg_a_name")
+    cap_b_name = data.get("cap_leg_b_name")
+
+    return {
+        "instance_id": instance_id,
+        "connection": "live",
+        "slot": slot_out,
+        "open_layers_long": _int_or_none("open_layers_long"),
+        "open_layers_short": _int_or_none("open_layers_short"),
+        "fills": _int_or_none("fills"),
+        "scalps": _int_or_none("scalps"),
+        "api_count": _int_or_none("api_count"),
+        "api_counter_broken": _grind_bool(data.get("api_counter_broken")),
+        "cap_blocked": _grind_bool(data.get("cap_blocked")),
+        "halted": _grind_bool(data.get("halted")),
+        "halt_reason": halt_reason_out,
+        "recon_ok": _grind_bool(data.get("recon_ok")),
+        "invariant_ok": _grind_bool(data.get("invariant_ok")),
+        "cap_leg_a": _float_or_none("cap_leg_a"),
+        "cap_leg_b": _float_or_none("cap_leg_b"),
+        "cap_total_leg_a": _float_or_none("cap_total_leg_a"),
+        "cap_total_leg_b": _float_or_none("cap_total_leg_b"),
+        "peer_read_failed": _grind_bool(data.get("peer_read_failed")),
+        "magic": magic_out,
+        "width_pips": _float_or_none("width_pips"),
+        "add_pips": _float_or_none("add_pips"),
+        "exit_pips": _float_or_none("exit_pips"),
+        "max_layers": _int_or_none("max_layers"),
+        "cap_leg_a_name": cap_a_name if isinstance(cap_a_name, str) and cap_a_name else None,
+        "cap_leg_b_name": cap_b_name if isinstance(cap_b_name, str) and cap_b_name else None,
     }
 
 
@@ -908,6 +1026,11 @@ def telemetry_aggregate():
         "dumb": _summarize_arm(DUMB_INSTANCES, broker_today),
     }
 
+    grind_cards = {}
+    for inst in GRIND_INSTANCES:
+        raw_grind = r.get(f"fxmatrix:state:{inst}")
+        grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
+
     return jsonify({
         "net_exposure": net_exposure,
         "system_alerts": alerts,
@@ -920,6 +1043,7 @@ def telemetry_aggregate():
         "account_daily_api_warning": account_daily_api_warning,
         "account_daily_api_limit": 2000,
         "intraday_mae": intraday_mae or _empty_intraday_mae(),
+        "grind_cards": grind_cards,
     }), 200
 
 

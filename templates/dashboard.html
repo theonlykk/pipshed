@@ -207,6 +207,56 @@
     }
     .arm-instance-stat strong { color: var(--text); font-weight: 600; }
 
+    /* ── fxgrind instance summary cards (flat schema, separate from v2) ── */
+    .grind-cards-section { margin-bottom: 20px; }
+    .grind-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .grind-instance-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .grind-instance-card.no-data { opacity: 0.5; border-style: dashed; }
+    .grind-instance-card.halted { border-color: var(--red); background: rgba(239, 68, 68, 0.08); }
+    .grind-instance-card.has-warn { border-color: #f59e0b; }
+    .grind-instance-name {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+    .grind-instance-slot {
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .grind-instance-stat {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .grind-instance-stat strong { color: var(--text); font-weight: 600; }
+    .grind-halted-banner {
+      color: var(--red);
+      font-weight: 700;
+      font-size: 12px;
+      margin: 6px 0;
+      letter-spacing: 0.04em;
+    }
+    .grind-warn-line {
+      color: #f59e0b;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
     /* ── Grid layout ── */
     .grid {
       display: grid;
@@ -915,6 +965,18 @@
   </div>
 </div>
 
+<div class="instance-group">
+  <div class="instance-group-label">Grind instances</div>
+  <div class="instance-bar" id="instanceBarGrind">
+    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_GBPUSD_OPT">GRIND GBPUSD OPT</button>
+    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_GBPUSD_ALT">GRIND GBPUSD ALT</button>
+    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURUSD_OPT">GRIND EURUSD OPT</button>
+    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURUSD_ALT">GRIND EURUSD ALT</button>
+    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURGBP_OPT">GRIND EURGBP OPT</button>
+    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURGBP_ALT">GRIND EURGBP ALT</button>
+  </div>
+</div>
+
 <!-- Per-arm instance summary cards (aggregate) -->
 <div class="arm-cards-section">
   <div class="instance-group-label">Instance summary — Signal</div>
@@ -923,6 +985,10 @@
 <div class="arm-cards-section">
   <div class="instance-group-label">Instance summary — Dumb</div>
   <div class="arm-cards-grid" id="armCardsDumb"></div>
+</div>
+<div class="grind-cards-section">
+  <div class="instance-group-label">Instance summary — Grind</div>
+  <div class="grind-cards-grid" id="armCardsGrind"></div>
 </div>
 
 <!-- Row 1: Equity vs Balance + Intraday low-water -->
@@ -1110,6 +1176,11 @@
     'MM_SHORT_EURUSD', 'MM_LONG_EURGBP', 'MM_SHORT_EURGBP'
   ];
   const DUMB_INSTANCES = SIGNAL_INSTANCES.map(function(i) { return i + '_DUMB'; });
+  const GRIND_INSTANCES = [
+    'GRIND_GBPUSD_OPT', 'GRIND_GBPUSD_ALT',
+    'GRIND_EURUSD_OPT', 'GRIND_EURUSD_ALT',
+    'GRIND_EURGBP_OPT', 'GRIND_EURGBP_ALT'
+  ];
   const TRACKED_INSTANCE_COUNT = SIGNAL_INSTANCES.length + DUMB_INSTANCES.length;
   const API_DAILY_LIMIT = 2000;
 
@@ -1883,6 +1954,86 @@
     }).join('');
   }
 
+  function grindFmtNum(val, decimals) {
+    if (val === null || val === undefined) return '—';
+    return Number(val).toFixed(decimals === undefined ? 0 : decimals);
+  }
+
+  function grindGeometryLabel(card) {
+    if (card.connection !== 'live') return '—';
+    const w = card.width_pips;
+    const e = card.exit_pips;
+    const a = card.add_pips;
+    if (w === null || w === undefined || e === null || e === undefined) return '—';
+    let label = grindFmtNum(w, 1) + '/' + grindFmtNum(e, 1);
+    if (a !== null && a !== undefined) {
+      label += ' add ' + grindFmtNum(a, 1);
+    }
+    return label;
+  }
+
+  function renderGrindInstanceCards(containerId, instances, cards) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = instances.map(function(inst) {
+      const card = cards[inst] || {};
+      const conn = card.connection || 'no_data';
+      const isLive = conn === 'live';
+      let cls = 'grind-instance-card';
+      if (!isLive) cls += ' no-data';
+
+      const halted = isLive && card.halted === true;
+      const reconBad = isLive && card.recon_ok === false;
+      const invariantBad = isLive && card.invariant_ok === false;
+      const peerBad = isLive && card.peer_read_failed === true;
+      if (halted) cls += ' halted';
+      else if (reconBad || invariantBad || peerBad) cls += ' has-warn';
+
+      const connLabel = isLive ? 'live' : 'no data';
+      const slotLabel = isLive && card.slot ? card.slot : '—';
+      const layersStr = isLive
+        ? (grindFmtNum(card.open_layers_long) + ' long / ' + grindFmtNum(card.open_layers_short) + ' short')
+        : '—';
+      const geomStr = grindGeometryLabel(card);
+      const apiStr = isLive ? grindFmtNum(card.api_count) : '—';
+      const capStr = isLive && card.cap_leg_a_name && card.cap_leg_b_name
+        ? (card.cap_leg_a_name + '/' + card.cap_leg_b_name + ' ' +
+           grindFmtNum(card.cap_leg_a, 2) + '/' + grindFmtNum(card.cap_leg_b, 2))
+        : '—';
+
+      let warnHtml = '';
+      if (halted) {
+        const reason = card.halt_reason ? (' — ' + card.halt_reason) : '';
+        warnHtml += '<div class="grind-halted-banner">HALTED' + reason + '</div>';
+      }
+      if (reconBad) {
+        warnHtml += '<div class="grind-warn-line">recon failed</div>';
+      }
+      if (invariantBad) {
+        warnHtml += '<div class="grind-warn-line">invariant check failed</div>';
+      }
+      if (peerBad) {
+        warnHtml += '<div class="grind-warn-line">peer cap read failed</div>';
+      }
+
+      document.getElementById('btn-' + inst)?.classList.toggle('no-data', !isLive);
+
+      return '<div class="' + cls + '">' +
+        '<div class="grind-instance-name">' + inst.replace(/_/g, ' ') + '</div>' +
+        '<div class="grind-instance-slot">slot <strong>' + slotLabel + '</strong></div>' +
+        '<div class="grind-instance-stat">' +
+          '<strong>' + connLabel + '</strong><br>' +
+          'Layers <strong>' + layersStr + '</strong><br>' +
+          'Geometry <strong>' + geomStr + '</strong><br>' +
+          'Cap legs <strong>' + capStr + '</strong><br>' +
+          'MTM <strong>—</strong> · P&amp;L <strong>—</strong><br>' +
+          'API <strong>' + apiStr + '</strong>' +
+          warnHtml +
+        '</div></div>';
+    }).join('');
+  }
+
   function renderAggregate(data) {
     const apiLimit = data.account_daily_api_limit ?? API_DAILY_LIMIT;
     const armSummaries = data.arm_summaries || {};
@@ -1897,6 +2048,7 @@
     renderArmCompareColumn('dumb', 'Dumb', armSummaries.dumb, apiLimit);
     renderArmInstanceCards('armCardsSignal', SIGNAL_INSTANCES, instanceCards, instanceStatus);
     renderArmInstanceCards('armCardsDumb', DUMB_INSTANCES, instanceCards, instanceStatus);
+    renderGrindInstanceCards('armCardsGrind', GRIND_INSTANCES, data.grind_cards || {});
 
     // --- System alerts banner ---
     const banner = document.getElementById('systemAlertBanner');

@@ -308,6 +308,12 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "max_layers": None,
         "cap_leg_a_name": None,
         "cap_leg_b_name": None,
+        "net_mtm": None,
+        "realised_pnl_today": None,
+        "scalp_pnl_last": None,
+        "exit_penetration_pips_last": None,
+        "exit_penetration_pips_mean": None,
+        "exit_touch_revert_count": None,
     }
     if raw_payload is None:
         return empty
@@ -328,6 +334,14 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
             return None
         if isinstance(val, (int, float)):
             return round(float(val), 4)
+        return None
+
+    def _money_or_none(key):
+        val = data.get(key)
+        if isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            return round(float(val), 2)
         return None
 
     magic_val = data.get("magic")
@@ -376,7 +390,22 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "max_layers": _int_or_none("max_layers"),
         "cap_leg_a_name": cap_a_name if isinstance(cap_a_name, str) and cap_a_name else None,
         "cap_leg_b_name": cap_b_name if isinstance(cap_b_name, str) and cap_b_name else None,
+        "net_mtm": _money_or_none("net_mtm"),
+        "realised_pnl_today": _money_or_none("realised_pnl_today"),
+        "scalp_pnl_last": _money_or_none("scalp_pnl_last"),
+        "exit_penetration_pips_last": _float_or_none("exit_penetration_pips_last"),
+        "exit_penetration_pips_mean": _float_or_none("exit_penetration_pips_mean"),
+        "exit_touch_revert_count": _int_or_none("exit_touch_revert_count"),
     }
+
+
+def _grind_pnl_contribution(value):
+    """Null-safe P&L addend — missing fields become 0.0, never NaN."""
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0
 
 
 def _summarize_grind_arm(group_label, instances, grind_cards):
@@ -392,6 +421,8 @@ def _summarize_grind_arm(group_label, instances, grind_cards):
     # GlobalVariable incremented by all six grind instances; each heartbeat
     # reports the same family-wide count against the 2,000 FTMO limit.
     api_count_max = 0
+    net_mtm_total = 0.0
+    realised_today_total = 0.0
     instances_live = 0
     halted_instances = []
 
@@ -405,6 +436,9 @@ def _summarize_grind_arm(group_label, instances, grind_cards):
         open_short += card.get("open_layers_short") or 0
         fills_total += card.get("fills") or 0
         scalps_total += card.get("scalps") or 0
+
+        net_mtm_total += _grind_pnl_contribution(card.get("net_mtm"))
+        realised_today_total += _grind_pnl_contribution(card.get("realised_pnl_today"))
 
         api_val = card.get("api_count")
         if isinstance(api_val, (int, float)):
@@ -435,6 +469,8 @@ def _summarize_grind_arm(group_label, instances, grind_cards):
         "open_layers_short": open_short,
         "fills": fills_total,
         "scalps": scalps_total,
+        "net_mtm": round(net_mtm_total, 2) if instances_live > 0 else None,
+        "realised_pnl_today": round(realised_today_total, 2) if instances_live > 0 else None,
         "api_count": api_count_max if instances_live > 0 else None,
         "api_count_limit": GRIND_API_DAILY_LIMIT,
         "instances_live": instances_live,

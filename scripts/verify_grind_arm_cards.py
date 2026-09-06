@@ -142,7 +142,7 @@ def main():
     assert opt["fills"] == 30
     assert opt["scalps"] == 15
     assert opt["api_count"] == 11  # max, not sum (would be 33)
-    assert "net_mtm" not in opt
+    assert opt.get("net_mtm") == 0.0  # no P&L fields in sample payload → null-safe sum of 0
 
     assert alt["status"] == "running"
     assert alt["status_label"] == "GRIND ALT: RUNNING"

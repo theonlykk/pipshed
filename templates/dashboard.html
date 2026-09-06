@@ -249,6 +249,17 @@
       line-height: 1.1;
     }
     .grind-arm-metric-span2 { grid-column: span 2; }
+    .grind-arm-realised-block { grid-column: span 2; }
+    .grind-arm-realised-value {
+      font-size: 28px;
+      font-weight: 800;
+    }
+    .grind-arm-metric-value.mtm-positive { color: var(--green); }
+    .grind-arm-metric-value.mtm-negative { color: var(--red); }
+    .grind-pnl-label {
+      cursor: help;
+      border-bottom: 1px dotted var(--muted);
+    }
     .grind-arm-halted-banner {
       margin-bottom: 10px;
       padding: 8px 10px;
@@ -332,6 +343,8 @@
       line-height: 1.5;
     }
     .grind-instance-stat strong { color: var(--text); font-weight: 600; }
+    .grind-instance-stat strong.mtm-positive { color: var(--green); }
+    .grind-instance-stat strong.mtm-negative { color: var(--red); }
     .grind-halted-banner {
       color: var(--red);
       font-weight: 700;
@@ -343,6 +356,13 @@
       color: #f59e0b;
       font-size: 11px;
       margin-top: 4px;
+    }
+    .grind-micro-line {
+      font-size: 10px;
+      color: var(--muted);
+      opacity: 0.7;
+      margin-top: 6px;
+      line-height: 1.35;
     }
 
     /* ── Grid layout ── */
@@ -1041,10 +1061,14 @@
     <div class="grind-arm-compare-status no-data" id="grindOptStatus">GRIND OPT: …</div>
     <div class="grind-arm-compare-detail" id="grindOptDetail">Loading…</div>
     <div class="grind-arm-compare-metrics">
+      <div class="grind-arm-realised-block">
+        <div class="grind-arm-metric-label grind-pnl-label" id="grindOptRealisedLabel" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+        <div class="grind-arm-realised-value grind-arm-metric-value" id="grindOptRealised">—</div>
+      </div>
       <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindOptLayers">—</div></div>
       <div><div class="grind-arm-metric-label">Fills / Scalps</div><div class="grind-arm-metric-value" id="grindOptActivity">—</div></div>
-      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi">—</div></div>
-      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm">—</div></div>
+      <div><div class="grind-arm-metric-label grind-pnl-label" id="grindOptMtmLabel" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm">—</div></div>
+      <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi">—</div></div>
     </div>
   </div>
   <div class="grind-arm-compare-col alt" id="grindArmCompareAlt">
@@ -1053,10 +1077,14 @@
     <div class="grind-arm-compare-status no-data" id="grindAltStatus">GRIND ALT: …</div>
     <div class="grind-arm-compare-detail" id="grindAltDetail">Loading…</div>
     <div class="grind-arm-compare-metrics">
+      <div class="grind-arm-realised-block">
+        <div class="grind-arm-metric-label grind-pnl-label" id="grindAltRealisedLabel" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+        <div class="grind-arm-realised-value grind-arm-metric-value" id="grindAltRealised">—</div>
+      </div>
       <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindAltLayers">—</div></div>
       <div><div class="grind-arm-metric-label">Fills / Scalps</div><div class="grind-arm-metric-value" id="grindAltActivity">—</div></div>
-      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi">—</div></div>
-      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm">—</div></div>
+      <div><div class="grind-arm-metric-label grind-pnl-label" id="grindAltMtmLabel" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm">—</div></div>
+      <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi">—</div></div>
     </div>
   </div>
 </div>
@@ -2043,6 +2071,7 @@
     const haltedBanner = document.getElementById('grind' + prefix + 'HaltedBanner');
     const statusEl = document.getElementById('grind' + prefix + 'Status');
     const detailEl = document.getElementById('grind' + prefix + 'Detail');
+    const realisedEl = document.getElementById('grind' + prefix + 'Realised');
     const layersEl = document.getElementById('grind' + prefix + 'Layers');
     const activityEl = document.getElementById('grind' + prefix + 'Activity');
     const apiEl = document.getElementById('grind' + prefix + 'Api');
@@ -2074,10 +2103,13 @@
       }
     }
 
-    mtmEl.textContent = '—';
-    mtmEl.className = 'grind-arm-metric-value';
-
     if (status === 'no_data') {
+      if (realisedEl) {
+        realisedEl.textContent = '—';
+        realisedEl.className = 'grind-arm-realised-value grind-arm-metric-value';
+      }
+      mtmEl.textContent = '—';
+      mtmEl.className = 'grind-arm-metric-value';
       layersEl.textContent = '—';
       activityEl.textContent = '—';
       apiEl.textContent = '— / ' + apiLimit.toLocaleString();
@@ -2087,6 +2119,16 @@
     layersEl.textContent = summary.open_layers_long + ' long / ' + summary.open_layers_short + ' short';
     activityEl.textContent = summary.fills + ' fills / ' + summary.scalps + ' scalps';
     apiEl.textContent = (summary.api_count ?? 0).toLocaleString() + ' / ' + apiLimit.toLocaleString();
+
+    const realisedVal = summary.realised_pnl_today;
+    if (realisedEl) {
+      realisedEl.textContent = grindFmtSigned(realisedVal);
+      realisedEl.className = 'grind-arm-realised-value grind-arm-metric-value' + grindFmtSignedMtmClass(realisedVal);
+    }
+
+    const mtmVal = summary.net_mtm;
+    mtmEl.textContent = grindFmtSigned(mtmVal);
+    mtmEl.className = 'grind-arm-metric-value' + grindFmtSignedMtmClass(mtmVal);
   }
 
   function renderArmInstanceCards(containerId, instances, cards, statusMap) {
@@ -2127,6 +2169,20 @@
   function grindFmtNum(val, decimals) {
     if (val === null || val === undefined) return '—';
     return Number(val).toFixed(decimals === undefined ? 0 : decimals);
+  }
+
+  function grindFmtSigned(val) {
+    if (val === null || val === undefined) return '—';
+    const n = Number(val);
+    return (n >= 0 ? '+' : '') + n.toFixed(2);
+  }
+
+  function grindFmtSignedMtmClass(val) {
+    if (val === null || val === undefined) return '';
+    const n = Number(val);
+    if (n > 0.005) return ' mtm-positive';
+    if (n < -0.005) return ' mtm-negative';
+    return '';
   }
 
   function grindGeometryLabel(card) {
@@ -2172,6 +2228,21 @@
            grindFmtNum(card.cap_leg_a, 2) + '/' + grindFmtNum(card.cap_leg_b, 2))
         : '—';
 
+      const mtmStr = isLive ? grindFmtSigned(card.net_mtm) : '—';
+      const pnlStr = isLive ? grindFmtSigned(card.realised_pnl_today) : '—';
+      const mtmClass = isLive ? grindFmtSignedMtmClass(card.net_mtm) : '';
+      const pnlClass = isLive ? grindFmtSignedMtmClass(card.realised_pnl_today) : '';
+      const scalpLine = isLive
+        ? ('Scalps <strong>' + grindFmtNum(card.scalps) + '</strong> · last P&amp;L <strong>' +
+           grindFmtSigned(card.scalp_pnl_last) + '</strong>')
+        : 'Scalps <strong>—</strong>';
+      const microLine = isLive
+        ? ('<div class="grind-micro-line">Exit pen mean <strong>' +
+           grindFmtNum(card.exit_penetration_pips_mean, 2) +
+           '</strong> · touch revert <strong>' +
+           grindFmtNum(card.exit_touch_revert_count) + '</strong></div>')
+        : '';
+
       let warnHtml = '';
       if (halted) {
         const reason = card.halt_reason ? (' — ' + card.halt_reason) : '';
@@ -2197,8 +2268,11 @@
           'Layers <strong>' + layersStr + '</strong><br>' +
           'Geometry <strong>' + geomStr + '</strong><br>' +
           'Cap legs <strong>' + capStr + '</strong><br>' +
-          'MTM <strong>—</strong> · P&amp;L <strong>—</strong><br>' +
+          '<span class="grind-pnl-label" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">MTM</span> <strong' + (mtmClass ? ' class="' + mtmClass.trim() + '"' : '') + '>' + mtmStr + '</strong> · ' +
+          '<span class="grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised</span> <strong' + (pnlClass ? ' class="' + pnlClass.trim() + '"' : '') + '>' + pnlStr + '</strong><br>' +
+          scalpLine + '<br>' +
           'API <strong>' + apiStr + '</strong>' +
+          microLine +
           warnHtml +
         '</div></div>';
     }).join('');

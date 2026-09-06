@@ -1035,7 +1035,7 @@
     <div class="arm-compare-detail" id="armSignalDetail">Loading…</div>
     <div class="arm-compare-metrics">
       <div><div class="arm-metric-label">Open layers</div><div class="arm-metric-value" id="armSignalLayers">—</div></div>
-      <div><div class="arm-metric-label">Fills / Scalps today</div><div class="arm-metric-value" id="armSignalActivity">—</div></div>
+      <div><div class="arm-metric-label">Scalps today</div><div class="arm-metric-value" id="armSignalActivity">—</div></div>
       <div class="arm-metric-span2"><div class="arm-metric-label">API today</div><div class="arm-metric-value" id="armSignalApi">—</div></div>
       <div class="arm-metric-span2"><div class="arm-metric-label">Net MTM</div><div class="arm-metric-value" id="armSignalMtm">—</div></div>
     </div>
@@ -1046,7 +1046,7 @@
     <div class="arm-compare-detail" id="armDumbDetail">Loading…</div>
     <div class="arm-compare-metrics">
       <div><div class="arm-metric-label">Open layers</div><div class="arm-metric-value" id="armDumbLayers">—</div></div>
-      <div><div class="arm-metric-label">Fills / Scalps today</div><div class="arm-metric-value" id="armDumbActivity">—</div></div>
+      <div><div class="arm-metric-label">Scalps today</div><div class="arm-metric-value" id="armDumbActivity">—</div></div>
       <div class="arm-metric-span2"><div class="arm-metric-label">API today</div><div class="arm-metric-value" id="armDumbApi">—</div></div>
       <div class="arm-metric-span2"><div class="arm-metric-label">Net MTM</div><div class="arm-metric-value" id="armDumbMtm">—</div></div>
     </div>
@@ -1066,7 +1066,7 @@
         <div class="grind-arm-realised-value grind-arm-metric-value" id="grindOptRealised">—</div>
       </div>
       <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindOptLayers">—</div></div>
-      <div><div class="grind-arm-metric-label">Fills / Scalps</div><div class="grind-arm-metric-value" id="grindOptActivity">—</div></div>
+      <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindOptActivity">—</div></div>
       <div><div class="grind-arm-metric-label grind-pnl-label" id="grindOptMtmLabel" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm">—</div></div>
       <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi">—</div></div>
     </div>
@@ -1082,7 +1082,7 @@
         <div class="grind-arm-realised-value grind-arm-metric-value" id="grindAltRealised">—</div>
       </div>
       <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindAltLayers">—</div></div>
-      <div><div class="grind-arm-metric-label">Fills / Scalps</div><div class="grind-arm-metric-value" id="grindAltActivity">—</div></div>
+      <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindAltActivity">—</div></div>
       <div><div class="grind-arm-metric-label grind-pnl-label" id="grindAltMtmLabel" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm">—</div></div>
       <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi">—</div></div>
     </div>
@@ -2058,7 +2058,7 @@
     }
 
     layersEl.textContent = summary.open_long_layers + ' long / ' + summary.open_short_layers + ' short';
-    activityEl.textContent = summary.fills_today + ' fills / ' + summary.scalps_today + ' scalps';
+    activityEl.textContent = summary.scalps_today + ' scalps';
     apiEl.textContent = (summary.instance_daily_api_count ?? 0).toLocaleString() + ' / ' + apiLimit.toLocaleString();
 
     const mtm = summary.net_mtm ?? 0;
@@ -2117,7 +2117,7 @@
     }
 
     layersEl.textContent = summary.open_layers_long + ' long / ' + summary.open_layers_short + ' short';
-    activityEl.textContent = summary.fills + ' fills / ' + summary.scalps + ' scalps';
+    activityEl.textContent = summary.scalps + ' scalps';
     apiEl.textContent = (summary.api_count ?? 0).toLocaleString() + ' / ' + apiLimit.toLocaleString();
 
     const realisedVal = summary.realised_pnl_today;

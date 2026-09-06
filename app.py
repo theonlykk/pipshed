@@ -61,6 +61,20 @@ GRIND_INSTANCES = [
     "GRIND_EURGBP_ALT",
 ]
 
+GRIND_OPT_INSTANCES = [
+    "GRIND_GBPUSD_OPT",
+    "GRIND_EURUSD_OPT",
+    "GRIND_EURGBP_OPT",
+]
+
+GRIND_ALT_INSTANCES = [
+    "GRIND_GBPUSD_ALT",
+    "GRIND_EURUSD_ALT",
+    "GRIND_EURGBP_ALT",
+]
+
+GRIND_API_DAILY_LIMIT = 2000
+
 # FTMO / MT5 server time — matches EA trade_date (TimeCurrent() on broker)
 BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
 
@@ -362,6 +376,70 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "max_layers": _int_or_none("max_layers"),
         "cap_leg_a_name": cap_a_name if isinstance(cap_a_name, str) and cap_a_name else None,
         "cap_leg_b_name": cap_b_name if isinstance(cap_b_name, str) and cap_b_name else None,
+    }
+
+
+def _summarize_grind_arm(group_label, instances, grind_cards):
+    """Aggregate operator-facing totals for one grind variant (OPT or ALT).
+
+    Separate from v2 _summarize_arm — deletable when v2 arms retire.
+    """
+    open_long = 0
+    open_short = 0
+    fills_total = 0
+    scalps_total = 0
+    # MAX not SUM: GRIND_DAILY_API_COUNT (ea/grind_api_counter.mqh) is one shared
+    # GlobalVariable incremented by all six grind instances; each heartbeat
+    # reports the same family-wide count against the 2,000 FTMO limit.
+    api_count_max = 0
+    instances_live = 0
+    halted_instances = []
+
+    for inst in instances:
+        card = grind_cards.get(inst) or {}
+        if card.get("connection") != "live":
+            continue
+
+        instances_live += 1
+        open_long += card.get("open_layers_long") or 0
+        open_short += card.get("open_layers_short") or 0
+        fills_total += card.get("fills") or 0
+        scalps_total += card.get("scalps") or 0
+
+        api_val = card.get("api_count")
+        if isinstance(api_val, (int, float)):
+            api_count_max = max(api_count_max, int(api_val))
+
+        if card.get("halted"):
+            halted_instances.append({
+                "instance_id": inst,
+                "halt_reason": card.get("halt_reason") or "",
+            })
+
+    if instances_live == 0:
+        status = "no_data"
+        status_label = f"{group_label}: NO DATA"
+    elif instances_live == len(instances):
+        status = "running"
+        status_label = f"{group_label}: RUNNING"
+    else:
+        status = "degraded"
+        status_label = f"{group_label}: DEGRADED"
+
+    return {
+        "group": group_label,
+        "status": status,
+        "status_label": status_label,
+        "status_detail": f"{instances_live}/{len(instances)} instances live",
+        "open_layers_long": open_long,
+        "open_layers_short": open_short,
+        "fills": fills_total,
+        "scalps": scalps_total,
+        "api_count": api_count_max if instances_live > 0 else None,
+        "api_count_limit": GRIND_API_DAILY_LIMIT,
+        "instances_live": instances_live,
+        "instances_total": len(instances),
+        "halted_instances": halted_instances,
     }
 
 
@@ -1031,6 +1109,11 @@ def telemetry_aggregate():
         raw_grind = r.get(f"fxmatrix:state:{inst}")
         grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
 
+    grind_arm_summaries = {
+        "opt": _summarize_grind_arm("GRIND OPT", GRIND_OPT_INSTANCES, grind_cards),
+        "alt": _summarize_grind_arm("GRIND ALT", GRIND_ALT_INSTANCES, grind_cards),
+    }
+
     return jsonify({
         "net_exposure": net_exposure,
         "system_alerts": alerts,
@@ -1044,6 +1127,7 @@ def telemetry_aggregate():
         "account_daily_api_limit": 2000,
         "intraday_mae": intraday_mae or _empty_intraday_mae(),
         "grind_cards": grind_cards,
+        "grind_arm_summaries": grind_arm_summaries,
     }), 200
 
 

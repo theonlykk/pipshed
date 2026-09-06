@@ -175,6 +175,94 @@
     .arm-metric-value.mtm-negative { color: var(--red); }
     .arm-metric-span2 { grid-column: span 2; }
 
+    /* ── Grind OPT / ALT arm comparison (separate from v2 arm strip) ── */
+    .grind-arm-compare-strip {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .grind-arm-compare-col {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .grind-arm-compare-col.opt {
+      border-top: 4px solid var(--blue);
+      background: linear-gradient(to bottom, rgba(41, 121, 255, 0.07) 0%, var(--surface) 52px);
+    }
+    .grind-arm-compare-col.alt {
+      border-top: 4px solid var(--muted);
+      background: linear-gradient(to bottom, rgba(102, 102, 102, 0.14) 0%, var(--surface) 52px);
+    }
+    .grind-arm-compare-col.degraded {
+      border-color: #f59e0b;
+      background: rgba(245, 158, 11, 0.08);
+    }
+    .grind-arm-compare-col.no-data {
+      border-style: dashed;
+      opacity: 0.85;
+    }
+    .grind-arm-compare-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .grind-arm-compare-status {
+      font-family: var(--font-mono);
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 10px;
+      letter-spacing: -0.02em;
+    }
+    .grind-arm-compare-status.running { color: var(--green); }
+    .grind-arm-compare-status.degraded { color: #f59e0b; }
+    .grind-arm-compare-status.no-data { color: var(--muted); font-style: italic; }
+    .grind-arm-compare-detail {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      font-family: var(--font-mono);
+    }
+    .grind-arm-compare-metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 16px;
+    }
+    .grind-arm-metric-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
+    .grind-arm-metric-value {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .grind-arm-metric-span2 { grid-column: span 2; }
+    .grind-arm-halted-banner {
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid var(--red);
+      color: #fff;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
     /* ── Per-arm instance summary cards ── */
     .arm-cards-section { margin-bottom: 20px; }
     .arm-cards-grid {
@@ -863,6 +951,9 @@
       .arm-compare-strip {
         grid-template-columns: 1fr;
       }
+      .grind-arm-compare-strip {
+        grid-template-columns: 1fr;
+      }
       .arm-compare-status {
         font-size: 22px;
       }
@@ -938,6 +1029,34 @@
       <div><div class="arm-metric-label">Fills / Scalps today</div><div class="arm-metric-value" id="armDumbActivity">—</div></div>
       <div class="arm-metric-span2"><div class="arm-metric-label">API today</div><div class="arm-metric-value" id="armDumbApi">—</div></div>
       <div class="arm-metric-span2"><div class="arm-metric-label">Net MTM</div><div class="arm-metric-value" id="armDumbMtm">—</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Grind OPT vs ALT A/B comparison (second row — four cards on one row is too narrow) -->
+<div class="grind-arm-compare-strip" id="grindArmCompareStrip">
+  <div class="grind-arm-compare-col opt" id="grindArmCompareOpt">
+    <div class="grind-arm-compare-title">Grind OPT</div>
+    <div id="grindOptHaltedBanner" style="display:none"></div>
+    <div class="grind-arm-compare-status no-data" id="grindOptStatus">GRIND OPT: …</div>
+    <div class="grind-arm-compare-detail" id="grindOptDetail">Loading…</div>
+    <div class="grind-arm-compare-metrics">
+      <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindOptLayers">—</div></div>
+      <div><div class="grind-arm-metric-label">Fills / Scalps</div><div class="grind-arm-metric-value" id="grindOptActivity">—</div></div>
+      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi">—</div></div>
+      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm">—</div></div>
+    </div>
+  </div>
+  <div class="grind-arm-compare-col alt" id="grindArmCompareAlt">
+    <div class="grind-arm-compare-title">Grind ALT</div>
+    <div id="grindAltHaltedBanner" style="display:none"></div>
+    <div class="grind-arm-compare-status no-data" id="grindAltStatus">GRIND ALT: …</div>
+    <div class="grind-arm-compare-detail" id="grindAltDetail">Loading…</div>
+    <div class="grind-arm-compare-metrics">
+      <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindAltLayers">—</div></div>
+      <div><div class="grind-arm-metric-label">Fills / Scalps</div><div class="grind-arm-metric-value" id="grindAltActivity">—</div></div>
+      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi">—</div></div>
+      <div class="grind-arm-metric-span2"><div class="grind-arm-metric-label">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm">—</div></div>
     </div>
   </div>
 </div>
@@ -1919,6 +2038,57 @@
     mtmEl.className = 'arm-metric-value' + (mtm > 0.005 ? ' mtm-positive' : mtm < -0.005 ? ' mtm-negative' : '');
   }
 
+  function renderGrindArmCompareColumn(variantKey, prefix, summary, apiLimit) {
+    const col = document.getElementById('grindArmCompare' + prefix);
+    const haltedBanner = document.getElementById('grind' + prefix + 'HaltedBanner');
+    const statusEl = document.getElementById('grind' + prefix + 'Status');
+    const detailEl = document.getElementById('grind' + prefix + 'Detail');
+    const layersEl = document.getElementById('grind' + prefix + 'Layers');
+    const activityEl = document.getElementById('grind' + prefix + 'Activity');
+    const apiEl = document.getElementById('grind' + prefix + 'Api');
+    const mtmEl = document.getElementById('grind' + prefix + 'Mtm');
+
+    if (!summary || !statusEl) return;
+
+    const status = summary.status || 'no_data';
+    col.className = 'grind-arm-compare-col ' + variantKey +
+      (status === 'degraded' ? ' degraded' : status === 'no_data' ? ' no-data' : '');
+
+    statusEl.className = 'grind-arm-compare-status ' +
+      (status === 'running' ? 'running' : status === 'degraded' ? 'degraded' : 'no-data');
+    statusEl.textContent = summary.status_label || ('GRIND ' + variantKey.toUpperCase() + ': NO DATA');
+    detailEl.textContent = summary.status_detail || '';
+
+    const haltedList = summary.halted_instances || [];
+    if (haltedBanner) {
+      if (haltedList.length > 0) {
+        haltedBanner.style.display = 'block';
+        haltedBanner.className = 'grind-arm-halted-banner';
+        haltedBanner.innerHTML = haltedList.map(function(h) {
+          const reason = h.halt_reason ? (' — ' + h.halt_reason) : '';
+          return 'HALTED: ' + h.instance_id.replace(/_/g, ' ') + reason;
+        }).join('<br>');
+      } else {
+        haltedBanner.style.display = 'none';
+        haltedBanner.innerHTML = '';
+      }
+    }
+
+    mtmEl.textContent = '—';
+    mtmEl.className = 'grind-arm-metric-value';
+
+    if (status === 'no_data') {
+      layersEl.textContent = '—';
+      activityEl.textContent = '—';
+      apiEl.textContent = '— / ' + apiLimit.toLocaleString();
+      return;
+    }
+
+    layersEl.textContent = summary.open_layers_long + ' long / ' + summary.open_layers_short + ' short';
+    activityEl.textContent = summary.fills + ' fills / ' + summary.scalps + ' scalps';
+    apiEl.textContent = (summary.api_count ?? 0).toLocaleString() + ' / ' + apiLimit.toLocaleString();
+  }
+
   function renderArmInstanceCards(containerId, instances, cards, statusMap) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -2046,6 +2216,12 @@
 
     renderArmCompareColumn('signal', 'Signal', armSummaries.signal, apiLimit);
     renderArmCompareColumn('dumb', 'Dumb', armSummaries.dumb, apiLimit);
+
+    const grindArmSummaries = data.grind_arm_summaries || {};
+    const grindApiLimit = grindArmSummaries.opt?.api_count_limit ?? apiLimit;
+    renderGrindArmCompareColumn('opt', 'Opt', grindArmSummaries.opt, grindApiLimit);
+    renderGrindArmCompareColumn('alt', 'Alt', grindArmSummaries.alt, grindApiLimit);
+
     renderArmInstanceCards('armCardsSignal', SIGNAL_INSTANCES, instanceCards, instanceStatus);
     renderArmInstanceCards('armCardsDumb', DUMB_INSTANCES, instanceCards, instanceStatus);
     renderGrindInstanceCards('armCardsGrind', GRIND_INSTANCES, data.grind_cards || {});

@@ -1115,12 +1115,12 @@
 <div class="instance-group">
   <div class="instance-group-label">Grind instances</div>
   <div class="instance-bar" id="instanceBarGrind">
-    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_GBPUSD_OPT">GRIND GBPUSD OPT</button>
-    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_GBPUSD_ALT">GRIND GBPUSD ALT</button>
-    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURUSD_OPT">GRIND EURUSD OPT</button>
-    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURUSD_ALT">GRIND EURUSD ALT</button>
-    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURGBP_OPT">GRIND EURGBP OPT</button>
-    <button class="instance-btn grind-nav-btn" type="button" id="btn-GRIND_EURGBP_ALT">GRIND EURGBP ALT</button>
+    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_GBPUSD_OPT')" id="btn-GRIND_GBPUSD_OPT">GRIND GBPUSD OPT</button>
+    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_GBPUSD_ALT')" id="btn-GRIND_GBPUSD_ALT">GRIND GBPUSD ALT</button>
+    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURUSD_OPT')" id="btn-GRIND_EURUSD_OPT">GRIND EURUSD OPT</button>
+    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURUSD_ALT')" id="btn-GRIND_EURUSD_ALT">GRIND EURUSD ALT</button>
+    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURGBP_OPT')" id="btn-GRIND_EURGBP_OPT">GRIND EURGBP OPT</button>
+    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURGBP_ALT')" id="btn-GRIND_EURGBP_ALT">GRIND EURGBP ALT</button>
   </div>
 </div>
 
@@ -1329,7 +1329,44 @@
     'GRIND_EURGBP_OPT', 'GRIND_EURGBP_ALT'
   ];
   const TRACKED_INSTANCE_COUNT = SIGNAL_INSTANCES.length + DUMB_INSTANCES.length;
+  const GRIND_TRACKED_COUNT = GRIND_INSTANCES.length;
+  const ALL_TRACKED_INSTANCE_COUNT = TRACKED_INSTANCE_COUNT + GRIND_TRACKED_COUNT;
   const API_DAILY_LIMIT = 2000;
+
+  function isGrindInstance(id) {
+    return typeof id === 'string' && id.indexOf('GRIND_') === 0;
+  }
+
+  function grindSymbolFromInstanceId(instanceId) {
+    const parts = (instanceId || '').split('_');
+    if (parts.length >= 3 && parts[0] === 'GRIND') return parts[1];
+    return '—';
+  }
+
+  function grindLayersLine(longL, shortL) {
+    const hasLong = longL !== null && longL !== undefined;
+    const hasShort = shortL !== null && shortL !== undefined;
+    if (!hasLong && !hasShort) return '—';
+    return (hasLong ? longL : '—') + ' long / ' + (hasShort ? shortL : '—') + ' short';
+  }
+
+  function grindGeometryLine(data) {
+    const w = data.width_pips;
+    const e = data.exit_pips;
+    const a = data.add_pips;
+    if (w === null || w === undefined || e === null || e === undefined) return '—';
+    let line = fmt(w, 1) + ' / ' + fmt(e, 1);
+    if (a !== null && a !== undefined) line += ' add ' + fmt(a, 1);
+    return line;
+  }
+
+  function grindHealthLabel(name, val, kind) {
+    if (val === null || val === undefined) return name + ': —';
+    if (kind === 'halted') return name + ': ' + (val === true ? 'HALTED' : 'ok');
+    if (kind === 'ok_flag') return name + ': ' + (val === true ? 'ok' : 'FAIL');
+    if (kind === 'bad_flag') return name + ': ' + (val === true ? 'FAIL' : 'ok');
+    return name + ': —';
+  }
 
   function setInstance(id) {
     currentInstance = id;
@@ -1590,6 +1627,78 @@
     detailEl.innerHTML = detailHtml;
   }
 
+  function preparePodCard(slotIdx, isGrind) {
+    const card = document.getElementById('pod-' + slotIdx);
+    if (!card) return;
+    card.style.display = '';
+    card.classList.toggle('grind-pod-slot', isGrind);
+    const distRow = card.querySelector('.pod-dist');
+    if (distRow) distRow.style.display = isGrind ? 'none' : '';
+  }
+
+  function hidePodCard(slotIdx) {
+    const card = document.getElementById('pod-' + slotIdx);
+    if (!card) return;
+    card.style.display = 'none';
+    card.classList.remove('grind-pod-slot');
+    const distRow = card.querySelector('.pod-dist');
+    if (distRow) distRow.style.display = '';
+  }
+
+  function renderGrindPods(data) {
+    for (let i = 0; i < 3; i++) preparePodCard(i, true);
+
+    const symbol = grindSymbolFromInstanceId(data.instance_id ?? currentInstance);
+
+    document.getElementById('pod-0-label').textContent = symbol;
+    document.getElementById('pod-0-layers').textContent =
+      grindLayersLine(data.open_layers_long, data.open_layers_short);
+    setPnl(document.getElementById('pod-0-pnl'), data.net_mtm);
+    document.getElementById('pod-0-detail').innerHTML = '';
+
+    document.getElementById('pod-1-label').textContent = 'Geometry';
+    document.getElementById('pod-1-layers').textContent = grindGeometryLine(data);
+    const maxLayers = data.max_layers;
+    const maxEl = document.getElementById('pod-1-pnl');
+    if (maxEl) {
+      if (maxLayers !== null && maxLayers !== undefined) {
+        maxEl.textContent = 'max ' + maxLayers + ' layers';
+        maxEl.className = 'pod-pnl';
+      } else {
+        maxEl.textContent = '—';
+        maxEl.className = 'pod-pnl';
+      }
+    }
+    document.getElementById('pod-1-detail').innerHTML = '';
+
+    document.getElementById('pod-2-label').textContent = 'Health';
+    document.getElementById('pod-2-layers').textContent =
+      grindHealthLabel('Halted', data.halted, 'halted');
+    document.getElementById('pod-2-pnl').textContent = grindHealthLabel('Recon', data.recon_ok, 'ok_flag');
+    document.getElementById('pod-2-pnl').className = 'pod-pnl';
+    document.getElementById('pod-2-detail').innerHTML =
+      '<div class="pod-orders-summary">' +
+      grindHealthLabel('Invariant', data.invariant_ok, 'ok_flag') + '<br>' +
+      grindHealthLabel('Cap blocked', data.cap_blocked, 'bad_flag') + '<br>' +
+      grindHealthLabel('Peer read', data.peer_read_failed, 'bad_flag') +
+      '</div>';
+  }
+
+  function renderV2PodRow(data) {
+    const pods = data.active_pods ?? {};
+    const workingOrders = data.working_orders ?? {};
+    const podKeys = Object.keys(pods);
+
+    for (let i = 0; i < 3; i++) {
+      if (i < podKeys.length) {
+        preparePodCard(i, false);
+        renderPod(i, podKeys[i], pods[podKeys[i]], workingOrders[podKeys[i]] || null);
+      } else {
+        hidePodCard(i);
+      }
+    }
+  }
+
   function render(data) {
     const badge    = document.getElementById('statusBadge');
     const statusTx = document.getElementById('statusText');
@@ -1628,16 +1737,12 @@
     ddBar.style.background = dd < 1 ? 'var(--green)' : dd < 3 ? 'var(--amber)' : 'var(--red)';
     document.getElementById('ddPct').textContent = fmt(dd, 2) + '% drawdown';
 
-    // ADR-024 V3: dynamic pod rendering via Object.keys()
-    const pods          = data.active_pods ?? {};
-    const workingOrders = data.working_orders ?? {};
-    const podKeys       = Object.keys(pods);
-    podKeys.forEach((sym, idx) => {
-      if (idx < 3) renderPod(idx, sym, pods[sym], workingOrders[sym] || null);
-    });
-    // Zero out any slots not present in payload
-    for (let i = podKeys.length; i < 3; i++) {
-      renderPod(i, '—', {layers: 0, net_pnl: 0, distance_to_target_pips: null}, null);
+    // Pod row — grind flat payload vs v2 active_pods
+    const instanceId = data.instance_id ?? currentInstance;
+    if (isGrindInstance(instanceId)) {
+      renderGrindPods(data);
+    } else {
+      renderV2PodRow(data);
     }
 
     // Engine state
@@ -1685,8 +1790,8 @@
       : '—';
 
     const apiBar = document.getElementById('apiBar');
-    const instanceId = data.instance_id ?? currentInstance;
-    const isV2Instance = instanceId.startsWith('MM_LONG_') || instanceId.startsWith('MM_SHORT_');
+    const liveInstanceId = data.instance_id ?? currentInstance;
+    const isV2Instance = liveInstanceId.startsWith('MM_LONG_') || liveInstanceId.startsWith('MM_SHORT_');
     const instApiCount = es.instance_daily_api_count;
     const apiLimit = es.account_daily_api_limit ?? es.instance_daily_api_limit ?? API_DAILY_LIMIT;
     const apiSoftWarn = es.account_daily_api_soft_warn ?? 1800;
@@ -1981,6 +2086,15 @@
     }
   }
 
+  function openPosMetaLine(total, data) {
+    const trackedTotal = data.tracked_total_count ?? ALL_TRACKED_INSTANCE_COUNT;
+    const v2Count = data.tracked_v2_count ?? TRACKED_INSTANCE_COUNT;
+    const grindCount = data.tracked_grind_count ?? GRIND_TRACKED_COUNT;
+    const posWord = total === 1 ? 'open position' : 'open positions';
+    return total + ' ' + posWord + ' across ' + trackedTotal +
+      ' instances (' + v2Count + ' v2 + ' + grindCount + ' grind)';
+  }
+
   function renderOpenPositions(data) {
     const total     = data.total || 0;
     const positions = data.positions || [];
@@ -1998,12 +2112,12 @@
     });
 
     if (total === 0) {
-      meta.textContent = '0 open pods across ' + TRACKED_INSTANCE_COUNT + ' instances';
+      meta.textContent = openPosMetaLine(0, data);
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No open positions</td></tr>';
       return;
     }
 
-    meta.textContent = total + ' open pod' + (total === 1 ? '' : 's') + ' across ' + TRACKED_INSTANCE_COUNT + ' instances';
+    meta.textContent = openPosMetaLine(total, data);
 
     tbody.innerHTML = openPosCache.rows.map(function(row) {
       return '<tr>' + row.map(function(cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';

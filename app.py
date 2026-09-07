@@ -75,6 +75,13 @@ GRIND_ALT_INSTANCES = [
 
 GRIND_API_DAILY_LIMIT = 2000
 
+# WARNING: fxgrind does not emit lot size in its telemetry payload.
+# This is an ASSUMED constant. If any instance's InpLots is changed from
+# 0.01, this figure UNDERREPORTS account exposure and must be updated.
+GRIND_ASSUMED_LOT_SIZE = 0.01
+
+GRIND_KNOWN_SYMBOLS = frozenset(inst.split("_")[1] for inst in GRIND_INSTANCES)
+
 # FTMO / MT5 server time — matches EA trade_date (TimeCurrent() on broker)
 BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
 
@@ -983,6 +990,35 @@ def _grind_open_layer_count(value):
     return 0
 
 
+def _grind_exposure_symbol(instance_id):
+    """Positional split GRIND_SYMBOL_SLOT -> SYMBOL; skip and log if unknown."""
+    parts = instance_id.split("_")
+    if len(parts) < 3 or parts[0] != "GRIND":
+        app.logger.warning(
+            "grind net_exposure: skipping %r — expected GRIND_SYMBOL_SLOT", instance_id
+        )
+        return None
+    symbol = parts[1]
+    if symbol not in GRIND_KNOWN_SYMBOLS:
+        app.logger.warning(
+            "grind net_exposure: skipping %r — unknown symbol %r", instance_id, symbol
+        )
+        return None
+    return symbol
+
+
+def _accumulate_grind_net_exposure(net_exposure, instance_id, data):
+    """Add grind signed lots to net_exposure — separate from v2 layer_detail path."""
+    symbol = _grind_exposure_symbol(instance_id)
+    if symbol is None:
+        return
+    long_count = _grind_open_layer_count(data.get("open_layers_long"))
+    short_count = _grind_open_layer_count(data.get("open_layers_short"))
+    # Match v2: direction 1 -> +lot_size, direction -1 -> -lot_size
+    signed_lots = (long_count - short_count) * GRIND_ASSUMED_LOT_SIZE
+    net_exposure[symbol] = net_exposure.get(symbol, 0.0) + signed_lots
+
+
 @app.route("/api/telemetry/open_positions", methods=["GET"])
 def telemetry_open_positions():
     """Cross-instance snapshot of every pod with open layers."""
@@ -1201,6 +1237,16 @@ def telemetry_aggregate():
 
         for msg in data.get("system_alerts", []):
             alerts.append({"instance": inst, "arm": arm, "message": msg})
+
+    for inst in GRIND_INSTANCES:
+        raw_grind = r.get(f"fxmatrix:state:{inst}")
+        if raw_grind is None:
+            continue
+        try:
+            grind_data = json.loads(raw_grind)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        _accumulate_grind_net_exposure(net_exposure, inst, grind_data)
 
     arm_summaries = {
         "signal": _summarize_arm(ALL_INSTANCES, broker_today),

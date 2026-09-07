@@ -1214,7 +1214,7 @@
 
 <!-- Account-wide FTMO API request budget (V2 shared counter) -->
 <div class="card api-gauge-card" id="accountApiCard" style="margin-bottom:16px">
-  <div class="card-label">Account API Requests Today (All Instances)</div>
+  <div class="card-label">Account API Requests Today (V2 instances)</div>
   <div class="gauge-value" id="accountApiCount" style="margin-top:8px">—</div>
   <div class="gauge-bar-bg">
     <div class="gauge-bar-fill" id="accountApiBar" style="width:0%"></div>
@@ -1225,7 +1225,7 @@
 
 <!-- New row: Best Working Quotes (cross-instance, all pairs) -->
 <div class="card" style="margin-bottom:16px">
-  <div class="card-label">Best Working Quotes (All Instances)</div>
+  <div class="card-label">Best Working Quotes (V2 instances)</div>
   <div id="quotes-container" style="margin-top:10px"></div>
 </div>
 
@@ -1239,7 +1239,7 @@
     </div>
     <button type="button" class="teams-copy-btn" id="todayAllCopyBtn" onclick="copyTodayAllTable()">Copy table</button>
   </div>
-  <div class="section-title" id="todayAllTitle">Today's Scalps (All Instances)</div>
+  <div class="section-title" id="todayAllTitle">Today's Scalps (V2 instances)</div>
   <div class="teams-summary" id="todayAllSummary">Loading…</div>
   <div class="copy-meta" id="todayAllMeta">Loading…</div>
   <table class="teams-table" id="todayAllTable">
@@ -2026,8 +2026,8 @@
 
     const isBrokerToday = selectedDate === brokerToday;
     title.textContent = isBrokerToday
-      ? "Today's Scalps (All Instances)"
-      : 'Scalp Exits (All Instances)';
+      ? "Today's Scalps (V2 instances)"
+      : 'Scalp Exits (V2 instances)';
     dateLabel.textContent = selectedDate;
 
     prevDay.disabled = !todayAllEarliestDate || selectedDate <= todayAllEarliestDate;

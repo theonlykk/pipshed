@@ -966,6 +966,23 @@ def telemetry_today_closed():
     }), 200
 
 
+def _grind_symbol_from_instance_id(instance_id):
+    """Derive pair symbol from GRIND_{SYMBOL}_{SLOT} — payload has no symbol field."""
+    parts = instance_id.split("_")
+    if len(parts) >= 3 and parts[0] == "GRIND":
+        return parts[1]
+    return None
+
+
+def _grind_open_layer_count(value):
+    """Null-safe layer count for open-position rows — missing fields become 0."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
 @app.route("/api/telemetry/open_positions", methods=["GET"])
 def telemetry_open_positions():
     """Cross-instance snapshot of every pod with open layers."""
@@ -1007,6 +1024,53 @@ def telemetry_open_positions():
                 "net_pnl": pod.get("net_pnl"),
             })
 
+    for inst in GRIND_INSTANCES:
+        raw = r.get(f"fxmatrix:state:{inst}")
+        if raw is None:
+            instance_status[inst] = "connection_lost"
+            continue
+
+        instance_status[inst] = "live"
+        data = json.loads(raw)
+        symbol = _grind_symbol_from_instance_id(inst)
+        if not symbol:
+            continue
+
+        long_count = _grind_open_layer_count(data.get("open_layers_long"))
+        short_count = _grind_open_layer_count(data.get("open_layers_short"))
+        if long_count <= 0 and short_count <= 0:
+            continue
+
+        net_mtm_val = data.get("net_mtm")
+        net_mtm = (
+            round(float(net_mtm_val), 2)
+            if isinstance(net_mtm_val, (int, float)) and not isinstance(net_mtm_val, bool)
+            else None
+        )
+        # net_mtm is per-instance; when both sides are open it cannot be attributed
+        # to one direction — show a dash on both rows.
+        both_sides = long_count > 0 and short_count > 0
+        row_net_pnl = None if both_sides else net_mtm
+
+        if long_count > 0:
+            positions.append({
+                "instance_id": inst,
+                "instrument": symbol,
+                "direction": "LONG",
+                "avg_entry_price": None,
+                "layers": long_count,
+                "net_pnl": row_net_pnl,
+            })
+        if short_count > 0:
+            positions.append({
+                "instance_id": inst,
+                "instrument": symbol,
+                "direction": "SHORT",
+                "avg_entry_price": None,
+                "layers": short_count,
+                "net_pnl": row_net_pnl,
+            })
+
     positions.sort(
         key=lambda item: (item.get("instrument", ""), item.get("instance_id", ""))
     )
@@ -1015,6 +1079,9 @@ def telemetry_open_positions():
         "positions": positions,
         "total": len(positions),
         "instance_status": instance_status,
+        "tracked_v2_count": len(TRACKED_INSTANCES),
+        "tracked_grind_count": len(GRIND_INSTANCES),
+        "tracked_total_count": len(TRACKED_INSTANCES) + len(GRIND_INSTANCES),
     }), 200
 
 

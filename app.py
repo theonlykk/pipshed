@@ -551,6 +551,27 @@ def _public_grind_arm_fields(arm):
     return out
 
 
+def _apply_no_cache_headers(response):
+    """Block browser, proxy, and CDN caching for dynamic unauthenticated responses.
+
+    Cloudflare may cache JSON GET responses when a Cache Rule sets Edge TTL
+    while ignoring origin Cache-Control. Cloudflare-CDN-Cache-Control is evaluated
+    separately and prevents that override (see Cloudflare CDN-Cache-Control docs).
+    """
+    response.cache_control.no_store = True
+    response.cache_control.no_cache = True
+    response.cache_control.must_revalidate = True
+    response.cache_control.max_age = 0
+    response.cache_control.private = True
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["CDN-Cache-Control"] = "no-store"
+    response.headers["Cloudflare-CDN-Cache-Control"] = "no-store"
+    response.headers["Surrogate-Control"] = "no-store"
+    response.headers["Vary"] = "*"
+    return response
+
+
 def _summarize_arm(instances, broker_today):
     """Aggregate operator-facing totals for one arm (signal or dumb)."""
     open_long = 0
@@ -651,15 +672,11 @@ def public_grind_status():
             },
         }
         response = jsonify(payload)
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        return response, 200
+        return _apply_no_cache_headers(response), 200
     except Exception:
         app.logger.exception("public_grind_status failed")
         response = jsonify({"error": "internal error"})
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        return response, 500
+        return _apply_no_cache_headers(response), 500
 
 
 @app.route("/api/telemetry/push", methods=["POST"])

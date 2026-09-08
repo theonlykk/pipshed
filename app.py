@@ -486,6 +486,71 @@ def _summarize_grind_arm(group_label, instances, grind_cards):
     }
 
 
+_PUBLIC_GRIND_INSTANCE_KEYS = (
+    "instance_id",
+    "slot",
+    "connection",
+    "open_layers_long",
+    "open_layers_short",
+    "scalps",
+    "net_mtm",
+    "realised_pnl_today",
+    "scalp_pnl_last",
+    "halted",
+    "halt_reason",
+    "recon_ok",
+    "invariant_ok",
+    "cap_blocked",
+    "peer_read_failed",
+    "api_count",
+    "width_pips",
+    "add_pips",
+    "exit_pips",
+    "max_layers",
+    "cap_leg_a_name",
+    "cap_leg_b_name",
+    "exit_penetration_pips_mean",
+    "exit_touch_revert_count",
+)
+
+
+def _public_grind_instance_fields(card):
+    """Whitelist grind instance fields safe for the unauthenticated status route."""
+    return {key: card.get(key) for key in _PUBLIC_GRIND_INSTANCE_KEYS}
+
+
+_PUBLIC_GRIND_ARM_KEYS = (
+    "group",
+    "status",
+    "status_label",
+    "status_detail",
+    "open_layers_long",
+    "open_layers_short",
+    "fills",
+    "scalps",
+    "net_mtm",
+    "realised_pnl_today",
+    "api_count",
+    "instances_live",
+    "instances_total",
+)
+
+
+def _public_grind_arm_fields(arm):
+    """Whitelist grind arm aggregate fields safe for the unauthenticated status route."""
+    out = {key: arm.get(key) for key in _PUBLIC_GRIND_ARM_KEYS}
+    halted = arm.get("halted_instances") or []
+    out["halted_instances"] = [
+        {
+            "instance_id": item.get("instance_id"),
+            "halt_reason": item.get("halt_reason"),
+        }
+        for item in halted
+        if isinstance(item, dict)
+    ]
+    return out
+
+
 def _summarize_arm(instances, broker_today):
     """Aggregate operator-facing totals for one arm (signal or dumb)."""
     open_long = 0
@@ -559,6 +624,42 @@ def _summarize_arm(instances, broker_today):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
+
+
+@app.route("/api/g/k7m9p2x4q/status", methods=["GET"])
+def public_grind_status():
+    try:
+        grind_cards = {}
+        for inst in GRIND_INSTANCES:
+            raw_grind = r.get(f"fxmatrix:state:{inst}")
+            grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
+
+        grind_arm_summaries = {
+            "opt": _summarize_grind_arm("GRIND OPT", GRIND_OPT_INSTANCES, grind_cards),
+            "alt": _summarize_grind_arm("GRIND ALT", GRIND_ALT_INSTANCES, grind_cards),
+        }
+
+        payload = {
+            "generated_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "instances": {
+                inst: _public_grind_instance_fields(grind_cards[inst])
+                for inst in GRIND_INSTANCES
+            },
+            "arms": {
+                "opt": _public_grind_arm_fields(grind_arm_summaries["opt"]),
+                "alt": _public_grind_arm_fields(grind_arm_summaries["alt"]),
+            },
+        }
+        response = jsonify(payload)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        return response, 200
+    except Exception:
+        app.logger.exception("public_grind_status failed")
+        response = jsonify({"error": "internal error"})
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        return response, 500
 
 
 @app.route("/api/telemetry/push", methods=["POST"])

@@ -333,6 +333,14 @@ def _grind_layers_from_payload(data):
     return layers if layers else None
 
 
+def _grind_book_from_payload(data):
+    """Pass through broker book from heartbeat — whole object, unfiltered."""
+    book_raw = data.get("book")
+    if not isinstance(book_raw, dict):
+        return None
+    return book_raw
+
+
 def _summarize_grind_instance_state(instance_id, raw_payload):
     """Build per-instance card fields from a flat fxgrind heartbeat (or None)."""
     empty = {
@@ -369,6 +377,7 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "exit_penetration_pips_mean": None,
         "exit_touch_revert_count": None,
         "layers": None,
+        "book": None,
         "l0_pending_long": None,
         "l0_pending_short": None,
         "add_pending_long": None,
@@ -465,6 +474,7 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "exit_penetration_pips_mean": _float_or_none("exit_penetration_pips_mean"),
         "exit_touch_revert_count": _int_or_none("exit_touch_revert_count"),
         "layers": _grind_layers_from_payload(data),
+        "book": _grind_book_from_payload(data),
         "account_balance": _money_or_none("account_balance"),
         "account_equity": _money_or_none("account_equity"),
         **long_side,

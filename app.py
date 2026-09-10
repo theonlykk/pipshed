@@ -496,6 +496,7 @@ _PUBLIC_GRIND_INSTANCE_KEYS = (
     "add_pending_short",
     "resting_entries_long",
     "resting_entries_short",
+    "magic",
 )
 
 

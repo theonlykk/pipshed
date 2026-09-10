@@ -414,6 +414,25 @@
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }
+    .grind-book-section { margin-bottom: 20px; }
+    .grind-book-panel + .grind-book-panel { margin-top: 20px; }
+    .grind-book-header {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .grind-book-empty {
+      font-size: 12px;
+      color: var(--muted);
+      font-style: italic;
+      font-family: var(--font-mono);
+    }
+    .grind-book-table { margin-top: 0; }
+    .grind-book-table .type-buy { color: var(--green); }
+    .grind-book-table .type-sell { color: var(--red); }
 
     /* ── Grid layout ── */
     .grid {
@@ -1175,6 +1194,12 @@
     <div class="instance-group-label">Instance cards</div>
     <div class="grind-cards-grid" id="grindCards-aud_cad_chf"></div>
   </div>
+</div>
+
+<div class="card grind-book-section">
+  <div class="instance-group-label">Broker book (all instances)</div>
+  <div class="grind-book-panel" id="grindBookPositionsPanel">Loading…</div>
+  <div class="grind-book-panel" id="grindBookOrdersPanel">Loading…</div>
 </div>
 
 <!-- Row 1: Equity vs Balance + Intraday low-water -->
@@ -2339,6 +2364,115 @@
     return label;
   }
 
+  function grindBookTypeClass(type) {
+    if (typeof type !== 'string') return '';
+    const upper = type.toUpperCase();
+    if (upper.indexOf('BUY') === 0) return 'type-buy';
+    if (upper.indexOf('SELL') === 0) return 'type-sell';
+    return '';
+  }
+
+  function grindBookPriceCell(price) {
+    if (price === null || price === undefined) return '—';
+    return Number(price).toFixed(5);
+  }
+
+  function grindBookProfitCell(profit) {
+    if (profit === null || profit === undefined) return { text: '—', className: '' };
+    const n = Number(profit);
+    const cls = n > 0.005 ? 'win' : n < -0.005 ? 'loss' : '';
+    return { text: fmtMoney(profit), className: cls };
+  }
+
+  function grindAggregateBookRows(grindCards, listKey) {
+    const rows = [];
+    GRIND_INSTANCES.forEach(function(inst) {
+      const card = grindCards[inst];
+      if (!card || typeof card !== 'object') return;
+      const book = card.book;
+      if (!book || typeof book !== 'object') return;
+      const items = book[listKey];
+      if (!Array.isArray(items)) return;
+      const symbol = grindSymbolFromInstanceId(inst);
+      const magic = card.magic;
+      items.forEach(function(item) {
+        if (!item || typeof item !== 'object') return;
+        rows.push({
+          symbol: symbol,
+          magic: magic,
+          ticket: item.ticket,
+          type: item.type,
+          price: item.price,
+          open_time: item.open_time,
+          open_time_msc: item.open_time_msc,
+          comment: item.comment,
+          profit: item.profit,
+        });
+      });
+    });
+    rows.sort(function(a, b) {
+      const ma = a.magic != null ? Number(a.magic) : Number.MAX_SAFE_INTEGER;
+      const mb = b.magic != null ? Number(b.magic) : Number.MAX_SAFE_INTEGER;
+      if (ma !== mb) return ma - mb;
+      const ta = a.open_time_msc != null ? Number(a.open_time_msc) : Number.MAX_SAFE_INTEGER;
+      const tb = b.open_time_msc != null ? Number(b.open_time_msc) : Number.MAX_SAFE_INTEGER;
+      return ta - tb;
+    });
+    return rows;
+  }
+
+  function renderGrindBookTablePanel(containerId, title, rows, includeProfit, emptyMessage) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    if (!rows.length) {
+      el.innerHTML = '<div class="grind-book-empty">' + emptyMessage + '</div>';
+      return;
+    }
+    const count = rows.length;
+    let html = '<div class="grind-book-header">' + title + ' (' + count + ')</div>';
+    html += '<table class="pods-table grind-book-table"><thead><tr>';
+    html += '<th>Symbol</th><th>Ticket</th><th>Time</th><th>Type</th><th>Price</th><th>Magic</th><th>Comment</th>';
+    if (includeProfit) html += '<th>Profit</th>';
+    html += '</tr></thead><tbody>';
+    rows.forEach(function(row) {
+      const typeClass = grindBookTypeClass(row.type);
+      html += '<tr>' +
+        '<td>' + (row.symbol || '—') + '</td>' +
+        '<td>' + (row.ticket != null ? row.ticket : '—') + '</td>' +
+        '<td>' + (row.open_time || '—') + '</td>' +
+        '<td' + (typeClass ? ' class="' + typeClass + '"' : '') + '>' + (row.type || '—') + '</td>' +
+        '<td>' + grindBookPriceCell(row.price) + '</td>' +
+        '<td>' + (row.magic != null ? row.magic : '—') + '</td>' +
+        '<td>' + (row.comment || '—') + '</td>';
+      if (includeProfit) {
+        const profitCell = grindBookProfitCell(row.profit);
+        html += '<td' + (profitCell.className ? ' class="' + profitCell.className + '"' : '') + '>' + profitCell.text + '</td>';
+      }
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }
+
+  function renderGrindBookTables(grindCards) {
+    const positionRows = grindAggregateBookRows(grindCards, 'positions');
+    const orderRows = grindAggregateBookRows(grindCards, 'orders');
+    renderGrindBookTablePanel(
+      'grindBookPositionsPanel',
+      'Open positions',
+      positionRows,
+      true,
+      'no open positions'
+    );
+    renderGrindBookTablePanel(
+      'grindBookOrdersPanel',
+      'Pending orders',
+      orderRows,
+      false,
+      'no pending orders'
+    );
+  }
+
   function renderGrindInstanceCards(containerId, instances, cards) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -2448,6 +2582,8 @@
       renderGrindArmCompareColumn('alt', ringId, armSummaries.alt, grindApiLimit);
       renderGrindInstanceCards('grindCards-' + ringId, instances, grindCards);
     });
+
+    renderGrindBookTables(grindCards);
 
     document.getElementById('systemAlertBanner').style.display = 'none';
 

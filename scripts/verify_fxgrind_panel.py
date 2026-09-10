@@ -77,7 +77,6 @@ def main():
         assert len(ring["instances"]) == len(ring_instances)
     for key in (
         "net_exposure",
-        "instance_status",
         "grind_api_count",
         "grind_api_count_limit",
         "intraday_mae",

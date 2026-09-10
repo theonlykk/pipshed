@@ -104,78 +104,7 @@
       margin-bottom: 8px;
     }
 
-    /* ── Signal vs Dumb A/B comparison strip (screenshot-legible) ── */
-    .arm-compare-strip {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin-bottom: 20px;
-    }
-    .arm-compare-col {
-      background: var(--surface);
-      border: 2px solid var(--border);
-      border-radius: 10px;
-      padding: 16px 20px;
-    }
-    .arm-compare-col.signal { border-top: 4px solid var(--blue); }
-    .arm-compare-col.dumb   { border-top: 4px solid var(--muted); }
-    .arm-compare-col.halted {
-      border-color: var(--red);
-      background: #1a0808;
-    }
-    .arm-compare-col.no-data {
-      border-style: dashed;
-      opacity: 0.85;
-    }
-    .arm-compare-title {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .arm-compare-status {
-      font-family: var(--font-mono);
-      font-size: 28px;
-      font-weight: 800;
-      line-height: 1.15;
-      margin-bottom: 10px;
-      letter-spacing: -0.02em;
-    }
-    .arm-compare-status.running { color: var(--green); }
-    .arm-compare-status.halted  { color: #fff; text-transform: uppercase; }
-    .arm-compare-status.no-data { color: var(--muted); font-style: italic; }
-    .arm-compare-detail {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 12px;
-      font-family: var(--font-mono);
-    }
-    .arm-compare-metrics {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px 16px;
-    }
-    .arm-metric-label {
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 2px;
-    }
-    .arm-metric-value {
-      font-family: var(--font-mono);
-      font-size: 22px;
-      font-weight: 700;
-      line-height: 1.1;
-    }
-    .arm-metric-value.mtm-positive { color: var(--green); }
-    .arm-metric-value.mtm-negative { color: var(--red); }
-    .arm-metric-span2 { grid-column: span 2; }
-
-    /* ── Grind OPT / ALT arm comparison (separate from v2 arm strip) ── */
+    /* ── Grind OPT / ALT arm comparison ── */
     .grind-arm-compare-strip {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -274,39 +203,7 @@
       text-transform: uppercase;
     }
 
-    /* ── Per-arm instance summary cards ── */
-    .arm-cards-section { margin-bottom: 20px; }
-    .arm-cards-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-top: 8px;
-    }
-    .arm-instance-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 14px;
-    }
-    .arm-instance-card.no-data { opacity: 0.5; border-style: dashed; }
-    .arm-instance-card.has-alert { border-color: var(--red); }
-    .arm-instance-name {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--text);
-      margin-bottom: 6px;
-    }
-    .arm-instance-stat {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.5;
-    }
-    .arm-instance-stat strong { color: var(--text); font-weight: 600; }
-
-    /* ── fxgrind instance summary cards (flat schema, separate from v2) ── */
+    /* ── fxgrind instance summary cards ── */
     .grind-cards-section { margin-bottom: 20px; }
     .grind-cards-grid {
       display: grid;
@@ -621,69 +518,6 @@
     #pod-grid {
       align-items: start;
     }
-    .pod-card .pod-ldak-row {
-      margin-top: 10px;
-    }
-    .pod-ldak-badge {
-      display: inline-block;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      padding: 3px 8px;
-      border-radius: 10px;
-      border: 1px solid;
-      font-family: var(--font-mono);
-    }
-    .pod-ldak-badge.pass   { color: var(--green); border-color: var(--green); }
-    .pod-ldak-badge.clamp  { color: var(--amber); border-color: var(--amber); }
-    .pod-ldak-badge.refuse { color: var(--red);   border-color: var(--red); }
-    .pod-layer-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 11px;
-      font-family: var(--font-mono);
-      margin-top: 8px;
-    }
-    .pod-layer-table th {
-      text-align: left;
-      font-size: 9px;
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted);
-      padding: 0 4px 4px 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .pod-layer-table td {
-      padding: 3px 4px 3px 0;
-      border-bottom: 1px solid var(--border);
-      vertical-align: middle;
-    }
-    .pod-layer-table tr:last-child td { border-bottom: none; }
-    .pod-layer-table .dir-buy  { color: var(--green); font-weight: 600; }
-    .pod-layer-table .dir-sell { color: var(--red);   font-weight: 600; }
-    .layer-flag-missing {
-      display: inline-block;
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      color: #fff;
-      background: var(--red);
-      padding: 1px 5px;
-      border-radius: 3px;
-      margin-left: 4px;
-    }
-    .layer-flag-toxic {
-      display: inline-block;
-      font-size: 9px;
-      font-weight: 700;
-      color: var(--amber);
-      border: 1px solid var(--amber);
-      padding: 1px 5px;
-      border-radius: 3px;
-      margin-left: 4px;
-    }
     .pod-orders-summary {
       font-size: 11px;
       font-family: var(--font-mono);
@@ -693,56 +527,6 @@
     }
     .pod-orders-summary span {
       color: var(--text);
-    }
-
-    /* ── API gauge ── */
-    .gauge-bar-bg {
-      width: 100%;
-      height: 8px;
-      background: var(--border);
-      border-radius: 4px;
-      overflow: hidden;
-      margin-top: 10px;
-    }
-    .gauge-bar-fill {
-      height: 100%;
-      border-radius: 4px;
-      background: var(--green);
-      transition: width 0.4s ease, background 0.4s;
-    }
-    .gauge-value {
-      font-family: var(--font-mono);
-      font-size: 28px;
-      font-weight: 700;
-    }
-    .api-gauge-card.warn {
-      border-color: var(--amber);
-      box-shadow: 0 0 0 1px rgba(255, 160, 0, 0.25);
-    }
-    .api-gauge-card.critical {
-      border-color: var(--red);
-      box-shadow: 0 0 0 1px rgba(255, 23, 68, 0.25);
-    }
-    .api-warn-badge {
-      display: none;
-      margin-top: 10px;
-      padding: 6px 10px;
-      border-radius: 6px;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      font-family: var(--font-mono);
-    }
-    .api-warn-badge.soft {
-      display: inline-block;
-      color: #1a1200;
-      background: var(--amber);
-    }
-    .api-warn-badge.hard {
-      display: inline-block;
-      color: #fff;
-      background: var(--red);
     }
 
     /* ── Footer ── */
@@ -981,42 +765,6 @@
       line-height: 1.4;
     }
 
-    /* ── LDAK + Rollover panels ── */
-    .ldak-wrap { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-    .ldak-bar-bg {
-      flex: 1; height: 6px; background: var(--border);
-      border-radius: 3px; overflow: hidden;
-    }
-    .ldak-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s, background 0.4s; }
-    .ldak-label { font-size: 11px; color: var(--muted); width: 24px; font-family: var(--font-mono); }
-    .ldak-val { font-size: 11px; font-family: var(--font-mono); width: 36px; text-align: right; }
-    .rollover-badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
-      text-transform: uppercase; padding: 4px 10px; border-radius: 12px;
-      border: 1px solid var(--border); margin-top: 8px;
-    }
-    .rollover-badge.active { color: var(--amber); border-color: var(--amber); }
-    .rollover-badge.inactive { color: var(--muted); border-color: var(--border); }
-    .rollover-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-
-    .system-alert-banner {
-      background: #1a0000;
-      border-bottom: 2px solid var(--red);
-      color: var(--red);
-      padding: 12px 24px;
-      font-family: var(--font-mono);
-      font-weight: 600;
-      display: none;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .system-alert-banner .alert-line {
-      font-weight: 400;
-      font-size: 13px;
-      opacity: 0.9;
-    }
-
     .macro-exposure-row {
       display: flex;
       justify-content: space-between;
@@ -1027,35 +775,14 @@
     .macro-exposure-symbol { color: var(--text); font-weight: 600; }
     .macro-exposure-value { font-weight: 600; }
 
-    .quote-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 6px 0;
-      border-bottom: 1px solid var(--border);
-      font-family: var(--font-mono);
-    }
-    .quote-symbol { color: var(--text); font-weight: 600; }
-    .quote-prices { color: var(--muted); }
-    .quote-spread { font-weight: 600; }
-
     @media (max-width: 640px) {
       .grid,
       .grid-3,
-      .arm-cards-grid,
       .equity-mae-row {
-        grid-template-columns: 1fr;
-      }
-      .arm-compare-strip {
         grid-template-columns: 1fr;
       }
       .grind-arm-compare-strip {
         grid-template-columns: 1fr;
-      }
-      .arm-compare-status {
-        font-size: 22px;
-      }
-      .arm-metric-value {
-        font-size: 18px;
       }
 
       .card {
@@ -1072,15 +799,10 @@
         white-space: nowrap;
       }
 
-      .quote-row,
       .macro-exposure-row {
         flex-direction: column;
         align-items: flex-start;
         gap: 2px;
-      }
-
-      .quote-spread {
-        align-self: flex-end;
       }
 
       body {
@@ -1090,11 +812,6 @@
   </style>
 </head>
 <body>
-
-<div class="system-alert-banner" id="systemAlertBanner" style="display:none;">
-  <span id="systemAlertCount"></span>
-  <div id="systemAlertList"></div>
-</div>
 
 <div class="header">
   <div class="logo">pip<span>shed</span></div>
@@ -1320,36 +1037,6 @@
       <tr class="empty-row"><td colspan="5">Loading…</td></tr>
     </tbody>
   </table>
-</div>
-
-<!-- Row 3: Engine state -->
-<div class="grid-3">
-  <div class="card">
-    <div class="card-label">Execution Mode</div>
-    <div class="card-value" id="execMode" style="font-size:18px;margin-top:4px">—</div>
-    <div style="margin-top:14px;">
-      <div class="card-label" style="margin-bottom:6px;">LDAK V-Ratios</div>
-      <!-- ADR-024 V3: LDAK bars populated dynamically by render() via Object.keys() -->
-      <div id="ldak-container"></div>
-      <div class="rollover-badge inactive" id="rolloverBadge">
-        <div class="rollover-dot"></div>
-        <span id="rolloverText">Market Open</span>
-      </div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-label">Quote Spread</div>
-    <div class="card-value gauge-value" id="quoteSpread">—</div>
-    <div class="card-sub">bps</div>
-  </div>
-  <div class="card">
-    <div class="card-label">API Requests Today (this instance)</div>
-    <div class="gauge-value" id="apiCount">—</div>
-    <div class="gauge-bar-bg">
-      <div class="gauge-bar-fill" id="apiBar" style="width:0%"></div>
-    </div>
-    <div class="card-sub" id="apiSub">— / 2,000</div>
-  </div>
 </div>
 
 <div class="footer">
@@ -1612,167 +1299,11 @@
     return dt.toISOString().slice(0, 10);
   }
 
-  function applyAccountApiGauge(count, limit, softWarn, cardId, countId, barId, subId, badgeId) {
-    const apiLimit = limit ?? 2000;
-    const apiSoftWarn = softWarn ?? 1800;
-    const apiCount = Number(count ?? 0);
-    const apiPct = Math.min(apiCount / apiLimit * 100, 100);
-    let barColor = 'var(--green)';
-    if (apiCount >= apiLimit) {
-      barColor = 'var(--red)';
-    } else if (apiCount >= apiSoftWarn) {
-      barColor = 'var(--amber)';
-    } else if (apiPct >= 70) {
-      barColor = 'var(--amber)';
-    }
-
-    const card = cardId ? document.getElementById(cardId) : null;
-    const bar = barId ? document.getElementById(barId) : null;
-    const countEl = countId ? document.getElementById(countId) : null;
-    const subEl = subId ? document.getElementById(subId) : null;
-    const badge = badgeId ? document.getElementById(badgeId) : null;
-
-    if (bar) {
-      bar.style.width = apiPct + '%';
-      bar.style.background = barColor;
-    }
-    if (countEl) countEl.textContent = apiCount;
-    if (subEl) subEl.textContent = apiCount + ' / ' + apiLimit.toLocaleString();
-
-    if (card) {
-      card.classList.remove('warn', 'critical');
-      if (apiCount >= apiLimit) card.classList.add('critical');
-      else if (apiCount >= apiSoftWarn) card.classList.add('warn');
-    }
-
-    if (badge) {
-      badge.classList.remove('soft', 'hard');
-      if (apiCount >= apiLimit) {
-        badge.classList.add('hard');
-        badge.textContent = 'At FTMO limit — ≥ ' + apiLimit.toLocaleString() + ' requests';
-      } else if (apiCount >= apiSoftWarn) {
-        badge.classList.add('soft');
-        badge.textContent = 'Soft warn — ≥ ' + apiSoftWarn.toLocaleString() + ' requests';
-      }
-    }
-
-    return { apiCount, apiLimit, apiSoftWarn, apiPct, barColor };
-  }
-
   function setPnl(el, val) {
     if (val === null || val === undefined) { el.textContent = '—'; return; }
     const v = Number(val);
     el.textContent = (v >= 0 ? '+' : '') + v.toFixed(2);
     el.className = 'pod-pnl ' + (v >= 0 ? 'positive' : 'negative');
-  }
-
-  // ADR-024 V3: slot-indexed pod renderer — prefix is 'pod-N'
-  // ADR-073: per-pod layer_detail, ldak_status, working_orders summary
-  function renderPod(slotIdx, symbol, pod, workingOrder) {
-    const layers = pod.layers || 0;
-    const pnl    = pod.net_pnl;
-    const dist   = pod.distance_to_target_pips;
-    const prefix = 'pod-' + slotIdx;
-
-    const labelEl = document.getElementById(prefix + '-label');
-    if (labelEl) labelEl.textContent = symbol;
-
-    const layersEl = document.getElementById(prefix + '-layers');
-    if (layersEl) layersEl.textContent = layers + ' layer' + (layers !== 1 ? 's' : '');
-
-    setPnl(document.getElementById(prefix + '-pnl'), pnl);
-
-    const distEl = document.getElementById(prefix + '-dist');
-    if (distEl) distEl.textContent =
-      dist !== null && dist !== undefined ? fmt(dist, 1) + ' pips' : '—';
-
-    const detailEl = document.getElementById(prefix + '-detail');
-    if (!detailEl) return;
-    if (layers <= 0) {
-      detailEl.innerHTML = '';
-      return;
-    }
-
-    let detailHtml = '';
-
-    const ldakStatus = (pod.ldak_status || '').toLowerCase();
-    if (ldakStatus === 'pass' || ldakStatus === 'clamp' || ldakStatus === 'refuse') {
-      let ldakLabel = ldakStatus;
-      if (ldakStatus !== 'pass' && pod.ldak_size_mult != null) {
-        ldakLabel = ldakStatus + ' (' + Number(pod.ldak_size_mult).toFixed(2) + ')';
-      }
-      detailHtml += '<div class="pod-ldak-row">' +
-        '<span class="pod-ldak-badge ' + ldakStatus + '">' + ldakLabel + '</span>' +
-        '</div>';
-    }
-
-    const layerDetail = pod.layer_detail || [];
-    if (layerDetail.length > 0) {
-      let layerRows = '';
-      layerDetail.forEach(function(layer) {
-        const dir = layer.direction;
-        let dirLabel = '—';
-        let dirCls = '';
-        if (dir === 1) { dirLabel = 'BUY';  dirCls = 'dir-buy'; }
-        if (dir === -1) { dirLabel = 'SELL'; dirCls = 'dir-sell'; }
-
-        const entry = layer.entry_price != null ? Number(layer.entry_price).toFixed(5) : '—';
-        const exit  = layer.exit_price_fixed != null ? Number(layer.exit_price_fixed).toFixed(5) : '—';
-        const lot   = layer.lot_size != null ? Number(layer.lot_size).toFixed(2) : '—';
-
-        let flags = '';
-        if (layer.resting_exit_missing === true) {
-          flags += '<span class="layer-flag-missing" title="No resting exit order">NO EXIT</span>';
-        }
-        if (layer.is_toxic === true) {
-          flags += '<span class="layer-flag-toxic" title="ADR-040 toxic layer">TOXIC</span>';
-        }
-
-        layerRows += '<tr>' +
-          '<td class="' + dirCls + '">' + dirLabel + flags + '</td>' +
-          '<td>' + entry + '</td>' +
-          '<td>' + exit + '</td>' +
-          '<td>' + lot + '</td>' +
-          '</tr>';
-      });
-      detailHtml += '<table class="pod-layer-table">' +
-        '<thead><tr><th>Dir</th><th>Entry</th><th>Exit</th><th>Lot</th></tr></thead>' +
-        '<tbody>' + layerRows + '</tbody></table>';
-    }
-
-    if (workingOrder) {
-      const orderParts = [];
-      const addNext = workingOrder.add_next_price;
-      if (addNext != null) {
-        orderParts.push('Add next: <span>' + Number(addNext).toFixed(5) + '</span>');
-      }
-      const exits = workingOrder.exit_orders || [];
-      const exitPrices = [];
-      exits.forEach(function(e) {
-        if (e.price != null) exitPrices.push(Number(e.price));
-      });
-      if (exitPrices.length > 0) {
-        const dirs = layerDetail
-          .map(function(l) { return l.direction; })
-          .filter(function(d) { return d != null; });
-        const slotDir = dirs.length > 0 ? dirs[0] : null;
-        let nearest;
-        if (slotDir === 1) {
-          nearest = Math.min.apply(null, exitPrices);
-        } else if (slotDir === -1) {
-          nearest = Math.max.apply(null, exitPrices);
-        } else {
-          nearest = Math.min.apply(null, exitPrices);
-        }
-        const nLabel = exitPrices.length + ' exit' + (exitPrices.length !== 1 ? 's' : '');
-        orderParts.push(nLabel + ', nearest at <span>' + nearest.toFixed(5) + '</span>');
-      }
-      if (orderParts.length > 0) {
-        detailHtml += '<div class="pod-orders-summary">' + orderParts.join('<br>') + '</div>';
-      }
-    }
-
-    detailEl.innerHTML = detailHtml;
   }
 
   function preparePodCard(slotIdx, isGrind) {
@@ -1782,15 +1313,6 @@
     card.classList.toggle('grind-pod-slot', isGrind);
     const distRow = card.querySelector('.pod-dist');
     if (distRow) distRow.style.display = isGrind ? 'none' : '';
-  }
-
-  function hidePodCard(slotIdx) {
-    const card = document.getElementById('pod-' + slotIdx);
-    if (!card) return;
-    card.style.display = 'none';
-    card.classList.remove('grind-pod-slot');
-    const distRow = card.querySelector('.pod-dist');
-    if (distRow) distRow.style.display = '';
   }
 
   function renderGrindPods(data) {
@@ -1899,73 +1421,7 @@
     badge.className = 'status-badge live';
     statusTx.textContent = 'Live';
 
-    const instanceId = data.instance_id ?? currentInstance;
     renderGrindPods(data);
-
-    // Engine state
-    const es = data.engine_state ?? {};
-    document.getElementById('execMode').textContent    = es.execution_mode ?? '—';
-
-    // ADR-024 V3: dynamic LDAK V-ratio bars via Object.keys()
-    const vr       = es.ldak_vratios || {};
-    const vrKeys   = Object.keys(vr);
-    const ldakCont = document.getElementById('ldak-container');
-    if (ldakCont) {
-      // Rebuild LDAK bars dynamically to match whatever triad is active
-      ldakCont.innerHTML = '';
-      vrKeys.forEach(k => {
-        const val  = vr[k] != null ? Number(vr[k]) : null;
-        const barPct = val !== null ? Math.min(val / 3.0 * 100, 100) : 0;
-        const color  = val === null ? 'var(--muted)'
-                     : val < 1.5   ? 'var(--green)'
-                     : val < 2.5   ? 'var(--amber)'
-                     : 'var(--red)';
-        const valStr = val !== null ? val.toFixed(2) : '—';
-        // Short label: first 2 chars of each currency in the pair (e.g. EURUSD → EU)
-        const shortLabel = k.length >= 6 ? k.slice(0,2) + k.slice(3,5) : k;
-        ldakCont.innerHTML += '<div class="ldak-wrap">' +
-          '<span class="ldak-label">' + shortLabel + '</span>' +
-          '<div class="ldak-bar-bg"><div class="ldak-bar-fill" style="width:' + barPct + '%;background:' + color + '"></div></div>' +
-          '<span class="ldak-val" style="color:' + color + '">' + valStr + '</span>' +
-          '</div>';
-      });
-    }
-
-    // Rollover window
-    const rolloverBadge = document.getElementById('rolloverBadge');
-    const rolloverText  = document.getElementById('rolloverText');
-    if (es.rollover_active === true) {
-      rolloverBadge.className = 'rollover-badge active';
-      rolloverText.textContent = 'NY Rollover Active';
-    } else {
-      rolloverBadge.className = 'rollover-badge inactive';
-      rolloverText.textContent = 'Market Open';
-    }
-
-    document.getElementById('quoteSpread').textContent = es.quote_spread
-      ? (es.quote_spread * 10000).toFixed(1)
-      : '—';
-
-    const apiBar = document.getElementById('apiBar');
-    const grindApiCount = data.api_count;
-    const apiLimit = data.api_count_limit ?? API_DAILY_LIMIT;
-    if (grindApiCount !== null && grindApiCount !== undefined) {
-      applyAccountApiGauge(
-        grindApiCount,
-        apiLimit,
-        1800,
-        null,
-        'apiCount',
-        'apiBar',
-        'apiSub',
-        null
-      );
-      apiBar.style.display = '';
-    } else {
-      document.getElementById('apiCount').textContent = '—';
-      apiBar.style.display = 'none';
-      document.getElementById('apiSub').textContent = '— / ' + apiLimit.toLocaleString();
-    }
 
     // Footer
     document.getElementById('lastUpdate').textContent  = 'Last update: ' + new Date().toLocaleTimeString();
@@ -1988,8 +1444,6 @@
 </script>
 
 <script>
-  let lastAlertCount = 0;
-
   async function fetchAggregate() {
     try {
       const res  = await fetch('/api/telemetry/aggregate');
@@ -2578,8 +2032,6 @@
     });
 
     renderGrindBookTables(grindCards);
-
-    document.getElementById('systemAlertBanner').style.display = 'none';
 
     // --- Macro exposure widget ---
     const exposure = data.net_exposure || {};

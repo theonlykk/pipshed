@@ -1254,7 +1254,6 @@ def telemetry_open_positions():
 @app.route("/api/telemetry/aggregate", methods=["GET"])
 def telemetry_aggregate():
     net_exposure = {}
-    instance_status = {}
     grind_api_count_max = 0
     global_account_metrics = _read_global_account_metrics()
     intraday_mae = (
@@ -1268,10 +1267,8 @@ def telemetry_aggregate():
         raw_grind = r.get(f"fxmatrix:state:{inst}")
         grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
         if raw_grind is None:
-            instance_status[inst] = "connection_lost"
             continue
 
-        instance_status[inst] = "live"
         try:
             grind_data = json.loads(raw_grind)
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -1287,7 +1284,6 @@ def telemetry_aggregate():
 
     return jsonify({
         "net_exposure": net_exposure,
-        "instance_status": instance_status,
         "grind_api_count": grind_api_count_max if grind_api_count_max else None,
         "grind_api_count_limit": GRIND_API_DAILY_LIMIT,
         "global_account_metrics": global_account_metrics,

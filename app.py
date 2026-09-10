@@ -489,6 +489,13 @@ _PUBLIC_GRIND_INSTANCE_KEYS = (
     "cap_leg_b_name",
     "exit_penetration_pips_mean",
     "exit_touch_revert_count",
+    "layers",
+    "l0_pending_long",
+    "l0_pending_short",
+    "add_pending_long",
+    "add_pending_short",
+    "resting_entries_long",
+    "resting_entries_short",
 )
 
 

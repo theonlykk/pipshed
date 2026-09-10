@@ -364,6 +364,56 @@
       margin-top: 6px;
       line-height: 1.35;
     }
+    .grind-ring-section {
+      margin-bottom: 28px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .grind-ring-section:last-of-type { border-bottom: none; }
+    .grind-arm-label {
+      font-size: 10px;
+      color: var(--muted);
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+    .grind-layer-table {
+      width: 100%;
+      margin-top: 8px;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+    .grind-layer-table th,
+    .grind-layer-table td {
+      padding: 3px 4px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+    .grind-layer-table th {
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .grind-pending-line {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+    .grind-drift-badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: rgba(245, 158, 11, 0.18);
+      border: 1px solid #f59e0b;
+      color: #f59e0b;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
 
     /* ── Grid layout ── */
     .grid {
@@ -1027,115 +1077,96 @@
   </div>
 </div>
 
-<!-- Signal vs Dumb A/B comparison (headline — screenshot legible) -->
-<div class="arm-compare-strip" id="armCompareStrip">
-  <div class="arm-compare-col signal" id="armCompareSignal">
-    <div class="arm-compare-title">Signal arm</div>
-    <div class="arm-compare-status running" id="armSignalStatus">SIGNAL: …</div>
-    <div class="arm-compare-detail" id="armSignalDetail">Loading…</div>
-    <div class="arm-compare-metrics">
-      <div><div class="arm-metric-label">Open layers</div><div class="arm-metric-value" id="armSignalLayers">—</div></div>
-      <div><div class="arm-metric-label">Scalps today</div><div class="arm-metric-value" id="armSignalActivity">—</div></div>
-      <div class="arm-metric-span2"><div class="arm-metric-label">API today</div><div class="arm-metric-value" id="armSignalApi">—</div></div>
-      <div class="arm-metric-span2"><div class="arm-metric-label">Net MTM</div><div class="arm-metric-value" id="armSignalMtm">—</div></div>
-    </div>
-  </div>
-  <div class="arm-compare-col dumb" id="armCompareDumb">
-    <div class="arm-compare-title">Dumb arm</div>
-    <div class="arm-compare-status no-data" id="armDumbStatus">DUMB: …</div>
-    <div class="arm-compare-detail" id="armDumbDetail">Loading…</div>
-    <div class="arm-compare-metrics">
-      <div><div class="arm-metric-label">Open layers</div><div class="arm-metric-value" id="armDumbLayers">—</div></div>
-      <div><div class="arm-metric-label">Scalps today</div><div class="arm-metric-value" id="armDumbActivity">—</div></div>
-      <div class="arm-metric-span2"><div class="arm-metric-label">API today</div><div class="arm-metric-value" id="armDumbApi">—</div></div>
-      <div class="arm-metric-span2"><div class="arm-metric-label">Net MTM</div><div class="arm-metric-value" id="armDumbMtm">—</div></div>
-    </div>
-  </div>
-</div>
-
-<!-- Grind OPT vs ALT A/B comparison (second row — four cards on one row is too narrow) -->
-<div class="grind-arm-compare-strip" id="grindArmCompareStrip">
-  <div class="grind-arm-compare-col opt" id="grindArmCompareOpt">
-    <div class="grind-arm-compare-title">Grind OPT</div>
-    <div id="grindOptHaltedBanner" style="display:none"></div>
-    <div class="grind-arm-compare-status no-data" id="grindOptStatus">GRIND OPT: …</div>
-    <div class="grind-arm-compare-detail" id="grindOptDetail">Loading…</div>
-    <div class="grind-arm-compare-metrics">
-      <div class="grind-arm-realised-block">
-        <div class="grind-arm-metric-label grind-pnl-label" id="grindOptRealisedLabel" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
-        <div class="grind-arm-realised-value grind-arm-metric-value" id="grindOptRealised">—</div>
+<div class="grind-ring-section" id="grindRing-eur_gbp_usd">
+  <div class="instance-group-label">Ring 1 — EUR / GBP / USD</div>
+  <div class="grind-arm-compare-strip">
+    <div class="grind-arm-compare-col opt" id="grindArmCompareOpt-eur_gbp_usd">
+      <div class="grind-arm-compare-title">Arm A <span class="grind-arm-label">(OPT)</span></div>
+      <div id="grindOptHaltedBanner-eur_gbp_usd" style="display:none"></div>
+      <div class="grind-arm-compare-status no-data" id="grindOptStatus-eur_gbp_usd">Arm A: …</div>
+      <div class="grind-arm-compare-detail" id="grindOptDetail-eur_gbp_usd">Loading…</div>
+      <div class="grind-arm-compare-metrics">
+        <div class="grind-arm-realised-block">
+          <div class="grind-arm-metric-label grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+          <div class="grind-arm-realised-value grind-arm-metric-value" id="grindOptRealised-eur_gbp_usd">—</div>
+        </div>
+        <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindOptLayers-eur_gbp_usd">—</div></div>
+        <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindOptActivity-eur_gbp_usd">—</div></div>
+        <div><div class="grind-arm-metric-label grind-pnl-label" title="Position profit + swap only; excludes commission.">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm-eur_gbp_usd">—</div></div>
+        <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi-eur_gbp_usd">—</div></div>
       </div>
-      <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindOptLayers">—</div></div>
-      <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindOptActivity">—</div></div>
-      <div><div class="grind-arm-metric-label grind-pnl-label" id="grindOptMtmLabel" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm">—</div></div>
-      <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi">—</div></div>
     </div>
-  </div>
-  <div class="grind-arm-compare-col alt" id="grindArmCompareAlt">
-    <div class="grind-arm-compare-title">Grind ALT</div>
-    <div id="grindAltHaltedBanner" style="display:none"></div>
-    <div class="grind-arm-compare-status no-data" id="grindAltStatus">GRIND ALT: …</div>
-    <div class="grind-arm-compare-detail" id="grindAltDetail">Loading…</div>
-    <div class="grind-arm-compare-metrics">
-      <div class="grind-arm-realised-block">
-        <div class="grind-arm-metric-label grind-pnl-label" id="grindAltRealisedLabel" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
-        <div class="grind-arm-realised-value grind-arm-metric-value" id="grindAltRealised">—</div>
+    <div class="grind-arm-compare-col alt" id="grindArmCompareAlt-eur_gbp_usd">
+      <div class="grind-arm-compare-title">Arm B <span class="grind-arm-label">(ALT)</span></div>
+      <div id="grindAltHaltedBanner-eur_gbp_usd" style="display:none"></div>
+      <div class="grind-arm-compare-status no-data" id="grindAltStatus-eur_gbp_usd">Arm B: …</div>
+      <div class="grind-arm-compare-detail" id="grindAltDetail-eur_gbp_usd">Loading…</div>
+      <div class="grind-arm-compare-metrics">
+        <div class="grind-arm-realised-block">
+          <div class="grind-arm-metric-label grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+          <div class="grind-arm-realised-value grind-arm-metric-value" id="grindAltRealised-eur_gbp_usd">—</div>
+        </div>
+        <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindAltLayers-eur_gbp_usd">—</div></div>
+        <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindAltActivity-eur_gbp_usd">—</div></div>
+        <div><div class="grind-arm-metric-label grind-pnl-label" title="Position profit + swap only; excludes commission.">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm-eur_gbp_usd">—</div></div>
+        <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi-eur_gbp_usd">—</div></div>
       </div>
-      <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindAltLayers">—</div></div>
-      <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindAltActivity">—</div></div>
-      <div><div class="grind-arm-metric-label grind-pnl-label" id="grindAltMtmLabel" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm">—</div></div>
-      <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi">—</div></div>
     </div>
   </div>
-</div>
-
-<div class="instance-group">
-  <div class="instance-group-label">Signal instances</div>
-  <div class="instance-bar" id="instanceBarSignal">
-    <button class="instance-btn active" onclick="setInstance('MM_LONG_V2')" id="btn-MM_LONG_V2">MM LONG V2</button>
-    <button class="instance-btn" onclick="setInstance('MM_SHORT_V2')" id="btn-MM_SHORT_V2">MM SHORT V2</button>
-    <button class="instance-btn" onclick="setInstance('MM_LONG_EURUSD')" id="btn-MM_LONG_EURUSD">MM LONG EURUSD</button>
-    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURUSD')" id="btn-MM_SHORT_EURUSD">MM SHORT EURUSD</button>
-    <button class="instance-btn" onclick="setInstance('MM_LONG_EURGBP')" id="btn-MM_LONG_EURGBP">MM LONG EURGBP</button>
-    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURGBP')" id="btn-MM_SHORT_EURGBP">MM SHORT EURGBP</button>
+  <div class="instance-group">
+    <div class="instance-group-label">Instances</div>
+    <div class="instance-bar" id="instanceBar-eur_gbp_usd"></div>
   </div>
-</div>
-<div class="instance-group">
-  <div class="instance-group-label">Dumb instances (A/B straddle)</div>
-  <div class="instance-bar" id="instanceBarDumb">
-    <button class="instance-btn" onclick="setInstance('MM_LONG_V2_DUMB')" id="btn-MM_LONG_V2_DUMB">MM LONG V2 DUMB</button>
-    <button class="instance-btn" onclick="setInstance('MM_SHORT_V2_DUMB')" id="btn-MM_SHORT_V2_DUMB">MM SHORT V2 DUMB</button>
-    <button class="instance-btn" onclick="setInstance('MM_LONG_EURUSD_DUMB')" id="btn-MM_LONG_EURUSD_DUMB">MM LONG EURUSD DUMB</button>
-    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURUSD_DUMB')" id="btn-MM_SHORT_EURUSD_DUMB">MM SHORT EURUSD DUMB</button>
-    <button class="instance-btn" onclick="setInstance('MM_LONG_EURGBP_DUMB')" id="btn-MM_LONG_EURGBP_DUMB">MM LONG EURGBP DUMB</button>
-    <button class="instance-btn" onclick="setInstance('MM_SHORT_EURGBP_DUMB')" id="btn-MM_SHORT_EURGBP_DUMB">MM SHORT EURGBP DUMB</button>
+  <div class="grind-cards-section">
+    <div class="instance-group-label">Instance cards</div>
+    <div class="grind-cards-grid" id="grindCards-eur_gbp_usd"></div>
   </div>
 </div>
 
-<div class="instance-group">
-  <div class="instance-group-label">Grind instances</div>
-  <div class="instance-bar" id="instanceBarGrind">
-    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_GBPUSD_OPT')" id="btn-GRIND_GBPUSD_OPT">GRIND GBPUSD OPT</button>
-    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_GBPUSD_ALT')" id="btn-GRIND_GBPUSD_ALT">GRIND GBPUSD ALT</button>
-    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURUSD_OPT')" id="btn-GRIND_EURUSD_OPT">GRIND EURUSD OPT</button>
-    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURUSD_ALT')" id="btn-GRIND_EURUSD_ALT">GRIND EURUSD ALT</button>
-    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURGBP_OPT')" id="btn-GRIND_EURGBP_OPT">GRIND EURGBP OPT</button>
-    <button class="instance-btn grind-nav-btn" type="button" onclick="setInstance('GRIND_EURGBP_ALT')" id="btn-GRIND_EURGBP_ALT">GRIND EURGBP ALT</button>
+<div class="grind-ring-section" id="grindRing-aud_cad_chf">
+  <div class="instance-group-label">Ring 2 — AUD / CAD / CHF</div>
+  <div class="grind-arm-compare-strip">
+    <div class="grind-arm-compare-col opt" id="grindArmCompareOpt-aud_cad_chf">
+      <div class="grind-arm-compare-title">Arm A <span class="grind-arm-label">(OPT)</span></div>
+      <div id="grindOptHaltedBanner-aud_cad_chf" style="display:none"></div>
+      <div class="grind-arm-compare-status no-data" id="grindOptStatus-aud_cad_chf">Arm A: …</div>
+      <div class="grind-arm-compare-detail" id="grindOptDetail-aud_cad_chf">Loading…</div>
+      <div class="grind-arm-compare-metrics">
+        <div class="grind-arm-realised-block">
+          <div class="grind-arm-metric-label grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+          <div class="grind-arm-realised-value grind-arm-metric-value" id="grindOptRealised-aud_cad_chf">—</div>
+        </div>
+        <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindOptLayers-aud_cad_chf">—</div></div>
+        <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindOptActivity-aud_cad_chf">—</div></div>
+        <div><div class="grind-arm-metric-label grind-pnl-label" title="Position profit + swap only; excludes commission.">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm-aud_cad_chf">—</div></div>
+        <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi-aud_cad_chf">—</div></div>
+      </div>
+    </div>
+    <div class="grind-arm-compare-col alt" id="grindArmCompareAlt-aud_cad_chf">
+      <div class="grind-arm-compare-title">Arm B <span class="grind-arm-label">(ALT)</span></div>
+      <div id="grindAltHaltedBanner-aud_cad_chf" style="display:none"></div>
+      <div class="grind-arm-compare-status no-data" id="grindAltStatus-aud_cad_chf">Arm B: …</div>
+      <div class="grind-arm-compare-detail" id="grindAltDetail-aud_cad_chf">Loading…</div>
+      <div class="grind-arm-compare-metrics">
+        <div class="grind-arm-realised-block">
+          <div class="grind-arm-metric-label grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+          <div class="grind-arm-realised-value grind-arm-metric-value" id="grindAltRealised-aud_cad_chf">—</div>
+        </div>
+        <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindAltLayers-aud_cad_chf">—</div></div>
+        <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindAltActivity-aud_cad_chf">—</div></div>
+        <div><div class="grind-arm-metric-label grind-pnl-label" title="Position profit + swap only; excludes commission.">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm-aud_cad_chf">—</div></div>
+        <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi-aud_cad_chf">—</div></div>
+      </div>
+    </div>
   </div>
-</div>
-
-<!-- Per-arm instance summary cards (aggregate) -->
-<div class="arm-cards-section">
-  <div class="instance-group-label">Instance summary — Signal</div>
-  <div class="arm-cards-grid" id="armCardsSignal"></div>
-</div>
-<div class="arm-cards-section">
-  <div class="instance-group-label">Instance summary — Dumb</div>
-  <div class="arm-cards-grid" id="armCardsDumb"></div>
-</div>
-<div class="grind-cards-section">
-  <div class="instance-group-label">Instance summary — Grind</div>
-  <div class="grind-cards-grid" id="armCardsGrind"></div>
+  <div class="instance-group">
+    <div class="instance-group-label">Instances</div>
+    <div class="instance-bar" id="instanceBar-aud_cad_chf"></div>
+  </div>
+  <div class="grind-cards-section">
+    <div class="instance-group-label">Instance cards</div>
+    <div class="grind-cards-grid" id="grindCards-aud_cad_chf"></div>
+  </div>
 </div>
 
 <!-- Row 1: Equity vs Balance + Intraday low-water -->
@@ -1212,23 +1243,6 @@
   <div id="macro-exposure-container" style="margin-top:10px"></div>
 </div>
 
-<!-- Account-wide FTMO API request budget (V2 shared counter) -->
-<div class="card api-gauge-card" id="accountApiCard" style="margin-bottom:16px">
-  <div class="card-label">Account API Requests Today (V2 instances)</div>
-  <div class="gauge-value" id="accountApiCount" style="margin-top:8px">—</div>
-  <div class="gauge-bar-bg">
-    <div class="gauge-bar-fill" id="accountApiBar" style="width:0%"></div>
-  </div>
-  <div class="card-sub" id="accountApiSub">— / 2,000</div>
-  <div class="api-warn-badge soft" id="accountApiWarnBadge">Soft warn — ≥ 1,800 requests</div>
-</div>
-
-<!-- New row: Best Working Quotes (cross-instance, all pairs) -->
-<div class="card" style="margin-bottom:16px">
-  <div class="card-label">Best Working Quotes (V2 instances)</div>
-  <div id="quotes-container" style="margin-top:10px"></div>
-</div>
-
 <!-- Cross-instance summary (dark on-screen; Copy btn → light HTML/TSV for Teams) -->
 <div class="card teams-section">
   <div class="teams-section-header">
@@ -1239,7 +1253,7 @@
     </div>
     <button type="button" class="teams-copy-btn" id="todayAllCopyBtn" onclick="copyTodayAllTable()">Copy table</button>
   </div>
-  <div class="section-title" id="todayAllTitle">Today's Scalps (V2 instances)</div>
+  <div class="section-title" id="todayAllTitle">Today's Scalps</div>
   <div class="teams-summary" id="todayAllSummary">Loading…</div>
   <div class="copy-meta" id="todayAllMeta">Loading…</div>
   <table class="teams-table" id="todayAllTable">
@@ -1317,21 +1331,60 @@
 </div>
 
 <script>
-  let currentInstance = 'MM_LONG_V2';
-  const SIGNAL_INSTANCES = [
-    'MM_LONG_V2', 'MM_SHORT_V2', 'MM_LONG_EURUSD',
-    'MM_SHORT_EURUSD', 'MM_LONG_EURGBP', 'MM_SHORT_EURGBP'
-  ];
-  const DUMB_INSTANCES = SIGNAL_INSTANCES.map(function(i) { return i + '_DUMB'; });
-  const GRIND_INSTANCES = [
-    'GRIND_GBPUSD_OPT', 'GRIND_GBPUSD_ALT',
-    'GRIND_EURUSD_OPT', 'GRIND_EURUSD_ALT',
-    'GRIND_EURGBP_OPT', 'GRIND_EURGBP_ALT'
-  ];
-  const TRACKED_INSTANCE_COUNT = SIGNAL_INSTANCES.length + DUMB_INSTANCES.length;
+  const GRIND_RINGS = {
+    eur_gbp_usd: {
+      label: 'EUR / GBP / USD',
+      instances: [
+        'GRIND_GBPUSD_OPT', 'GRIND_GBPUSD_ALT',
+        'GRIND_EURUSD_OPT', 'GRIND_EURUSD_ALT',
+        'GRIND_EURGBP_OPT', 'GRIND_EURGBP_ALT',
+      ],
+    },
+    aud_cad_chf: {
+      label: 'AUD / CAD / CHF',
+      instances: [
+        'GRIND_AUDCAD_OPT', 'GRIND_AUDCAD_ALT',
+        'GRIND_AUDCHF_OPT', 'GRIND_AUDCHF_ALT',
+        'GRIND_CADCHF_OPT', 'GRIND_CADCHF_ALT',
+      ],
+    },
+  };
+  const GRIND_RING_IDS = Object.keys(GRIND_RINGS);
+  const GRIND_INSTANCES = GRIND_RING_IDS.reduce(function(acc, ringId) {
+    return acc.concat(GRIND_RINGS[ringId].instances);
+  }, []);
+  let currentInstance = GRIND_INSTANCES[0];
   const GRIND_TRACKED_COUNT = GRIND_INSTANCES.length;
-  const ALL_TRACKED_INSTANCE_COUNT = TRACKED_INSTANCE_COUNT + GRIND_TRACKED_COUNT;
   const API_DAILY_LIMIT = 2000;
+
+  function grindArmLabel(slot) {
+    if (slot === 'OPT') return 'Arm A';
+    if (slot === 'ALT') return 'Arm B';
+    return slot || '—';
+  }
+
+  function grindInstanceBtnLabel(inst) {
+    const parts = inst.split('_');
+    if (parts.length >= 3 && parts[0] === 'GRIND') {
+      const slot = parts[2];
+      return parts[1] + ' ' + grindArmLabel(slot) + ' (' + slot + ')';
+    }
+    return inst.replace(/_/g, ' ');
+  }
+
+  function initGrindNavBars() {
+    GRIND_RING_IDS.forEach(function(ringId) {
+      const bar = document.getElementById('instanceBar-' + ringId);
+      if (!bar) return;
+      bar.innerHTML = GRIND_RINGS[ringId].instances.map(function(inst) {
+        const active = inst === currentInstance ? ' active' : '';
+        return '<button class="instance-btn grind-nav-btn' + active + '" type="button" ' +
+          'onclick="setInstance(\'' + inst + '\')" id="btn-' + inst + '">' +
+          grindInstanceBtnLabel(inst) + '</button>';
+      }).join('');
+    });
+  }
+  initGrindNavBars();
 
   function isGrindInstance(id) {
     return typeof id === 'string' && id.indexOf('GRIND_') === 0;
@@ -1654,7 +1707,7 @@
     document.getElementById('pod-0-layers').textContent =
       grindLayersLine(data.open_layers_long, data.open_layers_short);
     setPnl(document.getElementById('pod-0-pnl'), data.net_mtm);
-    document.getElementById('pod-0-detail').innerHTML = '';
+    document.getElementById('pod-0-detail').innerHTML = renderGrindLayerTableHtml(data.layers);
 
     document.getElementById('pod-1-label').textContent = 'Geometry';
     document.getElementById('pod-1-layers').textContent = grindGeometryLine(data);
@@ -1676,27 +1729,62 @@
       grindHealthLabel('Halted', data.halted, 'halted');
     document.getElementById('pod-2-pnl').textContent = grindHealthLabel('Recon', data.recon_ok, 'ok_flag');
     document.getElementById('pod-2-pnl').className = 'pod-pnl';
+    const pendingHtml =
+      renderGrindPendingLine('long', data) +
+      renderGrindPendingLine('short', data);
     document.getElementById('pod-2-detail').innerHTML =
       '<div class="pod-orders-summary">' +
       grindHealthLabel('Invariant', data.invariant_ok, 'ok_flag') + '<br>' +
       grindHealthLabel('Cap blocked', data.cap_blocked, 'bad_flag') + '<br>' +
       grindHealthLabel('Peer read', data.peer_read_failed, 'bad_flag') +
-      '</div>';
+      '</div>' + pendingHtml;
   }
 
-  function renderV2PodRow(data) {
-    const pods = data.active_pods ?? {};
-    const workingOrders = data.working_orders ?? {};
-    const podKeys = Object.keys(pods);
+  function renderGrindLayerTableHtml(layers) {
+    if (!layers || !layers.length) return '';
+    const rows = layers.map(function(layer) {
+      const exitCovered = layer.has_exit_order === true || layer.has_exit_position === true;
+      const exitLabel = layer.has_exit_order === null && layer.has_exit_position === null
+        ? '—'
+        : (exitCovered ? 'yes' : 'no');
+      return '<tr>' +
+        '<td>' + (layer.layer_index != null ? layer.layer_index : '—') + '</td>' +
+        '<td>' + (layer.side || '—') + '</td>' +
+        '<td>' + (layer.entry_price != null ? Number(layer.entry_price).toFixed(5) : '—') + '</td>' +
+        '<td>' + (layer.exit_target != null ? Number(layer.exit_target).toFixed(5) : '—') + '</td>' +
+        '<td>' + exitLabel + '</td>' +
+        '</tr>';
+    }).join('');
+    return '<table class="grind-layer-table"><thead><tr>' +
+      '<th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th>Covered</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
 
-    for (let i = 0; i < 3; i++) {
-      if (i < podKeys.length) {
-        preparePodCard(i, false);
-        renderPod(i, podKeys[i], pods[podKeys[i]], workingOrders[podKeys[i]] || null);
-      } else {
-        hidePodCard(i);
+  function renderGrindPendingLine(side, card) {
+    const l0 = card['l0_pending_' + side];
+    const add = card['add_pending_' + side];
+    const resting = card['resting_entries_' + side];
+    const hasL0 = l0 !== null && l0 !== undefined;
+    const hasAdd = add !== null && add !== undefined;
+    const hasResting = resting !== null && resting !== undefined;
+    if (!hasL0 && !hasAdd && !hasResting) return '';
+    let drift = card['resting_drift_' + side];
+    if (!drift && hasResting) {
+      const expected = (hasL0 ? 1 : 0) + (hasAdd ? 1 : 0);
+      if (resting !== expected) {
+        drift = { expected: expected, actual: resting };
       }
     }
+    let line = side + ': ';
+    line += 'L0 ' + (hasL0 ? Number(l0).toFixed(5) : '—');
+    line += ' · add ' + (hasAdd ? Number(add).toFixed(5) : '—');
+    if (hasResting) {
+      line += ' · broker ' + resting;
+      if (drift) {
+        line += ' <span class="grind-drift-badge">Drift (exp ' + drift.expected + ')</span>';
+      }
+    }
+    return '<div class="grind-pending-line">' + line + '</div>';
   }
 
   function render(data) {
@@ -1737,13 +1825,8 @@
     ddBar.style.background = dd < 1 ? 'var(--green)' : dd < 3 ? 'var(--amber)' : 'var(--red)';
     document.getElementById('ddPct').textContent = fmt(dd, 2) + '% drawdown';
 
-    // Pod row — grind flat payload vs v2 active_pods
     const instanceId = data.instance_id ?? currentInstance;
-    if (isGrindInstance(instanceId)) {
-      renderGrindPods(data);
-    } else {
-      renderV2PodRow(data);
-    }
+    renderGrindPods(data);
 
     // Engine state
     const es = data.engine_state ?? {};
@@ -1790,54 +1873,24 @@
       : '—';
 
     const apiBar = document.getElementById('apiBar');
-    const liveInstanceId = data.instance_id ?? currentInstance;
-    const isV2Instance = liveInstanceId.startsWith('MM_LONG_') || liveInstanceId.startsWith('MM_SHORT_');
-    const instApiCount = es.instance_daily_api_count;
-    const apiLimit = es.account_daily_api_limit ?? es.instance_daily_api_limit ?? API_DAILY_LIMIT;
-    const apiSoftWarn = es.account_daily_api_soft_warn ?? 1800;
-
-    if (isV2Instance && instApiCount != null) {
+    const grindApiCount = data.api_count;
+    const apiLimit = data.api_count_limit ?? API_DAILY_LIMIT;
+    if (grindApiCount !== null && grindApiCount !== undefined) {
       applyAccountApiGauge(
-        instApiCount,
+        grindApiCount,
         apiLimit,
-        apiSoftWarn,
+        1800,
         null,
         'apiCount',
         'apiBar',
         'apiSub',
         null
       );
-      document.getElementById('apiBar').style.display = '';
-      const acctCount = es.account_daily_api_count;
-      if (acctCount != null && acctCount !== instApiCount) {
-        document.getElementById('apiSub').textContent =
-          instApiCount.toLocaleString() + ' / ' + apiLimit.toLocaleString() +
-          ' (account ' + acctCount.toLocaleString() + ')';
-      }
-    } else if (isV2Instance && es.account_daily_api_count != null) {
-      applyAccountApiGauge(
-        es.account_daily_api_count,
-        apiLimit,
-        apiSoftWarn,
-        null,
-        'apiCount',
-        'apiBar',
-        'apiSub',
-        null
-      );
-      document.getElementById('apiBar').style.display = '';
-    } else if (isV2Instance) {
+      apiBar.style.display = '';
+    } else {
       document.getElementById('apiCount').textContent = '—';
       apiBar.style.display = 'none';
-      document.getElementById('apiSub').textContent = 'Awaiting account counter';
-    } else {
-      const apiCount = es.daily_api_count ?? 0;
-      const apiPct   = Math.min(apiCount / 900 * 100, 100);
-      apiBar.style.display = '';
-      apiBar.style.width      = apiPct + '%';
-      apiBar.style.background = apiPct < 70 ? 'var(--green)' : apiPct < 90 ? 'var(--amber)' : 'var(--red)';
-      document.getElementById('apiCount').textContent = apiCount;
-      document.getElementById('apiSub').textContent   = apiCount + ' / 900';
+      document.getElementById('apiSub').textContent = '— / ' + apiLimit.toLocaleString();
     }
 
     // Footer
@@ -2026,8 +2079,8 @@
 
     const isBrokerToday = selectedDate === brokerToday;
     title.textContent = isBrokerToday
-      ? "Today's Scalps (V2 instances)"
-      : 'Scalp Exits (V2 instances)';
+      ? "Today's Scalps"
+      : 'Scalp Exits';
     dateLabel.textContent = selectedDate;
 
     prevDay.disabled = !todayAllEarliestDate || selectedDate <= todayAllEarliestDate;
@@ -2069,7 +2122,7 @@
     }
 
     meta.textContent = total + ' scalp' + (total === 1 ? '' : 's') +
-      ' across ' + TRACKED_INSTANCE_COUNT + ' instances · ' + selectedDate;
+      ' across ' + GRIND_TRACKED_COUNT + ' grind instances · ' + selectedDate;
 
     tbody.innerHTML = todayAllCache.rows.map(function(row) {
       return '<tr>' + row.map(function(cell) { return '<td>' + cell + '</td>'; }).join('') + '</tr>';
@@ -2087,12 +2140,9 @@
   }
 
   function openPosMetaLine(total, data) {
-    const trackedTotal = data.tracked_total_count ?? ALL_TRACKED_INSTANCE_COUNT;
-    const v2Count = data.tracked_v2_count ?? TRACKED_INSTANCE_COUNT;
-    const grindCount = data.tracked_grind_count ?? GRIND_TRACKED_COUNT;
+    const trackedTotal = data.tracked_total_count ?? GRIND_TRACKED_COUNT;
     const posWord = total === 1 ? 'open position' : 'open positions';
-    return total + ' ' + posWord + ' across ' + trackedTotal +
-      ' instances (' + v2Count + ' v2 + ' + grindCount + ' grind)';
+    return total + ' ' + posWord + ' across ' + trackedTotal + ' grind instances';
   }
 
   function renderOpenPositions(data) {
@@ -2136,60 +2186,17 @@
     todayAllChangeDay(1);
   });
 
-  function renderArmCompareColumn(armKey, prefix, summary, apiLimit) {
-    const col = document.getElementById('armCompare' + prefix);
-    const statusEl = document.getElementById('arm' + prefix + 'Status');
-    const detailEl = document.getElementById('arm' + prefix + 'Detail');
-    const layersEl = document.getElementById('arm' + prefix + 'Layers');
-    const activityEl = document.getElementById('arm' + prefix + 'Activity');
-    const apiEl = document.getElementById('arm' + prefix + 'Api');
-    const mtmEl = document.getElementById('arm' + prefix + 'Mtm');
-
-    if (!summary || !statusEl) return;
-
-    const armLabel = armKey.toUpperCase();
-    const status = summary.status || 'no_data';
-    col.className = 'arm-compare-col ' + armKey + (status === 'halted' ? ' halted' : status === 'no_data' ? ' no-data' : '');
-
-    statusEl.className = 'arm-compare-status ' + (status === 'running' ? 'running' : status === 'halted' ? 'halted' : 'no-data');
-    if (status === 'no_data') {
-      statusEl.textContent = armLabel + ': NO DATA';
-    } else if (status === 'halted') {
-      statusEl.textContent = armLabel + ': ' + (summary.status_label || 'HALTED');
-    } else {
-      statusEl.textContent = armLabel + ': ' + (summary.status_label || 'RUNNING');
-    }
-
-    detailEl.textContent = summary.status_detail || '';
-
-    if (status === 'no_data') {
-      layersEl.textContent = '—';
-      activityEl.textContent = '—';
-      apiEl.textContent = '— / ' + apiLimit.toLocaleString();
-      mtmEl.textContent = '—';
-      mtmEl.className = 'arm-metric-value';
-      return;
-    }
-
-    layersEl.textContent = summary.open_long_layers + ' long / ' + summary.open_short_layers + ' short';
-    activityEl.textContent = summary.scalps_today + ' scalps';
-    apiEl.textContent = (summary.instance_daily_api_count ?? 0).toLocaleString() + ' / ' + apiLimit.toLocaleString();
-
-    const mtm = summary.net_mtm ?? 0;
-    mtmEl.textContent = (mtm >= 0 ? '+' : '') + Number(mtm).toFixed(2);
-    mtmEl.className = 'arm-metric-value' + (mtm > 0.005 ? ' mtm-positive' : mtm < -0.005 ? ' mtm-negative' : '');
-  }
-
-  function renderGrindArmCompareColumn(variantKey, prefix, summary, apiLimit) {
-    const col = document.getElementById('grindArmCompare' + prefix);
-    const haltedBanner = document.getElementById('grind' + prefix + 'HaltedBanner');
-    const statusEl = document.getElementById('grind' + prefix + 'Status');
-    const detailEl = document.getElementById('grind' + prefix + 'Detail');
-    const realisedEl = document.getElementById('grind' + prefix + 'Realised');
-    const layersEl = document.getElementById('grind' + prefix + 'Layers');
-    const activityEl = document.getElementById('grind' + prefix + 'Activity');
-    const apiEl = document.getElementById('grind' + prefix + 'Api');
-    const mtmEl = document.getElementById('grind' + prefix + 'Mtm');
+  function renderGrindArmCompareColumn(variantKey, ringId, summary, apiLimit) {
+    const prefix = variantKey.charAt(0).toUpperCase() + variantKey.slice(1);
+    const col = document.getElementById('grindArmCompare' + prefix + '-' + ringId);
+    const haltedBanner = document.getElementById('grind' + prefix + 'HaltedBanner-' + ringId);
+    const statusEl = document.getElementById('grind' + prefix + 'Status-' + ringId);
+    const detailEl = document.getElementById('grind' + prefix + 'Detail-' + ringId);
+    const realisedEl = document.getElementById('grind' + prefix + 'Realised-' + ringId);
+    const layersEl = document.getElementById('grind' + prefix + 'Layers-' + ringId);
+    const activityEl = document.getElementById('grind' + prefix + 'Activity-' + ringId);
+    const apiEl = document.getElementById('grind' + prefix + 'Api-' + ringId);
+    const mtmEl = document.getElementById('grind' + prefix + 'Mtm-' + ringId);
 
     if (!summary || !statusEl) return;
 
@@ -2245,41 +2252,6 @@
     mtmEl.className = 'grind-arm-metric-value' + grindFmtSignedMtmClass(mtmVal);
   }
 
-  function renderArmInstanceCards(containerId, instances, cards, statusMap) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-    container.innerHTML = instances.map(function(inst) {
-      const card = cards[inst] || {};
-      const conn = card.connection || 'no_data';
-      const isLive = conn === 'live';
-      const hasAlert = (card.alerts || []).length > 0;
-      let cls = 'arm-instance-card';
-      if (!isLive) cls += ' no-data';
-      if (hasAlert) cls += ' has-alert';
-
-      const mtm = card.net_mtm ?? 0;
-      const mtmStr = isLive ? ((mtm >= 0 ? '+' : '') + Number(mtm).toFixed(2)) : '—';
-      const apiStr = isLive ? (card.instance_daily_api_count ?? 0).toLocaleString() : '—';
-      const connLabel = isLive ? 'live' : 'no data';
-      const alertStr = hasAlert ? '<br><span style="color:var(--red)">' + card.alerts[0] + '</span>' : '';
-
-      if (statusMap && statusMap[inst] === 'connection_lost') {
-        document.getElementById('btn-' + inst)?.classList.add('no-data');
-      } else {
-        document.getElementById('btn-' + inst)?.classList.remove('no-data');
-      }
-
-      return '<div class="' + cls + '">' +
-        '<div class="arm-instance-name">' + inst.replace(/_/g, ' ') + '</div>' +
-        '<div class="arm-instance-stat">' +
-          '<strong>' + connLabel + '</strong> · ' +
-          (isLive ? (card.open_long_layers + 'L / ' + card.open_short_layers + 'S') : '—') + '<br>' +
-          'MTM <strong>' + mtmStr + '</strong> · API <strong>' + apiStr + '</strong>' +
-          alertStr +
-        '</div></div>';
-    }).join('');
-  }
-
   function grindFmtNum(val, decimals) {
     if (val === null || val === undefined) return '—';
     return Number(val).toFixed(decimals === undefined ? 0 : decimals);
@@ -2331,7 +2303,9 @@
       else if (reconBad || invariantBad || peerBad) cls += ' has-warn';
 
       const connLabel = isLive ? 'live' : 'no data';
-      const slotLabel = isLive && card.slot ? card.slot : '—';
+      const slotToken = isLive && card.slot ? card.slot : null;
+      const armLabel = slotToken ? grindArmLabel(slotToken) : '—';
+      const slotLabel = slotToken ? (armLabel + ' (' + slotToken + ')') : '—';
       const layersStr = isLive
         ? (grindFmtNum(card.open_layers_long) + ' long / ' + grindFmtNum(card.open_layers_short) + ' short')
         : '—';
@@ -2374,18 +2348,25 @@
 
       document.getElementById('btn-' + inst)?.classList.toggle('no-data', !isLive);
 
+      const layerTable = isLive ? renderGrindLayerTableHtml(card.layers) : '';
+      const pendingHtml = isLive
+        ? (renderGrindPendingLine('long', card) + renderGrindPendingLine('short', card))
+        : '';
+
       return '<div class="' + cls + '">' +
         '<div class="grind-instance-name">' + inst.replace(/_/g, ' ') + '</div>' +
-        '<div class="grind-instance-slot">slot <strong>' + slotLabel + '</strong></div>' +
+        '<div class="grind-instance-slot">' + slotLabel + '</div>' +
         '<div class="grind-instance-stat">' +
           '<strong>' + connLabel + '</strong><br>' +
           'Layers <strong>' + layersStr + '</strong><br>' +
           'Geometry <strong>' + geomStr + '</strong><br>' +
           'Cap legs <strong>' + capStr + '</strong><br>' +
-          '<span class="grind-pnl-label" title="Position profit + swap only; excludes commission (MT5 POSITION_COMMISSION deprecated — commission is deal-attributed only).">MTM</span> <strong' + (mtmClass ? ' class="' + mtmClass.trim() + '"' : '') + '>' + mtmStr + '</strong> · ' +
+          '<span class="grind-pnl-label" title="Position profit + swap only; excludes commission.">MTM</span> <strong' + (mtmClass ? ' class="' + mtmClass.trim() + '"' : '') + '>' + mtmStr + '</strong> · ' +
           '<span class="grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised</span> <strong' + (pnlClass ? ' class="' + pnlClass.trim() + '"' : '') + '>' + pnlStr + '</strong><br>' +
           scalpLine + '<br>' +
           'API <strong>' + apiStr + '</strong>' +
+          layerTable +
+          pendingHtml +
           microLine +
           warnHtml +
         '</div></div>';
@@ -2393,41 +2374,24 @@
   }
 
   function renderAggregate(data) {
-    const apiLimit = data.account_daily_api_limit ?? API_DAILY_LIMIT;
-    const armSummaries = data.arm_summaries || {};
-    const instanceCards = data.instance_cards || {};
-    const instanceStatus = data.instance_status || {};
+    const grindApiLimit = data.grind_api_count_limit ?? API_DAILY_LIMIT;
+    const grindCards = data.grind_cards || {};
+    const grindRings = data.grind_rings || {};
 
     if (Object.prototype.hasOwnProperty.call(data, 'intraday_mae')) {
       renderIntradayMae(data.intraday_mae);
     }
 
-    renderArmCompareColumn('signal', 'Signal', armSummaries.signal, apiLimit);
-    renderArmCompareColumn('dumb', 'Dumb', armSummaries.dumb, apiLimit);
+    GRIND_RING_IDS.forEach(function(ringId) {
+      const ring = grindRings[ringId] || {};
+      const armSummaries = ring.arm_summaries || {};
+      const instances = ring.instances || GRIND_RINGS[ringId].instances;
+      renderGrindArmCompareColumn('opt', ringId, armSummaries.opt, grindApiLimit);
+      renderGrindArmCompareColumn('alt', ringId, armSummaries.alt, grindApiLimit);
+      renderGrindInstanceCards('grindCards-' + ringId, instances, grindCards);
+    });
 
-    const grindArmSummaries = data.grind_arm_summaries || {};
-    const grindApiLimit = grindArmSummaries.opt?.api_count_limit ?? apiLimit;
-    renderGrindArmCompareColumn('opt', 'Opt', grindArmSummaries.opt, grindApiLimit);
-    renderGrindArmCompareColumn('alt', 'Alt', grindArmSummaries.alt, grindApiLimit);
-
-    renderArmInstanceCards('armCardsSignal', SIGNAL_INSTANCES, instanceCards, instanceStatus);
-    renderArmInstanceCards('armCardsDumb', DUMB_INSTANCES, instanceCards, instanceStatus);
-    renderGrindInstanceCards('armCardsGrind', GRIND_INSTANCES, data.grind_cards || {});
-
-    // --- System alerts banner ---
-    const banner = document.getElementById('systemAlertBanner');
-    const alerts = data.system_alerts || [];
-    if (alerts.length > 0) {
-      banner.style.display = 'flex';
-      document.getElementById('systemAlertCount').textContent =
-        alerts.length + ' system alert' + (alerts.length === 1 ? '' : 's');
-      const listEl = document.getElementById('systemAlertList');
-      listEl.innerHTML = alerts.map(a =>
-        '<div class="alert-line">[' + a.instance + '] ' + a.message + '</div>'
-      ).join('');
-    } else {
-      banner.style.display = 'none';
-    }
+    document.getElementById('systemAlertBanner').style.display = 'none';
 
     // --- Macro exposure widget ---
     const exposure = data.net_exposure || {};
@@ -2448,43 +2412,6 @@
       });
     }
 
-    // --- Account-wide API request gauge (V2 shared GV counter) ---
-    applyAccountApiGauge(
-      data.account_daily_api_count ?? 0,
-      apiLimit,
-      1800,
-      'accountApiCard',
-      'accountApiCount',
-      'accountApiBar',
-      'accountApiSub',
-      'accountApiWarnBadge'
-    );
-
-    // --- Best working quotes widget (full book: Layer 0 + add_next + exits) ---
-    const quotes = data.full_best_quotes || {};
-    const qSymbols = Object.keys(quotes);
-    const qContainer = document.getElementById('quotes-container');
-    if (qContainer) {
-      qContainer.innerHTML = '';
-      qSymbols.forEach(sym => {
-        const q = quotes[sym];
-        const conflictSuffix = q.direction_conflict
-          ? ' <span style="color:var(--amber)">⚠ mixed direction</span>'
-          : '';
-        const bidStr = q.best_bid !== null ? q.best_bid.toFixed(5) : '—';
-        const offerStr = q.best_offer !== null ? q.best_offer.toFixed(5) : '—';
-        let spreadStr = '—';
-        if (q.best_bid !== null && q.best_offer !== null) {
-          const spreadPips = ((q.best_offer - q.best_bid) / 0.0001).toFixed(1);
-          spreadStr = spreadPips + ' pips';
-        }
-        qContainer.innerHTML += '<div class="quote-row">' +
-          '<span class="quote-symbol">' + sym + conflictSuffix + '</span>' +
-          '<span class="quote-prices">bid ' + bidStr + ' / offer ' + offerStr + '</span>' +
-          '<span class="quote-spread">' + spreadStr + '</span>' +
-          '</div>';
-      });
-    }
   }
 </script>
 

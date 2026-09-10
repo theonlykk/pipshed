@@ -40,18 +40,6 @@ REDIS_TTL_SECONDS = 300  # 5 minutes — if VPS drops, key expires
 SCALP_HISTORY_LIST_MAX = 2999  # LTRIM 0..2999 => 3000 entries per instance
 SCALP_HISTORY_TTL_SECONDS = 604800  # 7 days — matches pod history window
 
-ALL_INSTANCES = [
-    "MM_LONG_V2",
-    "MM_SHORT_V2",
-    "MM_LONG_EURUSD",
-    "MM_SHORT_EURUSD",
-    "MM_LONG_EURGBP",
-    "MM_SHORT_EURGBP",
-]
-
-DUMB_INSTANCES = [f"{inst}_DUMB" for inst in ALL_INSTANCES]
-TRACKED_INSTANCES = ALL_INSTANCES + DUMB_INSTANCES
-
 GRIND_INSTANCES = [
     "GRIND_GBPUSD_OPT",
     "GRIND_GBPUSD_ALT",
@@ -59,19 +47,30 @@ GRIND_INSTANCES = [
     "GRIND_EURUSD_ALT",
     "GRIND_EURGBP_OPT",
     "GRIND_EURGBP_ALT",
+    "GRIND_AUDCAD_OPT",
+    "GRIND_AUDCAD_ALT",
+    "GRIND_AUDCHF_OPT",
+    "GRIND_AUDCHF_ALT",
+    "GRIND_CADCHF_OPT",
+    "GRIND_CADCHF_ALT",
 ]
 
-GRIND_OPT_INSTANCES = [
-    "GRIND_GBPUSD_OPT",
-    "GRIND_EURUSD_OPT",
-    "GRIND_EURGBP_OPT",
-]
+GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_OPT")]
+GRIND_ALT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_ALT")]
 
-GRIND_ALT_INSTANCES = [
-    "GRIND_GBPUSD_ALT",
-    "GRIND_EURUSD_ALT",
-    "GRIND_EURGBP_ALT",
-]
+# Ring membership — one edit here adds a ring everywhere downstream.
+GRIND_RINGS = {
+    "eur_gbp_usd": {
+        "label": "EUR / GBP / USD",
+        "symbols": ["GBPUSD", "EURUSD", "EURGBP"],
+    },
+    "aud_cad_chf": {
+        "label": "AUD / CAD / CHF",
+        "symbols": ["AUDCAD", "AUDCHF", "CADCHF"],
+    },
+}
+
+GRIND_DEFAULT_INSTANCE = GRIND_INSTANCES[0]
 
 GRIND_API_DAILY_LIMIT = 2000
 
@@ -91,9 +90,10 @@ def _broker_today():
     return datetime.now(ZoneInfo(BROKER_TIMEZONE)).strftime("%Y-%m-%d")
 
 
-def _instance_arm(instance_id):
-    """Tag instance as signal or dumb arm via the _DUMB suffix."""
-    return "dumb" if instance_id.endswith("_DUMB") else "signal"
+def _grind_instances_for_ring(ring_id):
+    """Return GRIND_INSTANCES whose symbol belongs to the given ring."""
+    symbols = frozenset(GRIND_RINGS[ring_id]["symbols"])
+    return [inst for inst in GRIND_INSTANCES if inst.split("_")[1] in symbols]
 
 
 def _round_mae_float(value):
@@ -149,12 +149,11 @@ def _mae_from_engine_state(es, instance_id):
 
 
 def _read_intraday_mae():
-    """Account-level intraday MAE from one live instance (prefer signal arm).
+    """Account-level intraday MAE from one live grind instance.
 
     MAE fields are identical across a running arm — never sum across the fleet.
     """
-    # Prefer signal-arm instances; fall back to dumb if none are live.
-    for inst in ALL_INSTANCES + DUMB_INSTANCES:
+    for inst in GRIND_INSTANCES:
         raw = r.get(f"fxmatrix:state:{inst}")
         if raw is None:
             continue
@@ -162,119 +161,9 @@ def _read_intraday_mae():
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
-        return _mae_from_engine_state(data.get("engine_state", {}), inst)
+        es = data.get("engine_state", data)
+        return _mae_from_engine_state(es if isinstance(es, dict) else {}, inst)
     return _empty_intraday_mae()
-
-
-def _count_history_for_date(redis_key, selected_date):
-    """Count history list entries whose trade/close date matches selected_date."""
-    raw_list = r.lrange(redis_key, 0, -1)
-    count = 0
-    for item in raw_list:
-        record = json.loads(item)
-        if _closed_record_date(record) == selected_date:
-            count += 1
-    return count
-
-
-def _parse_ta_signal(msg):
-    """Extract signal= value from a TA | CRITICAL alert, if present."""
-    upper = msg.upper()
-    marker = "SIGNAL="
-    idx = upper.find(marker)
-    if idx < 0:
-        return None
-    tail = msg[idx + len(marker):].strip()
-    for sep in (" ", "|"):
-        if sep in tail:
-            tail = tail.split(sep)[0]
-    return tail.strip() or None
-
-
-def _classify_alert_messages(messages):
-    """Return (is_halted, halt_kind, halt_detail) from system alert strings."""
-    # These must match the EA's ACTUAL alert prefixes (fxmatrix: CB|CRITICAL,
-    # TA|CRITICAL, HALT|, BCC|). Do NOT invent tokens; verify against the EA
-    # source when alert formats change.
-    halt_cb = False
-    halt_ta = False
-    halt_instance = False
-    cb_detail = ""
-    ta_detail = ""
-    halt_detail = ""
-
-    for msg in messages:
-        upper = msg.upper()
-        if "BCC |" in upper:
-            continue
-
-        if "CB | CRITICAL" in upper:
-            halt_cb = True
-            if not cb_detail:
-                cb_detail = msg
-        elif "TA | CRITICAL" in upper:
-            halt_ta = True
-            signal = _parse_ta_signal(msg)
-            if not ta_detail:
-                ta_detail = f"Trigger A: {signal}" if signal else msg
-        elif "HALT |" in upper:
-            halt_instance = True
-            if not halt_detail:
-                halt_detail = msg
-
-    is_halted = halt_cb or halt_ta or halt_instance
-
-    if halt_cb:
-        return is_halted, "cb", cb_detail or "Equity floor circuit breaker"
-    if halt_ta:
-        return is_halted, "ta", ta_detail or "Trigger A anomaly"
-    if halt_instance:
-        return is_halted, "halt", halt_detail or "Instance halted"
-    return False, None, ""
-
-
-def _summarize_instance_state(instance_id, raw_payload, broker_today):
-    """Build per-instance card fields from a live redis payload (or None)."""
-    if raw_payload is None:
-        return {
-            "instance_id": instance_id,
-            "arm": _instance_arm(instance_id),
-            "connection": "no_data",
-            "open_long_layers": 0,
-            "open_short_layers": 0,
-            "net_mtm": 0.0,
-            "instance_daily_api_count": 0,
-            "alerts": [],
-        }
-
-    data = json.loads(raw_payload)
-    es = data.get("engine_state", {})
-    open_long = 0
-    open_short = 0
-    net_mtm = 0.0
-
-    for pod in data.get("active_pods", {}).values():
-        net_mtm += float(pod.get("net_pnl") or 0.0)
-        for layer in pod.get("layer_detail", []):
-            direction = layer.get("direction", 0)
-            if direction == 1:
-                open_long += 1
-            elif direction == -1:
-                open_short += 1
-
-    inst_api = es.get("instance_daily_api_count")
-    inst_api_count = int(inst_api) if isinstance(inst_api, (int, float)) else 0
-
-    return {
-        "instance_id": instance_id,
-        "arm": _instance_arm(instance_id),
-        "connection": "live",
-        "open_long_layers": open_long,
-        "open_short_layers": open_short,
-        "net_mtm": round(net_mtm, 2),
-        "instance_daily_api_count": inst_api_count,
-        "alerts": list(data.get("system_alerts", [])),
-    }
 
 
 def _grind_bool(value):
@@ -284,6 +173,83 @@ def _grind_bool(value):
     if isinstance(value, str):
         return value.lower() == "true"
     return False
+
+
+def _grind_price_or_none(value):
+    """Parse a heartbeat price field — absent stays None, never zero."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 5)
+    return None
+
+
+def _grind_pending_side_fields(data, side):
+    """Resting-entry tracker prices and broker count for one side."""
+    l0_key = f"l0_pending_{side}"
+    add_key = f"add_pending_{side}"
+    resting_key = f"resting_entries_{side}"
+
+    l0 = _grind_price_or_none(data.get(l0_key)) if l0_key in data else None
+    add = _grind_price_or_none(data.get(add_key)) if add_key in data else None
+
+    resting = None
+    if resting_key in data:
+        raw = data.get(resting_key)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            resting = int(raw)
+
+    drift = None
+    if resting is not None:
+        expected = (1 if l0 is not None else 0) + (1 if add is not None else 0)
+        if resting != expected:
+            drift = {
+                "side": side,
+                "expected": expected,
+                "actual": resting,
+            }
+
+    return {
+        f"l0_pending_{side}": l0,
+        f"add_pending_{side}": add,
+        f"resting_entries_{side}": resting,
+        f"resting_drift_{side}": drift,
+    }
+
+
+def _grind_layers_from_payload(data):
+    """Parse per-layer detail from heartbeat — missing/absent stays None."""
+    layers_raw = data.get("layers")
+    if not isinstance(layers_raw, list):
+        return None
+
+    layers = []
+    for layer in layers_raw:
+        if not isinstance(layer, dict):
+            continue
+        idx = layer.get("layer_index")
+        side = layer.get("side")
+        entry = _grind_price_or_none(layer.get("entry_price"))
+        exit_target = _grind_price_or_none(layer.get("exit_target"))
+        has_exit_order = layer.get("has_exit_order")
+        has_exit_position = layer.get("has_exit_position")
+        if isinstance(has_exit_order, str):
+            has_exit_order = has_exit_order.lower() == "true"
+        if isinstance(has_exit_position, str):
+            has_exit_position = has_exit_position.lower() == "true"
+        if not isinstance(has_exit_order, bool):
+            has_exit_order = None
+        if not isinstance(has_exit_position, bool):
+            has_exit_position = None
+        layers.append({
+            "layer_index": int(idx) if isinstance(idx, (int, float)) and not isinstance(idx, bool) else None,
+            "side": side if isinstance(side, str) and side else None,
+            "entry_price": entry,
+            "exit_target": exit_target,
+            "has_exit_order": has_exit_order,
+            "has_exit_position": has_exit_position,
+        })
+    return layers if layers else None
 
 
 def _summarize_grind_instance_state(instance_id, raw_payload):
@@ -321,6 +287,15 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "exit_penetration_pips_last": None,
         "exit_penetration_pips_mean": None,
         "exit_touch_revert_count": None,
+        "layers": None,
+        "l0_pending_long": None,
+        "l0_pending_short": None,
+        "add_pending_long": None,
+        "add_pending_short": None,
+        "resting_entries_long": None,
+        "resting_entries_short": None,
+        "resting_drift_long": None,
+        "resting_drift_short": None,
     }
     if raw_payload is None:
         return empty
@@ -370,6 +345,9 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
     cap_a_name = data.get("cap_leg_a_name")
     cap_b_name = data.get("cap_leg_b_name")
 
+    long_side = _grind_pending_side_fields(data, "long")
+    short_side = _grind_pending_side_fields(data, "short")
+
     return {
         "instance_id": instance_id,
         "connection": "live",
@@ -403,6 +381,9 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "exit_penetration_pips_last": _float_or_none("exit_penetration_pips_last"),
         "exit_penetration_pips_mean": _float_or_none("exit_penetration_pips_mean"),
         "exit_touch_revert_count": _int_or_none("exit_touch_revert_count"),
+        "layers": _grind_layers_from_payload(data),
+        **long_side,
+        **short_side,
     }
 
 
@@ -416,17 +397,14 @@ def _grind_pnl_contribution(value):
 
 
 def _summarize_grind_arm(group_label, instances, grind_cards):
-    """Aggregate operator-facing totals for one grind variant (OPT or ALT).
-
-    Separate from v2 _summarize_arm — deletable when v2 arms retire.
-    """
+    """Aggregate operator-facing totals for one grind variant (Arm A / Arm B)."""
     open_long = 0
     open_short = 0
     fills_total = 0
     scalps_total = 0
     # MAX not SUM: GRIND_DAILY_API_COUNT (ea/grind_api_counter.mqh) is one shared
-    # GlobalVariable incremented by all six grind instances; each heartbeat
-    # reports the same family-wide count against the 2,000 FTMO limit.
+    # GlobalVariable incremented by all grind instances; each heartbeat reports
+    # the same family-wide count against the 2,000 FTMO limit.
     api_count_max = 0
     net_mtm_total = 0.0
     realised_today_total = 0.0
@@ -551,6 +529,25 @@ def _public_grind_arm_fields(arm):
     return out
 
 
+def _build_grind_ring_summaries(grind_cards):
+    """Per-ring Arm A / Arm B summaries — never pooled across rings."""
+    rings = {}
+    for ring_id, ring_meta in GRIND_RINGS.items():
+        ring_instances = _grind_instances_for_ring(ring_id)
+        opt_instances = [inst for inst in ring_instances if inst.endswith("_OPT")]
+        alt_instances = [inst for inst in ring_instances if inst.endswith("_ALT")]
+        rings[ring_id] = {
+            "label": ring_meta["label"],
+            "symbols": list(ring_meta["symbols"]),
+            "instances": ring_instances,
+            "arm_summaries": {
+                "opt": _summarize_grind_arm("Arm A", opt_instances, grind_cards),
+                "alt": _summarize_grind_arm("Arm B", alt_instances, grind_cards),
+            },
+        }
+    return rings
+
+
 def _apply_no_cache_headers(response):
     """Block browser, proxy, and CDN caching for dynamic unauthenticated responses.
 
@@ -572,76 +569,6 @@ def _apply_no_cache_headers(response):
     return response
 
 
-def _summarize_arm(instances, broker_today):
-    """Aggregate operator-facing totals for one arm (signal or dumb)."""
-    open_long = 0
-    open_short = 0
-    scalps_today = 0
-    fills_today = 0
-    instance_daily_api_count = 0
-    net_mtm = 0.0
-    instances_live = 0
-    all_alerts = []
-
-    for inst in instances:
-        raw = r.get(f"fxmatrix:state:{inst}")
-        card = _summarize_instance_state(inst, raw, broker_today)
-        if card["connection"] != "live":
-            continue
-
-        instances_live += 1
-        open_long += card["open_long_layers"]
-        open_short += card["open_short_layers"]
-        net_mtm += card["net_mtm"]
-        instance_daily_api_count += card["instance_daily_api_count"]
-        all_alerts.extend(card["alerts"])
-
-        scalps_today += _count_history_for_date(
-            f"fxmatrix:scalp_history:{inst}", broker_today
-        )
-        fills_today += _count_history_for_date(
-            f"fxmatrix:closed_history:{inst}", broker_today
-        )
-
-    is_halted, halt_kind, halt_detail = _classify_alert_messages(all_alerts)
-
-    if instances_live == 0:
-        status = "no_data"
-        status_label = "NO DATA"
-        status_detail = "No telemetry received for this arm"
-    elif is_halted and halt_kind == "cb":
-        status = "halted"
-        status_label = "HALTED — circuit breaker"
-        status_detail = halt_detail or "Equity floor circuit breaker (CB | CRITICAL)"
-    elif is_halted and halt_kind == "ta":
-        status = "halted"
-        status_label = "HALTED — trigger A"
-        status_detail = halt_detail or "Trigger A anomaly (TA | CRITICAL)"
-    elif is_halted:
-        status = "halted"
-        status_label = "HALTED — instance halt"
-        status_detail = halt_detail or "Instance halted (HALT |)"
-    else:
-        status = "running"
-        status_label = "RUNNING"
-        status_detail = f"{instances_live}/{len(instances)} instances live"
-
-    return {
-        "arm": _instance_arm(instances[0]) if instances else "unknown",
-        "status": status,
-        "status_label": status_label,
-        "status_detail": status_detail,
-        "open_long_layers": open_long,
-        "open_short_layers": open_short,
-        "fills_today": fills_today,
-        "scalps_today": scalps_today,
-        "instance_daily_api_count": instance_daily_api_count,
-        "net_mtm": round(net_mtm, 2),
-        "instances_live": instances_live,
-        "instances_total": len(instances),
-    }
-
-
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
@@ -655,10 +582,7 @@ def public_grind_status():
             raw_grind = r.get(f"fxmatrix:state:{inst}")
             grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
 
-        grind_arm_summaries = {
-            "opt": _summarize_grind_arm("GRIND OPT", GRIND_OPT_INSTANCES, grind_cards),
-            "alt": _summarize_grind_arm("GRIND ALT", GRIND_ALT_INSTANCES, grind_cards),
-        }
+        grind_rings = _build_grind_ring_summaries(grind_cards)
 
         payload = {
             "generated_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -666,9 +590,17 @@ def public_grind_status():
                 inst: _public_grind_instance_fields(grind_cards[inst])
                 for inst in GRIND_INSTANCES
             },
-            "arms": {
-                "opt": _public_grind_arm_fields(grind_arm_summaries["opt"]),
-                "alt": _public_grind_arm_fields(grind_arm_summaries["alt"]),
+            "rings": {
+                ring_id: {
+                    "label": ring["label"],
+                    "symbols": ring["symbols"],
+                    "instances": ring["instances"],
+                    "arms": {
+                        "opt": _public_grind_arm_fields(ring["arm_summaries"]["opt"]),
+                        "alt": _public_grind_arm_fields(ring["arm_summaries"]["alt"]),
+                    },
+                }
+                for ring_id, ring in grind_rings.items()
             },
         }
         response = jsonify(payload)
@@ -699,7 +631,7 @@ def telemetry_push():
 
 @app.route("/api/telemetry/live", methods=["GET"])
 def telemetry_live():
-    instance_id = request.args.get("instance", "MM_LONG_V2")
+    instance_id = request.args.get("instance", GRIND_DEFAULT_INSTANCE)
     redis_key = f"fxmatrix:state:{instance_id}"
 
     raw = r.get(redis_key)
@@ -816,7 +748,7 @@ def _group_closed_records(records):
 
 @app.route("/api/telemetry/closed", methods=["GET"])
 def telemetry_closed():
-    instance_id = request.args.get("instance", "MM_LONG_V2")
+    instance_id = request.args.get("instance", GRIND_DEFAULT_INSTANCE)
     date_filter = request.args.get("date")
     try:
         page = max(1, int(request.args.get("page", 1)))
@@ -941,7 +873,7 @@ def _paginate_history_records(records, date_filter, page, per_page, transform=No
 
 @app.route("/api/telemetry/scalps", methods=["GET"])
 def telemetry_scalps():
-    instance_id = request.args.get("instance", "MM_LONG_V2")
+    instance_id = request.args.get("instance", GRIND_DEFAULT_INSTANCE)
     date_filter = request.args.get("date")
     try:
         page = max(1, int(request.args.get("page", 1)))
@@ -971,11 +903,11 @@ def telemetry_scalps():
 
 
 def _collect_closed_history_meta():
-    """Scan all instance lists — dates present, earliest retained, list lengths."""
+    """Scan grind instance closed-history lists — dates, retention, list lengths."""
     all_dates = set()
     per_instance = {}
 
-    for inst in TRACKED_INSTANCES:
+    for inst in GRIND_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:closed_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         dates = {
@@ -995,11 +927,11 @@ def _collect_closed_history_meta():
 
 
 def _collect_scalp_history_meta():
-    """Scan all instance scalp lists — dates present, earliest retained, list lengths."""
+    """Scan grind instance scalp lists — dates present, earliest retained, list lengths."""
     all_dates = set()
     per_instance = {}
 
-    for inst in TRACKED_INSTANCES:
+    for inst in GRIND_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         dates = {
@@ -1028,7 +960,7 @@ def telemetry_today_scalps():
     available_dates, earliest_date, retention = _collect_scalp_history_meta()
     all_records = []
 
-    for inst in TRACKED_INSTANCES:
+    for inst in GRIND_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         day_records = [
@@ -1064,7 +996,7 @@ def telemetry_today_closed():
     available_dates, earliest_date, retention = _collect_closed_history_meta()
     all_records = []
 
-    for inst in TRACKED_INSTANCES:
+    for inst in GRIND_INSTANCES:
         raw_list = r.lrange(f"fxmatrix:closed_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         day_records = [
@@ -1126,57 +1058,21 @@ def _grind_exposure_symbol(instance_id):
 
 
 def _accumulate_grind_net_exposure(net_exposure, instance_id, data):
-    """Add grind signed lots to net_exposure — separate from v2 layer_detail path."""
+    """Add grind signed lots to net_exposure."""
     symbol = _grind_exposure_symbol(instance_id)
     if symbol is None:
         return
     long_count = _grind_open_layer_count(data.get("open_layers_long"))
     short_count = _grind_open_layer_count(data.get("open_layers_short"))
-    # Match v2: direction 1 -> +lot_size, direction -1 -> -lot_size
     signed_lots = (long_count - short_count) * GRIND_ASSUMED_LOT_SIZE
     net_exposure[symbol] = net_exposure.get(symbol, 0.0) + signed_lots
 
 
 @app.route("/api/telemetry/open_positions", methods=["GET"])
 def telemetry_open_positions():
-    """Cross-instance snapshot of every pod with open layers."""
+    """Cross-instance snapshot of grind instances with open layers."""
     positions = []
     instance_status = {}
-
-    for inst in TRACKED_INSTANCES:
-        raw = r.get(f"fxmatrix:state:{inst}")
-        if raw is None:
-            instance_status[inst] = "connection_lost"
-            continue
-
-        instance_status[inst] = "live"
-        data = json.loads(raw)
-        pods = data.get("active_pods", {})
-
-        for symbol, pod in pods.items():
-            layer_count = pod.get("layers", 0)
-            if layer_count <= 0:
-                continue
-
-            layer_detail = pod.get("layer_detail", [])
-            direction_int = layer_detail[0].get("direction") if layer_detail else None
-            if direction_int == 1:
-                direction = "LONG"
-            elif direction_int == -1:
-                direction = "SHORT"
-            else:
-                direction = "—"
-
-            avg_entry = layer_detail[0].get("entry_price") if layer_detail else None
-
-            positions.append({
-                "instance_id": inst,
-                "instrument": symbol,
-                "direction": direction,
-                "avg_entry_price": avg_entry,
-                "layers": layer_count,
-                "net_pnl": pod.get("net_pnl"),
-            })
 
     for inst in GRIND_INSTANCES:
         raw = r.get(f"fxmatrix:state:{inst}")
@@ -1233,168 +1129,52 @@ def telemetry_open_positions():
         "positions": positions,
         "total": len(positions),
         "instance_status": instance_status,
-        "tracked_v2_count": len(TRACKED_INSTANCES),
         "tracked_grind_count": len(GRIND_INSTANCES),
-        "tracked_total_count": len(TRACKED_INSTANCES) + len(GRIND_INSTANCES),
+        "tracked_total_count": len(GRIND_INSTANCES),
     }), 200
 
 
 @app.route("/api/telemetry/aggregate", methods=["GET"])
 def telemetry_aggregate():
-    instances = TRACKED_INSTANCES
-    broker_today = _broker_today()
-    net_exposure = {}       # symbol -> net signed lots (sum of direction * lot_size)
-    alerts = []              # [{instance, message, arm}, ...]
-    instance_status = {}     # instance -> "live" | "connection_lost"
-    instance_cards = {}    # instance -> per-instance summary for grouped cards
-    best_quotes = {}  # symbol -> {"best_bid": float|None, "best_offer": float|None}
-    full_best_quotes = {}  # symbol -> {"best_bid", "best_offer", "direction_conflict"}
-    account_daily_api_count = 0
-    account_daily_api_warning = False
-    # Account-level MAE: capture from the first live instance only (SIGNAL
-    # instances are listed first in TRACKED_INSTANCES). Never sum these.
+    net_exposure = {}
+    instance_status = {}
+    grind_api_count_max = 0
     intraday_mae = None
-
-    for inst in instances:
-        raw = r.get(f"fxmatrix:state:{inst}")
-        card = _summarize_instance_state(inst, raw, broker_today)
-        instance_cards[inst] = card
-
-        if raw is None:
-            instance_status[inst] = "connection_lost"
-            continue
-
-        data = json.loads(raw)
-        instance_status[inst] = "live"
-        arm = _instance_arm(inst)
-
-        es = data.get("engine_state", {})
-        if intraday_mae is None:
-            intraday_mae = _mae_from_engine_state(es, inst)
-        api_count = es.get("account_daily_api_count")
-        if isinstance(api_count, (int, float)):
-            account_daily_api_count = max(account_daily_api_count, int(api_count))
-        if es.get("account_daily_api_warning") is True:
-            account_daily_api_warning = True
-
-        pods = data.get("active_pods", {})
-        for symbol, pod in pods.items():
-            for layer in pod.get("layer_detail", []):
-                direction = layer.get("direction", 0)
-                lot = layer.get("lot_size", 0.0)
-                net_exposure[symbol] = net_exposure.get(symbol, 0.0) + (direction * lot)
-
-            layers = pod.get("layer_detail", [])
-            directions = set(
-                layer.get("direction")
-                for layer in layers
-                if layer.get("direction") is not None
-            )
-
-            if symbol not in full_best_quotes:
-                full_best_quotes[symbol] = {
-                    "best_bid": None,
-                    "best_offer": None,
-                    "direction_conflict": False,
-                }
-
-            if len(directions) > 1:
-                full_best_quotes[symbol]["direction_conflict"] = True
-            else:
-                slot_direction = next(iter(directions), None)
-                working = data.get("working_orders", {}).get(symbol, {})
-
-                l0_bid = working.get("layer0_bid_price")
-                l0_offer = working.get("layer0_offer_price")
-                if l0_bid is not None:
-                    cur = full_best_quotes[symbol]["best_bid"]
-                    if cur is None or l0_bid > cur:
-                        full_best_quotes[symbol]["best_bid"] = l0_bid
-                if l0_offer is not None:
-                    cur = full_best_quotes[symbol]["best_offer"]
-                    if cur is None or l0_offer < cur:
-                        full_best_quotes[symbol]["best_offer"] = l0_offer
-
-                if slot_direction is not None:
-                    add_price = working.get("add_next_price")
-                    if add_price is not None:
-                        if slot_direction == 1:
-                            cur = full_best_quotes[symbol]["best_bid"]
-                            if cur is None or add_price > cur:
-                                full_best_quotes[symbol]["best_bid"] = add_price
-                        elif slot_direction == -1:
-                            cur = full_best_quotes[symbol]["best_offer"]
-                            if cur is None or add_price < cur:
-                                full_best_quotes[symbol]["best_offer"] = add_price
-
-                    for exit_order in working.get("exit_orders", []):
-                        exit_price = exit_order.get("price")
-                        if exit_price is None:
-                            continue
-                        if slot_direction == 1:
-                            cur = full_best_quotes[symbol]["best_offer"]
-                            if cur is None or exit_price < cur:
-                                full_best_quotes[symbol]["best_offer"] = exit_price
-                        elif slot_direction == -1:
-                            cur = full_best_quotes[symbol]["best_bid"]
-                            if cur is None or exit_price > cur:
-                                full_best_quotes[symbol]["best_bid"] = exit_price
-
-        working = data.get("working_orders", {})
-        for symbol, quote in working.items():
-            if symbol not in best_quotes:
-                best_quotes[symbol] = {"best_bid": None, "best_offer": None}
-            bid = quote.get("layer0_bid_price")
-            offer = quote.get("layer0_offer_price")
-            if bid is not None:
-                if best_quotes[symbol]["best_bid"] is None or bid > best_quotes[symbol]["best_bid"]:
-                    best_quotes[symbol]["best_bid"] = bid
-            if offer is not None:
-                if best_quotes[symbol]["best_offer"] is None or offer < best_quotes[symbol]["best_offer"]:
-                    best_quotes[symbol]["best_offer"] = offer
-
-        for msg in data.get("system_alerts", []):
-            alerts.append({"instance": inst, "arm": arm, "message": msg})
-
-    for inst in GRIND_INSTANCES:
-        raw_grind = r.get(f"fxmatrix:state:{inst}")
-        if raw_grind is None:
-            continue
-        try:
-            grind_data = json.loads(raw_grind)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-        _accumulate_grind_net_exposure(net_exposure, inst, grind_data)
-
-    arm_summaries = {
-        "signal": _summarize_arm(ALL_INSTANCES, broker_today),
-        "dumb": _summarize_arm(DUMB_INSTANCES, broker_today),
-    }
 
     grind_cards = {}
     for inst in GRIND_INSTANCES:
         raw_grind = r.get(f"fxmatrix:state:{inst}")
         grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
+        if raw_grind is None:
+            instance_status[inst] = "connection_lost"
+            continue
 
-    grind_arm_summaries = {
-        "opt": _summarize_grind_arm("GRIND OPT", GRIND_OPT_INSTANCES, grind_cards),
-        "alt": _summarize_grind_arm("GRIND ALT", GRIND_ALT_INSTANCES, grind_cards),
-    }
+        instance_status[inst] = "live"
+        try:
+            grind_data = json.loads(raw_grind)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+
+        if intraday_mae is None:
+            es = grind_data.get("engine_state", grind_data)
+            intraday_mae = _mae_from_engine_state(es if isinstance(es, dict) else {}, inst)
+
+        api_val = grind_data.get("api_count")
+        if isinstance(api_val, (int, float)) and not isinstance(api_val, bool):
+            grind_api_count_max = max(grind_api_count_max, int(api_val))
+
+        _accumulate_grind_net_exposure(net_exposure, inst, grind_data)
+
+    grind_rings = _build_grind_ring_summaries(grind_cards)
 
     return jsonify({
         "net_exposure": net_exposure,
-        "system_alerts": alerts,
         "instance_status": instance_status,
-        "instance_cards": instance_cards,
-        "arm_summaries": arm_summaries,
-        "best_quotes": best_quotes,
-        "full_best_quotes": full_best_quotes,
-        "account_daily_api_count": account_daily_api_count,
-        "account_daily_api_warning": account_daily_api_warning,
-        "account_daily_api_limit": 2000,
+        "grind_api_count": grind_api_count_max if grind_api_count_max else None,
+        "grind_api_count_limit": GRIND_API_DAILY_LIMIT,
         "intraday_mae": intraday_mae or _empty_intraday_mae(),
         "grind_cards": grind_cards,
-        "grind_arm_summaries": grind_arm_summaries,
+        "grind_rings": grind_rings,
     }), 200
 
 

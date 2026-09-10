@@ -1181,7 +1181,7 @@
     <div class="equity-block">
       <div class="card-label">Balance</div>
       <div class="card-value neutral" id="balance">—</div>
-      <div class="card-sub" id="marginLevel">Margin: —</div>
+      <div class="card-sub" id="balanceSource">—</div>
     </div>
     <div class="equity-divider"></div>
     <div class="drawdown-bar-wrap">
@@ -1444,6 +1444,58 @@
     const n = Number(val);
     const prefix = n < 0 ? '-$' : '$';
     return prefix + fmt(Math.abs(n));
+  }
+
+  function renderGlobalAccountMetrics(metrics) {
+    const eqEl = document.getElementById('equity');
+    const balEl = document.getElementById('balance');
+    const timeEl = document.getElementById('equityTime');
+    const sourceEl = document.getElementById('balanceSource');
+    const ddBar = document.getElementById('ddBar');
+    const ddPct = document.getElementById('ddPct');
+
+    if (!metrics) {
+      eqEl.textContent = '—';
+      eqEl.className = 'card-value';
+      balEl.textContent = '—';
+      timeEl.textContent = '—';
+      if (sourceEl) sourceEl.textContent = '—';
+      ddBar.style.width = '0%';
+      ddPct.textContent = '—';
+      return;
+    }
+
+    const eq = metrics.equity;
+    const bal = metrics.balance;
+
+    if (eq === null || eq === undefined) {
+      eqEl.textContent = '—';
+      eqEl.className = 'card-value';
+    } else {
+      eqEl.textContent = fmtMoney(eq);
+      eqEl.className = 'card-value ' + (
+        bal !== null && bal !== undefined && eq >= bal ? 'positive' : 'negative'
+      );
+    }
+
+    balEl.textContent = (bal === null || bal === undefined) ? '—' : fmtMoney(bal);
+    timeEl.textContent = metrics.timestamp || '—';
+    if (sourceEl) {
+      sourceEl.textContent = metrics.source_instance
+        ? ('via ' + metrics.source_instance.replace(/_/g, ' '))
+        : '—';
+    }
+
+    if (bal !== null && bal !== undefined && eq !== null && eq !== undefined && bal > 0) {
+      const dd = Math.max(0, (bal - eq) / bal * 100);
+      const pct = Math.min(dd, 10);
+      ddBar.style.width = pct * 10 + '%';
+      ddBar.style.background = dd < 1 ? 'var(--green)' : dd < 3 ? 'var(--amber)' : 'var(--red)';
+      ddPct.textContent = fmt(dd, 2) + '% drawdown';
+    } else {
+      ddBar.style.width = '0%';
+      ddPct.textContent = '—';
+    }
   }
 
   function renderIntradayMae(mae) {
@@ -1803,27 +1855,6 @@
 
     badge.className = 'status-badge live';
     statusTx.textContent = 'Live';
-
-    // Equity / Balance
-    const eq  = data.account_metrics?.equity  ?? 0;
-    const bal = data.account_metrics?.balance  ?? 0;
-    const ml  = data.account_metrics?.margin_level_pct ?? 0;
-    const dd  = bal > 0 ? Math.max(0, (bal - eq) / bal * 100) : 0;
-
-    const eqEl = document.getElementById('equity');
-    eqEl.textContent = '$' + fmt(eq);
-    eqEl.className = 'card-value ' + (eq >= bal ? 'positive' : 'negative');
-
-    document.getElementById('balance').textContent    = '$' + fmt(bal);
-    document.getElementById('marginLevel').textContent = 'Margin level: ' + fmt(ml, 1) + '%';
-    document.getElementById('equityTime').textContent  = data.timestamp ?? '—';
-
-    // Drawdown bar
-    const ddBar = document.getElementById('ddBar');
-    const pct   = Math.min(dd, 10);
-    ddBar.style.width      = pct * 10 + '%';
-    ddBar.style.background = dd < 1 ? 'var(--green)' : dd < 3 ? 'var(--amber)' : 'var(--red)';
-    document.getElementById('ddPct').textContent = fmt(dd, 2) + '% drawdown';
 
     const instanceId = data.instance_id ?? currentInstance;
     renderGrindPods(data);
@@ -2316,6 +2347,8 @@
            grindFmtNum(card.cap_leg_a, 2) + '/' + grindFmtNum(card.cap_leg_b, 2))
         : '—';
 
+      const balStr = isLive ? fmtMoney(card.account_balance) : '—';
+      const eqStr = isLive ? fmtMoney(card.account_equity) : '—';
       const mtmStr = isLive ? grindFmtSigned(card.net_mtm) : '—';
       const pnlStr = isLive ? grindFmtSigned(card.realised_pnl_today) : '—';
       const mtmClass = isLive ? grindFmtSignedMtmClass(card.net_mtm) : '';
@@ -2361,6 +2394,7 @@
           'Layers <strong>' + layersStr + '</strong><br>' +
           'Geometry <strong>' + geomStr + '</strong><br>' +
           'Cap legs <strong>' + capStr + '</strong><br>' +
+          'Balance <strong>' + balStr + '</strong> · Equity <strong>' + eqStr + '</strong><br>' +
           '<span class="grind-pnl-label" title="Position profit + swap only; excludes commission.">MTM</span> <strong' + (mtmClass ? ' class="' + mtmClass.trim() + '"' : '') + '>' + mtmStr + '</strong> · ' +
           '<span class="grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised</span> <strong' + (pnlClass ? ' class="' + pnlClass.trim() + '"' : '') + '>' + pnlStr + '</strong><br>' +
           scalpLine + '<br>' +
@@ -2377,6 +2411,8 @@
     const grindApiLimit = data.grind_api_count_limit ?? API_DAILY_LIMIT;
     const grindCards = data.grind_cards || {};
     const grindRings = data.grind_rings || {};
+
+    renderGlobalAccountMetrics(data.global_account_metrics || null);
 
     if (Object.prototype.hasOwnProperty.call(data, 'intraday_mae')) {
       renderIntradayMae(data.intraday_mae);

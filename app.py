@@ -18,7 +18,7 @@ Routes:
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import redis
@@ -71,6 +71,11 @@ GRIND_RINGS = {
 }
 
 GRIND_DEFAULT_INSTANCE = GRIND_INSTANCES[0]
+
+GRIND_HEARTBEAT_INTERVAL_SECONDS = int(
+    os.environ.get("GRIND_HEARTBEAT_INTERVAL_SECONDS", "10")
+)
+GRIND_ACCOUNT_METRICS_MAX_AGE_SECONDS = GRIND_HEARTBEAT_INTERVAL_SECONDS * 2
 
 GRIND_API_DAILY_LIMIT = 2000
 
@@ -148,11 +153,39 @@ def _mae_from_engine_state(es, instance_id):
     return mae
 
 
-def _read_intraday_mae():
-    """Account-level intraday MAE from one live grind instance.
+def _parse_grind_payload_timestamp(data):
+    """Parse ISO timestamp from a grind heartbeat, or None if absent/invalid."""
+    ts = data.get("timestamp")
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
-    MAE fields are identical across a running arm — never sum across the fleet.
+
+def _grind_money_field(data, key):
+    """Extract a money field from flat grind payload — null stays None."""
+    val = data.get(key)
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return round(float(val), 2)
+    return None
+
+
+def _read_global_account_metrics():
+    """Account-level balance/equity/MAE from the freshest lease-holding heartbeat.
+
+    Scans all grind instances for a non-null account_balance. Skips payloads
+    whose timestamp is older than two heartbeat intervals; among fresh records,
+    picks the newest timestamp so a stale first-match does not win.
     """
+    now = datetime.now(ZoneInfo("UTC"))
+    max_age = timedelta(seconds=GRIND_ACCOUNT_METRICS_MAX_AGE_SECONDS)
+    best = None
+    best_ts = None
+
     for inst in GRIND_INSTANCES:
         raw = r.get(f"fxmatrix:state:{inst}")
         if raw is None:
@@ -161,8 +194,42 @@ def _read_intraday_mae():
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
+
+        balance = _grind_money_field(data, "account_balance")
+        if balance is None:
+            continue
+
+        payload_ts = _parse_grind_payload_timestamp(data)
+        if payload_ts is not None and (now - payload_ts) > max_age:
+            continue
+
+        rank_ts = payload_ts or datetime.min.replace(tzinfo=ZoneInfo("UTC"))
+        if best is not None and best_ts is not None and rank_ts <= best_ts:
+            continue
+
         es = data.get("engine_state", data)
-        return _mae_from_engine_state(es if isinstance(es, dict) else {}, inst)
+        ts_out = data.get("timestamp")
+        timestamp_out = ts_out.strip() if isinstance(ts_out, str) and ts_out.strip() else None
+
+        best = {
+            "balance": balance,
+            "equity": _grind_money_field(data, "account_equity"),
+            "source_instance": inst,
+            "timestamp": timestamp_out,
+            "intraday_mae": _mae_from_engine_state(
+                es if isinstance(es, dict) else {}, inst
+            ),
+        }
+        best_ts = rank_ts
+
+    return best
+
+
+def _read_intraday_mae():
+    """Account-level intraday MAE from the global account metrics scan."""
+    global_metrics = _read_global_account_metrics()
+    if global_metrics and global_metrics.get("intraday_mae"):
+        return global_metrics["intraday_mae"]
     return _empty_intraday_mae()
 
 
@@ -296,6 +363,8 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "resting_entries_short": None,
         "resting_drift_long": None,
         "resting_drift_short": None,
+        "account_balance": None,
+        "account_equity": None,
     }
     if raw_payload is None:
         return empty
@@ -382,6 +451,8 @@ def _summarize_grind_instance_state(instance_id, raw_payload):
         "exit_penetration_pips_mean": _float_or_none("exit_penetration_pips_mean"),
         "exit_touch_revert_count": _int_or_none("exit_touch_revert_count"),
         "layers": _grind_layers_from_payload(data),
+        "account_balance": _money_or_none("account_balance"),
+        "account_equity": _money_or_none("account_equity"),
         **long_side,
         **short_side,
     }
@@ -1147,7 +1218,12 @@ def telemetry_aggregate():
     net_exposure = {}
     instance_status = {}
     grind_api_count_max = 0
-    intraday_mae = None
+    global_account_metrics = _read_global_account_metrics()
+    intraday_mae = (
+        global_account_metrics.get("intraday_mae")
+        if global_account_metrics
+        else None
+    )
 
     grind_cards = {}
     for inst in GRIND_INSTANCES:
@@ -1163,10 +1239,6 @@ def telemetry_aggregate():
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
 
-        if intraday_mae is None:
-            es = grind_data.get("engine_state", grind_data)
-            intraday_mae = _mae_from_engine_state(es if isinstance(es, dict) else {}, inst)
-
         api_val = grind_data.get("api_count")
         if isinstance(api_val, (int, float)) and not isinstance(api_val, bool):
             grind_api_count_max = max(grind_api_count_max, int(api_val))
@@ -1180,6 +1252,7 @@ def telemetry_aggregate():
         "instance_status": instance_status,
         "grind_api_count": grind_api_count_max if grind_api_count_max else None,
         "grind_api_count_limit": GRIND_API_DAILY_LIMIT,
+        "global_account_metrics": global_account_metrics,
         "intraday_mae": intraday_mae or _empty_intraday_mae(),
         "grind_cards": grind_cards,
         "grind_rings": grind_rings,

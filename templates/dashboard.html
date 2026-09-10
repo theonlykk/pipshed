@@ -524,6 +524,14 @@
     }
     .mae-block { flex: 1; min-width: 120px; }
     .mae-block-dist { flex: 1.4; min-width: 140px; }
+    .mae-block-primary { flex: 1.6; min-width: 160px; }
+    .mae-block-secondary { flex: 1; min-width: 110px; opacity: 0.92; }
+    .mae-value-md {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
     .mae-label {
       font-size: 11px;
       font-weight: 600;
@@ -1194,14 +1202,14 @@
   </div>
   <div class="card mae-card">
     <div class="mae-headline-row">
-      <div class="mae-block">
-        <div class="mae-label">Intraday Low</div>
-        <div class="mae-value-lg" id="maeEquityLow">—</div>
-        <div class="card-sub" id="maeDayKey">—</div>
-      </div>
-      <div class="mae-block mae-block-dist">
+      <div class="mae-block mae-block-dist mae-block-primary">
         <div class="mae-label">Dist to Floor</div>
         <div class="mae-value-lg mae-dist-value" id="maeDistFloor">—</div>
+        <div class="card-sub" id="maeDayKey">—</div>
+      </div>
+      <div class="mae-block mae-block-secondary">
+        <div class="mae-label">Intraday Low</div>
+        <div class="mae-value-md" id="maeEquityLow">—</div>
       </div>
     </div>
     <div>
@@ -1499,19 +1507,35 @@
   }
 
   function renderIntradayMae(mae) {
-    mae = mae || {};
-    document.getElementById('maeEquityLow').textContent =
-      fmtMoney(mae.mae_equity_low);
-    document.getElementById('maeDayKey').textContent =
-      mae.mae_day_key ? mae.mae_day_key : '—';
-
     const distEl = document.getElementById('maeDistFloor');
-    const dist = mae.mae_equity_low_dist_to_floor;
-    distEl.textContent = fmtMoney(dist);
-    distEl.className = 'mae-value-lg mae-dist-value';
+    const lowEl = document.getElementById('maeEquityLow');
+    const dayEl = document.getElementById('maeDayKey');
+    const swingEl = document.getElementById('maeMtmSwing');
+    const pairsEl = document.getElementById('maePairTroughs');
     const maeCard = document.querySelector('.mae-card');
-    if (maeCard) maeCard.classList.remove('mae-card-critical');
-    if (dist !== null && dist !== undefined) {
+    if (!distEl || !lowEl || !dayEl || !swingEl || !pairsEl) return;
+
+    if (maeCard) {
+      maeCard.classList.remove('mae-card-critical');
+    }
+
+    if (!mae || typeof mae !== 'object') {
+      distEl.textContent = '—';
+      distEl.className = 'mae-value-lg mae-dist-value';
+      lowEl.textContent = '—';
+      dayEl.textContent = '—';
+      swingEl.textContent = '— / —';
+      pairsEl.textContent = 'GBPUSD: — · EURUSD: — · EURGBP: —';
+      return;
+    }
+
+    const dist = mae.mae_equity_low_dist_to_floor;
+    if (dist === null || dist === undefined) {
+      distEl.textContent = '—';
+      distEl.className = 'mae-value-lg mae-dist-value';
+    } else {
+      distEl.textContent = fmtMoney(dist);
+      distEl.className = 'mae-value-lg mae-dist-value';
       if (dist <= 250) {
         distEl.classList.add('mae-dist-critical');
         if (maeCard) maeCard.classList.add('mae-card-critical');
@@ -1522,19 +1546,19 @@
       }
     }
 
-    const trough = mae.mae_open_mtm_trough;
-    const peak = mae.mae_open_mtm_peak;
-    document.getElementById('maeMtmSwing').textContent =
-      fmtMoney(trough) + ' / ' + fmtMoney(peak);
+    lowEl.textContent = fmtMoney(mae.mae_equity_low);
+    dayEl.textContent = mae.mae_day_key ? mae.mae_day_key : '—';
 
-    const pairLine = [
+    swingEl.textContent =
+      fmtMoney(mae.mae_open_mtm_trough) + ' / ' + fmtMoney(mae.mae_open_mtm_peak);
+
+    pairsEl.textContent = [
       ['GBPUSD', mae.mae_pair_mtm_trough_gbpusd],
       ['EURUSD', mae.mae_pair_mtm_trough_eurusd],
       ['EURGBP', mae.mae_pair_mtm_trough_eurgbp],
     ].map(function(pair) {
       return pair[0] + ': ' + fmtMoney(pair[1]);
     }).join(' · ');
-    document.getElementById('maePairTroughs').textContent = pairLine;
   }
 
   // Shared pip derivation — entry/exit/direction based, not gross_pnl
@@ -2412,11 +2436,9 @@
     const grindCards = data.grind_cards || {};
     const grindRings = data.grind_rings || {};
 
-    renderGlobalAccountMetrics(data.global_account_metrics || null);
-
-    if (Object.prototype.hasOwnProperty.call(data, 'intraday_mae')) {
-      renderIntradayMae(data.intraday_mae);
-    }
+    const globalMetrics = data?.global_account_metrics ?? null;
+    renderGlobalAccountMetrics(globalMetrics);
+    renderIntradayMae(globalMetrics?.intraday_mae ?? data?.intraday_mae ?? null);
 
     GRIND_RING_IDS.forEach(function(ringId) {
       const ring = grindRings[ringId] || {};

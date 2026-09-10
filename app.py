@@ -126,7 +126,7 @@ def _empty_intraday_mae():
 
 
 def _mae_from_engine_state(es, instance_id):
-    """Pull account-level MAE from one engine_state. Do not sum across instances."""
+    """Pull account-level MAE from a flat field dict. Do not sum across instances."""
     mae = _empty_intraday_mae()
     if not isinstance(es, dict):
         return mae
@@ -151,6 +151,21 @@ def _mae_from_engine_state(es, instance_id):
         "mae_day_key": day_key.strip() if isinstance(day_key, str) and day_key.strip() else None,
     })
     return mae
+
+
+def _mae_from_grind_payload(data, instance_id):
+    """Pull intraday MAE from grind heartbeat — nested intraday_mae or legacy flat."""
+    if not isinstance(data, dict):
+        return _empty_intraday_mae()
+
+    nested = data.get("intraday_mae")
+    if isinstance(nested, dict):
+        src = nested.get("source_instance")
+        mae_inst = src.strip() if isinstance(src, str) and src.strip() else instance_id
+        return _mae_from_engine_state(nested, mae_inst)
+
+    es = data.get("engine_state", data)
+    return _mae_from_engine_state(es if isinstance(es, dict) else {}, instance_id)
 
 
 def _parse_grind_payload_timestamp(data):
@@ -207,7 +222,6 @@ def _read_global_account_metrics():
         if best is not None and best_ts is not None and rank_ts <= best_ts:
             continue
 
-        es = data.get("engine_state", data)
         ts_out = data.get("timestamp")
         timestamp_out = ts_out.strip() if isinstance(ts_out, str) and ts_out.strip() else None
 
@@ -216,9 +230,7 @@ def _read_global_account_metrics():
             "equity": _grind_money_field(data, "account_equity"),
             "source_instance": inst,
             "timestamp": timestamp_out,
-            "intraday_mae": _mae_from_engine_state(
-                es if isinstance(es, dict) else {}, inst
-            ),
+            "intraday_mae": _mae_from_grind_payload(data, inst),
         }
         best_ts = rank_ts
 

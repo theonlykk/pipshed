@@ -72,6 +72,8 @@ GRIND_RINGS = {
 
 GRIND_DEFAULT_INSTANCE = GRIND_INSTANCES[0]
 
+PUBLIC_GRIND_STATUS_TOKEN = "k7m9p2x4q"
+
 GRIND_HEARTBEAT_INTERVAL_SECONDS = int(
     os.environ.get("GRIND_HEARTBEAT_INTERVAL_SECONDS", "10")
 )
@@ -665,8 +667,21 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
-@app.route("/api/g/k7m9p2x4q/status", methods=["GET"])
-def public_grind_status():
+@app.route(
+    "/api/g/<token>/status",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/status/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_grind_status(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
     try:
         grind_cards = {}
         for inst in GRIND_INSTANCES:

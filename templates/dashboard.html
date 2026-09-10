@@ -1104,6 +1104,49 @@
   </div>
 </div>
 
+<!-- Row 1: Equity vs Balance + Intraday low-water -->
+<div class="grid equity-mae-row" style="margin-bottom:16px">
+  <div class="card equity-card">
+    <div class="equity-block">
+      <div class="card-label">Equity</div>
+      <div class="card-value" id="equity">—</div>
+      <div class="card-sub" id="equityTime">—</div>
+    </div>
+    <div class="equity-divider"></div>
+    <div class="equity-block">
+      <div class="card-label">Balance</div>
+      <div class="card-value neutral" id="balance">—</div>
+      <div class="card-sub" id="balanceSource">—</div>
+    </div>
+    <div class="equity-divider"></div>
+    <div class="drawdown-bar-wrap">
+      <div class="drawdown-label">Drawdown</div>
+      <div class="drawdown-bar-bg">
+        <div class="drawdown-bar-fill" id="ddBar" style="width:0%"></div>
+      </div>
+      <div class="drawdown-pct" id="ddPct">—</div>
+    </div>
+  </div>
+  <div class="card mae-card">
+    <div class="mae-headline-row">
+      <div class="mae-block mae-block-dist mae-block-primary">
+        <div class="mae-label">Dist to Floor</div>
+        <div class="mae-value-lg mae-dist-value" id="maeDistFloor">—</div>
+        <div class="card-sub" id="maeDayKey">—</div>
+      </div>
+      <div class="mae-block mae-block-secondary">
+        <div class="mae-label">Intraday Low</div>
+        <div class="mae-value-md" id="maeEquityLow">—</div>
+      </div>
+    </div>
+    <div>
+      <div class="mae-label">MTM Trough / Peak</div>
+      <div class="mae-mtm-row" id="maeMtmSwing">— / —</div>
+    </div>
+    <div class="mae-pairs-line" id="maePairTroughs">GBPUSD: — · EURUSD: — · EURGBP: —</div>
+  </div>
+</div>
+
 <div class="grind-ring-section" id="grindRing-eur_gbp_usd">
   <div class="instance-group-label">Ring 1 — EUR / GBP / USD</div>
   <div class="grind-arm-compare-strip">
@@ -1193,55 +1236,6 @@
   <div class="grind-cards-section">
     <div class="instance-group-label">Instance cards</div>
     <div class="grind-cards-grid" id="grindCards-aud_cad_chf"></div>
-  </div>
-</div>
-
-<div class="card grind-book-section">
-  <div class="instance-group-label">Broker book (all instances)</div>
-  <div class="grind-book-panel" id="grindBookPositionsPanel">Loading…</div>
-  <div class="grind-book-panel" id="grindBookOrdersPanel">Loading…</div>
-</div>
-
-<!-- Row 1: Equity vs Balance + Intraday low-water -->
-<div class="grid equity-mae-row" style="margin-bottom:16px">
-  <div class="card equity-card">
-    <div class="equity-block">
-      <div class="card-label">Equity</div>
-      <div class="card-value" id="equity">—</div>
-      <div class="card-sub" id="equityTime">—</div>
-    </div>
-    <div class="equity-divider"></div>
-    <div class="equity-block">
-      <div class="card-label">Balance</div>
-      <div class="card-value neutral" id="balance">—</div>
-      <div class="card-sub" id="balanceSource">—</div>
-    </div>
-    <div class="equity-divider"></div>
-    <div class="drawdown-bar-wrap">
-      <div class="drawdown-label">Drawdown</div>
-      <div class="drawdown-bar-bg">
-        <div class="drawdown-bar-fill" id="ddBar" style="width:0%"></div>
-      </div>
-      <div class="drawdown-pct" id="ddPct">—</div>
-    </div>
-  </div>
-  <div class="card mae-card">
-    <div class="mae-headline-row">
-      <div class="mae-block mae-block-dist mae-block-primary">
-        <div class="mae-label">Dist to Floor</div>
-        <div class="mae-value-lg mae-dist-value" id="maeDistFloor">—</div>
-        <div class="card-sub" id="maeDayKey">—</div>
-      </div>
-      <div class="mae-block mae-block-secondary">
-        <div class="mae-label">Intraday Low</div>
-        <div class="mae-value-md" id="maeEquityLow">—</div>
-      </div>
-    </div>
-    <div>
-      <div class="mae-label">MTM Trough / Peak</div>
-      <div class="mae-mtm-row" id="maeMtmSwing">— / —</div>
-    </div>
-    <div class="mae-pairs-line" id="maePairTroughs">GBPUSD: — · EURUSD: — · EURGBP: —</div>
   </div>
 </div>
 
@@ -2987,5 +2981,11 @@ function renderScalps(records) {
 fetchScalps();
 setInterval(fetchScalps, 30000);
 </script>
+
+<div class="card grind-book-section">
+  <div class="instance-group-label">Broker book (all instances)</div>
+  <div class="grind-book-panel" id="grindBookPositionsPanel">Loading…</div>
+  <div class="grind-book-panel" id="grindBookOrdersPanel">Loading…</div>
+</div>
 </body>
 </html>

@@ -1,6 +1,8 @@
 """Local verification for fxgrind panel (no Redis required — in-memory mock)."""
 import json
+import os
 import sys
+
 
 class MockRedis:
     def __init__(self):
@@ -14,27 +16,6 @@ class MockRedis:
 
     def lrange(self, key, start, end):
         return []
-
-
-def sample_v2_payload(api_count=42, net_pnl=123.45):
-    return json.dumps({
-        "engine_state": {
-            "account_daily_api_count": api_count,
-            "account_daily_api_warning": False,
-            "intraday_mae_usd": -50.0,
-        },
-        "active_pods": {
-            "GBPUSD": {
-                "net_pnl": net_pnl,
-                "layer_detail": [
-                    {"direction": 1, "lot_size": 0.1},
-                    {"direction": -1, "lot_size": 0.05},
-                ],
-            }
-        },
-        "working_orders": {},
-        "system_alerts": [],
-    })
 
 
 def sample_grind_payload(halted=False, invariant_ok=True, peer_read_failed=False):
@@ -68,36 +49,45 @@ def sample_grind_payload(halted=False, invariant_ok=True, peer_read_failed=False
 
 
 def main():
-    import os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import app as pipshed
+
+    expected_grind_count = len(pipshed.GRIND_INSTANCES)
+    expected_ring_count = len(pipshed.GRIND_RINGS)
 
     mock = MockRedis()
     pipshed.r = mock
     client = pipshed.app.test_client()
-
-    # Seed one live v2 instance for aggregate regression baseline
-    mock.set("fxmatrix:state:MM_LONG_V2", sample_v2_payload(api_count=42, net_pnl=123.45))
 
     # 4a — no grind data
     resp = client.get("/api/telemetry/aggregate")
     assert resp.status_code == 200
     baseline = resp.get_json()
     grind = baseline.get("grind_cards", {})
-    assert len(grind) == 6
+    assert len(grind) == expected_grind_count
     assert all(c["connection"] == "no_data" for c in grind.values())
     assert "grind_cards" in baseline
-    # existing keys present
+    assert "grind_rings" in baseline
+    assert len(baseline["grind_rings"]) == expected_ring_count
+    for ring_id in pipshed.GRIND_RINGS:
+        ring = baseline["grind_rings"][ring_id]
+        assert ring["arm_summaries"]["opt"]["status"] == "no_data"
+        assert ring["arm_summaries"]["alt"]["status"] == "no_data"
+        ring_instances = pipshed._grind_instances_for_ring(ring_id)
+        assert len(ring["instances"]) == len(ring_instances)
     for key in (
-        "net_exposure", "system_alerts", "instance_status", "instance_cards",
-        "arm_summaries", "best_quotes", "full_best_quotes",
-        "account_daily_api_count", "account_daily_api_warning",
-        "account_daily_api_limit", "intraday_mae",
+        "net_exposure",
+        "instance_status",
+        "grind_api_count",
+        "grind_api_count_limit",
+        "intraday_mae",
     ):
         assert key in baseline, f"missing key {key}"
-    print("4a OK: grind_cards all no_data; existing aggregate keys unchanged")
+    print(
+        f"4a OK: {expected_grind_count} grind_cards all no_data; "
+        f"{expected_ring_count} rings present"
+    )
 
-    baseline_api = baseline["account_daily_api_count"]
     baseline_exposure = dict(baseline["net_exposure"])
     baseline_mae = baseline["intraday_mae"]
 
@@ -127,17 +117,34 @@ def main():
     assert card["peer_read_failed"] is True
     print("4b OK (halted=true): halt/invariant/peer flags correct")
 
-    # 4c — v2 aggregates unchanged with grind present
-    assert data["account_daily_api_count"] == baseline_api
-    assert data["net_exposure"] == baseline_exposure
-    assert data["intraday_mae"] == baseline_mae
-    print("4c OK: account API, net exposure, MAE identical with grind data present")
+    # 4c — grind exposure accumulates; MAE values absent when payload has no MAE fields
+    expected_lots = (2 - 1) * pipshed.GRIND_ASSUMED_LOT_SIZE
+    assert data["net_exposure"].get("GBPUSD") == expected_lots
+    assert data["intraday_mae"]["mae_equity_low"] == baseline_mae["mae_equity_low"]
+    assert data["intraday_mae"]["source_instance"] == "GRIND_GBPUSD_OPT"
+    print(
+        f"4c OK: GBPUSD net exposure {expected_lots} lots; MAE values still absent"
+    )
 
-    # Summariser isolation — v2 summariser untouched
-    v2 = pipshed._summarize_instance_state("MM_LONG_V2", sample_v2_payload(), pipshed._broker_today())
-    assert v2["open_long_layers"] == 1
-    assert v2["net_mtm"] == 123.45
-    print("Summariser isolation OK: _summarize_instance_state still works for v2")
+    # Layer + drift summariser
+    layer_payload = json.dumps({
+        "instance_id": "GRIND_GBPUSD_OPT",
+        "layers": [{
+            "layer_index": 0,
+            "side": "long",
+            "entry_price": 1.1,
+            "exit_target": 1.2,
+            "has_exit_order": True,
+            "has_exit_position": False,
+        }],
+        "l0_pending_long": 1.05,
+        "resting_entries_long": 2,
+    })
+    card = pipshed._summarize_grind_instance_state("GRIND_GBPUSD_OPT", layer_payload)
+    assert card["layers"][0]["entry_price"] == 1.1
+    assert card["resting_drift_long"]["expected"] == 1
+    assert card["resting_drift_long"]["actual"] == 2
+    print("Summariser OK: layers and resting-entry drift parsed")
 
     return 0
 

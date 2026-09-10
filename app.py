@@ -582,6 +582,7 @@ _PUBLIC_GRIND_INSTANCE_KEYS = (
     "resting_entries_long",
     "resting_entries_short",
     "magic",
+    "book",
 )
 
 

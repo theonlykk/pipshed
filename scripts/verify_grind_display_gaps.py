@@ -18,24 +18,6 @@ class MockRedis:
         return []
 
 
-def sample_v2_payload(symbol="GBPUSD", layers=2, net_pnl=12.34, entry=1.23456):
-    return json.dumps({
-        "engine_state": {"account_daily_api_count": 42},
-        "active_pods": {
-            symbol: {
-                "layers": layers,
-                "net_pnl": net_pnl,
-                "distance_to_target_pips": 3.5,
-                "layer_detail": [
-                    {"direction": 1, "lot_size": 0.1, "entry_price": entry},
-                ],
-            }
-        },
-        "working_orders": {},
-        "system_alerts": [],
-    })
-
-
 def sample_grind_payload(
     instance_id,
     *,
@@ -89,20 +71,14 @@ def main():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import app as pipshed
 
+    expected_grind_count = len(pipshed.GRIND_INSTANCES)
+
     mock = MockRedis()
     pipshed.r = mock
     client = pipshed.app.test_client()
 
-    mock.set("fxmatrix:state:MM_LONG_V2", sample_v2_payload())
-
     baseline_agg = client.get("/api/telemetry/aggregate").get_json()
-    baseline_arms = json.dumps(baseline_agg["arm_summaries"], sort_keys=True)
-
-    baseline_open = client.get("/api/telemetry/open_positions").get_json()
-    baseline_v2_positions = [
-        p for p in baseline_open["positions"]
-        if not p["instance_id"].startswith("GRIND_")
-    ]
+    assert len(baseline_agg["grind_cards"]) == expected_grind_count
 
     # 4a / 5a — grind flat payload: 0.0 net_mtm is not treated as absent
     mock.set(
@@ -149,29 +125,21 @@ def main():
     assert all(r["net_pnl"] is None for r in gbp_rows)
     print("4c-ii OK: bidirectional grind renders two rows with net_pnl dash on both")
 
-    # 4d — count line fields
-    assert open_resp["tracked_total_count"] == 18
-    assert open_resp["tracked_v2_count"] == 12
-    assert open_resp["tracked_grind_count"] == 6
-    print("4d OK: tracked counts 12 v2 + 6 grind = 18")
-
-    # 4e — v2 open-position rows unchanged; arm_summaries unchanged
-    v2_rows_now = [
-        p for p in open_resp["positions"]
-        if not p["instance_id"].startswith("GRIND_")
-    ]
-    assert v2_rows_now == baseline_v2_positions
-    arms_now = json.dumps(
-        client.get("/api/telemetry/aggregate").get_json()["arm_summaries"],
-        sort_keys=True,
+    # 4d — count line fields derived from GRIND_INSTANCES
+    assert open_resp["tracked_grind_count"] == expected_grind_count
+    assert open_resp["tracked_total_count"] == expected_grind_count
+    print(
+        f"4d OK: tracked counts match len(GRIND_INSTANCES) == {expected_grind_count}"
     )
-    assert arms_now == baseline_arms
-    print("4e OK: v2 open-position rows and arm_summaries unchanged")
 
-    # 2a evidence — single active_pods entry for typical v2 instance
-    v2_data = json.loads(mock.get("fxmatrix:state:MM_LONG_V2"))
-    assert len(v2_data["active_pods"]) == 1
-    print("2a OK: MM_LONG_V2 sample has one active_pods entry (fleet is one-symbol-per-instance)")
+    # 4e — aggregate ring structure unchanged aside from seeded grind cards
+    agg = client.get("/api/telemetry/aggregate").get_json()
+    assert len(agg["grind_rings"]) == len(pipshed.GRIND_RINGS)
+    for ring_id, ring_meta in pipshed.GRIND_RINGS.items():
+        ring = agg["grind_rings"][ring_id]
+        assert ring["label"] == ring_meta["label"]
+        assert len(ring["instances"]) == len(pipshed._grind_instances_for_ring(ring_id))
+    print("4e OK: grind_rings structure matches GRIND_RINGS mapping")
 
     return 0
 

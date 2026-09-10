@@ -18,37 +18,18 @@ class MockRedis:
         return []
 
 
-GRIND_OPT = [
-    "GRIND_GBPUSD_OPT",
-    "GRIND_EURUSD_OPT",
-    "GRIND_EURGBP_OPT",
-]
-GRIND_ALT = [
-    "GRIND_GBPUSD_ALT",
-    "GRIND_EURUSD_ALT",
-    "GRIND_EURGBP_ALT",
-]
+def ring_opt_instances(pipshed, ring_id):
+    return [
+        inst for inst in pipshed._grind_instances_for_ring(ring_id)
+        if inst.endswith("_OPT")
+    ]
 
 
-def sample_v2_payload(api_count=42, net_pnl=123.45):
-    return json.dumps({
-        "engine_state": {
-            "account_daily_api_count": api_count,
-            "account_daily_api_warning": False,
-            "intraday_mae_usd": -50.0,
-        },
-        "active_pods": {
-            "GBPUSD": {
-                "net_pnl": net_pnl,
-                "layer_detail": [
-                    {"direction": 1, "lot_size": 0.1},
-                    {"direction": -1, "lot_size": 0.05},
-                ],
-            }
-        },
-        "working_orders": {},
-        "system_alerts": [],
-    })
+def ring_alt_instances(pipshed, ring_id):
+    return [
+        inst for inst in pipshed._grind_instances_for_ring(ring_id)
+        if inst.endswith("_ALT")
+    ]
 
 
 def sample_grind_payload(
@@ -90,9 +71,9 @@ def sample_grind_payload(
     })
 
 
-def seed_all_grind(mock, *, halted_instance=None, skip_instances=None):
+def seed_instances(mock, instances, *, halted_instance=None, skip_instances=None):
     skip = set(skip_instances or [])
-    for inst in GRIND_OPT + GRIND_ALT:
+    for inst in instances:
         key = f"fxmatrix:state:{inst}"
         if inst in skip:
             mock._data.pop(key, None)
@@ -107,78 +88,99 @@ def main():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import app as pipshed
 
+    ring_id = "eur_gbp_usd"
+    ring_opt = ring_opt_instances(pipshed, ring_id)
+    ring_alt = ring_alt_instances(pipshed, ring_id)
+    ring_all = pipshed._grind_instances_for_ring(ring_id)
+    per_instance_long = 2
+    per_instance_short = 1
+    per_instance_fills = 10
+    per_instance_scalps = 5
+    per_instance_api = 11
+
     mock = MockRedis()
     pipshed.r = mock
     client = pipshed.app.test_client()
-
-    mock.set("fxmatrix:state:MM_LONG_V2", sample_v2_payload(api_count=42, net_pnl=123.45))
 
     # 4a — no grind data
     resp = client.get("/api/telemetry/aggregate")
     assert resp.status_code == 200
     baseline = resp.get_json()
-    assert "grind_arm_summaries" in baseline
-    opt = baseline["grind_arm_summaries"]["opt"]
-    alt = baseline["grind_arm_summaries"]["alt"]
+    assert "grind_rings" in baseline
+    ring = baseline["grind_rings"][ring_id]
+    opt = ring["arm_summaries"]["opt"]
+    alt = ring["arm_summaries"]["alt"]
     assert opt["status"] == "no_data"
-    assert opt["status_label"] == "GRIND OPT: NO DATA"
+    assert opt["status_label"] == "Arm A: NO DATA"
     assert alt["status"] == "no_data"
-    assert alt["status_label"] == "GRIND ALT: NO DATA"
-    baseline_arms = json.dumps(baseline["arm_summaries"], sort_keys=True)
-    print("4a OK: grind arm cards NO DATA; grind_arm_summaries key present")
+    assert alt["status_label"] == "Arm B: NO DATA"
+    print("4a OK: per-ring arm cards NO DATA; grind_rings key present")
 
-    # 4b — all six grind payloads
-    seed_all_grind(mock)
+    # 4b — all instances in ring 1 live
+    seed_instances(mock, ring_all)
     resp = client.get("/api/telemetry/aggregate")
     data = resp.get_json()
-    opt = data["grind_arm_summaries"]["opt"]
-    alt = data["grind_arm_summaries"]["alt"]
+    ring = data["grind_rings"][ring_id]
+    opt = ring["arm_summaries"]["opt"]
+    alt = ring["arm_summaries"]["alt"]
+
+    expected_opt_live = len(ring_opt)
+    expected_alt_live = len(ring_alt)
 
     assert opt["status"] == "running"
-    assert opt["status_label"] == "GRIND OPT: RUNNING"
-    assert opt["instances_live"] == 3
-    assert opt["open_layers_long"] == 6  # 2 * 3
-    assert opt["open_layers_short"] == 3  # 1 * 3
-    assert opt["fills"] == 30
-    assert opt["scalps"] == 15
-    assert opt["api_count"] == 11  # max, not sum (would be 33)
-    assert opt.get("net_mtm") == 0.0  # no P&L fields in sample payload → null-safe sum of 0
+    assert opt["status_label"] == "Arm A: RUNNING"
+    assert opt["instances_live"] == expected_opt_live
+    assert opt["instances_total"] == expected_opt_live
+    assert opt["open_layers_long"] == per_instance_long * expected_opt_live
+    assert opt["open_layers_short"] == per_instance_short * expected_opt_live
+    assert opt["fills"] == per_instance_fills * expected_opt_live
+    assert opt["scalps"] == per_instance_scalps * expected_opt_live
+    assert opt["api_count"] == per_instance_api  # max, not sum
+    assert opt.get("net_mtm") == 0.0
 
     assert alt["status"] == "running"
-    assert alt["status_label"] == "GRIND ALT: RUNNING"
-    assert alt["instances_live"] == 3
-    assert alt["api_count"] == 11
-    print("4b OK: 3/3 live, summed layers/fills/scalps, api_count=max(11)")
+    assert alt["status_label"] == "Arm B: RUNNING"
+    assert alt["instances_live"] == expected_alt_live
+    assert alt["api_count"] == per_instance_api
+    print(
+        f"4b OK: ring {ring_id} — {expected_opt_live}/{expected_opt_live} OPT live, "
+        f"summed layers/fills/scalps, api_count=max({per_instance_api})"
+    )
 
-    # 4e — v2 arm_summaries unchanged with grind data present
-    arms_with_grind = json.dumps(data["arm_summaries"], sort_keys=True)
-    assert arms_with_grind == baseline_arms, "arm_summaries changed when grind data added"
-    print("4e OK: arm_summaries byte-identical with and without grind data")
+    # Ring 2 still NO DATA when only ring 1 seeded
+    ring2 = data["grind_rings"]["aud_cad_chf"]
+    assert ring2["arm_summaries"]["opt"]["status"] == "no_data"
+    assert ring2["arm_summaries"]["alt"]["status"] == "no_data"
+    print("4b-ii OK: unseeded ring renders NO DATA independently")
 
-    # 4c — one instance halted on OPT group
-    seed_all_grind(mock, halted_instance="GRIND_GBPUSD_OPT")
+    # 4c — one instance halted on OPT group within ring 1
+    seed_instances(mock, ring_all, halted_instance="GRIND_GBPUSD_OPT")
     resp = client.get("/api/telemetry/aggregate")
-    opt = resp.get_json()["grind_arm_summaries"]["opt"]
+    opt = resp.get_json()["grind_rings"][ring_id]["arm_summaries"]["opt"]
     assert opt["status"] == "running"
     assert len(opt["halted_instances"]) == 1
     assert opt["halted_instances"][0]["instance_id"] == "GRIND_GBPUSD_OPT"
-    print("4c OK: halted instance surfaced on OPT group card")
+    print("4c OK: halted instance surfaced on ring OPT arm card")
 
-    # 4d — two of three OPT live
-    seed_all_grind(mock, skip_instances=["GRIND_EURGBP_OPT"])
+    # 4d — one of three OPT live in ring 1
+    seed_instances(mock, ring_all, skip_instances=["GRIND_EURGBP_OPT"])
     resp = client.get("/api/telemetry/aggregate")
-    opt = resp.get_json()["grind_arm_summaries"]["opt"]
+    opt = resp.get_json()["grind_rings"][ring_id]["arm_summaries"]["opt"]
     assert opt["status"] == "degraded"
-    assert opt["status_label"] == "GRIND OPT: DEGRADED"
-    assert opt["instances_live"] == 2
-    print("4d OK: 2/3 live reads DEGRADED")
+    assert opt["status_label"] == "Arm A: DEGRADED"
+    assert opt["instances_live"] == expected_opt_live - 1
+    print(f"4d OK: {expected_opt_live - 1}/{expected_opt_live} live reads DEGRADED")
 
-    # Direct unit test: api max not sum
-    cards = {inst: pipshed._summarize_grind_instance_state(
-        inst, sample_grind_payload(inst, api_count=11 if "OPT" in inst else 13)
-    ) for inst in GRIND_OPT}
-    summary = pipshed._summarize_grind_arm("GRIND OPT", GRIND_OPT, cards)
-    assert summary["api_count"] == 11
+    # Direct unit test: api max not sum (uses app-derived OPT list for ring)
+    cards = {
+        inst: pipshed._summarize_grind_instance_state(
+            inst, sample_grind_payload(inst, api_count=11)
+        )
+        for inst in ring_opt
+    }
+    summary = pipshed._summarize_grind_arm("Arm A", ring_opt, cards)
+    assert summary["api_count"] == per_instance_api
+    assert summary["instances_total"] == len(ring_opt)
     print("Unit OK: _summarize_grind_arm uses max(api_count)")
 
     return 0

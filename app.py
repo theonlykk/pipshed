@@ -6,6 +6,7 @@ Routes:
   POST /api/telemetry/push         — receives MQL5 payload, writes to Redis
   POST /api/telemetry/pod_closed   — pod-level close history
   POST /api/telemetry/scalp_closed — per-layer scalp close history
+  POST /api/telemetry/action         — archive queue for EA events
   GET  /api/telemetry/live         — serves current state to dashboard
   GET  /api/telemetry/closed       — paginated pod-close history
   GET  /api/telemetry/scalps       — paginated scalp-close history
@@ -14,6 +15,7 @@ Routes:
   GET  /api/telemetry/open_positions — cross-instance open pod snapshot
   GET  /api/g/<token>/status       — public grind status (unauthenticated)
   GET  /api/g/<token>/scalps       — public broker-today scalp exits
+  GET  /api/g/<token>/archive      — public archive worker health
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
 """
@@ -41,6 +43,13 @@ TELEMETRY_API_KEY = os.environ.get("TELEMETRY_API_KEY", "")
 REDIS_TTL_SECONDS = 300  # 5 minutes — if VPS drops, key expires
 SCALP_HISTORY_LIST_MAX = 2999  # LTRIM 0..2999 => 3000 entries per instance
 SCALP_HISTORY_TTL_SECONDS = 604800  # 7 days — matches pod history window
+
+ARCHIVE_QUEUE_KEY = "fxmatrix:archive:queue"
+ARCHIVE_PROCESSING_KEY = "fxmatrix:archive:processing"
+ARCHIVE_DEADLETTER_KEY = "fxmatrix:archive:deadletter"
+ARCHIVE_WORKER_KEY = "fxmatrix:archive:worker"
+ARCHIVE_ACTION_MAX_EVENTS = 500
+ARCHIVE_EVENT_TYPES = frozenset({"send_log", "fill_log", "config_event", "ea_event"})
 
 GRIND_INSTANCES = [
     "GRIND_GBPUSD_OPT",
@@ -97,6 +106,48 @@ BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
 def _broker_today():
     """Return YYYY-MM-DD for the current broker session calendar date."""
     return datetime.now(ZoneInfo(BROKER_TIMEZONE)).strftime("%Y-%m-%d")
+
+
+def _utc_now_iso():
+    """UTC ISO-8601 with microseconds and +00:00 offset."""
+    return datetime.now(ZoneInfo("UTC")).isoformat(timespec="microseconds")
+
+
+def _is_int_not_bool(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_archive_action_body(body):
+    if body is None:
+        return "Invalid JSON"
+    instance_id = body.get("instance_id")
+    if not isinstance(instance_id, str) or not instance_id:
+        return "instance_id required"
+    session_id = body.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return "session_id required"
+    events = body.get("events")
+    if events is None:
+        return "events required"
+    if not isinstance(events, list):
+        return "events must be a list"
+    if len(events) == 0:
+        return "events must not be empty"
+    if len(events) > ARCHIVE_ACTION_MAX_EVENTS:
+        return "events exceeds maximum"
+    for event in events:
+        if not isinstance(event, dict):
+            return "event must be an object"
+        event_type = event.get("type")
+        if event_type not in ARCHIVE_EVENT_TYPES:
+            return "unknown event type"
+        seq = event.get("seq")
+        if not _is_int_not_bool(seq) or seq < 0:
+            return "seq must be a non-negative integer"
+        ea_time_ms = event.get("ea_time_ms")
+        if not _is_int_not_bool(ea_time_ms):
+            return "ea_time_ms must be an integer"
+    return None
 
 
 def _grind_instances_for_ring(ring_id):
@@ -802,6 +853,39 @@ def public_grind_scalps(token, _ignored):
         return _apply_no_cache_headers(response), 500
 
 
+@app.route(
+    "/api/g/<token>/archive",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/archive/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_archive_status(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        worker_raw = r.get(ARCHIVE_WORKER_KEY)
+        worker = json.loads(worker_raw) if worker_raw else None
+        payload = {
+            "generated_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "worker": worker,
+            "queue_len": r.llen(ARCHIVE_QUEUE_KEY),
+            "processing_len": r.llen(ARCHIVE_PROCESSING_KEY),
+            "deadletter_len": r.llen(ARCHIVE_DEADLETTER_KEY),
+        }
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_archive_status failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
 @app.route("/api/telemetry/push", methods=["POST"])
 def telemetry_push():
     auth = request.headers.get("Authorization", "")
@@ -818,6 +902,42 @@ def telemetry_push():
     r.set(redis_key, json.dumps(payload), ex=REDIS_TTL_SECONDS)
 
     return jsonify({"status": "ok"}), 200
+
+
+@app.route("/api/telemetry/action", methods=["POST"])
+def telemetry_action():
+    auth = request.headers.get("Authorization", "")
+    if not TELEMETRY_API_KEY or auth != f"Bearer {TELEMETRY_API_KEY}":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    body = request.get_json(silent=True)
+    error = _validate_archive_action_body(body)
+    if error:
+        return jsonify({"error": error}), 400
+
+    instance_id = body["instance_id"]
+    session_id = body["session_id"]
+    received_at = _utc_now_iso()
+    queue_items = []
+    for event in body["events"]:
+        queue_items.append(json.dumps({
+            "type": event["type"],
+            "instance_id": instance_id,
+            "session_id": session_id,
+            "received_at": received_at,
+            "event": event,
+        }))
+
+    try:
+        pipe = r.pipeline()
+        for item in queue_items:
+            pipe.rpush(ARCHIVE_QUEUE_KEY, item)
+        pipe.execute()
+    except redis.RedisError:
+        app.logger.exception("telemetry_action queue failed")
+        return jsonify({"error": "queue unavailable"}), 503
+
+    return jsonify({"status": "ok", "queued": len(queue_items)}), 200
 
 
 @app.route("/api/telemetry/live", methods=["GET"])
@@ -1009,10 +1129,20 @@ def telemetry_scalp_closed():
     instance_id = payload.get("instance_id", "unknown")
     redis_key = f"fxmatrix:scalp_history:{instance_id}"
 
+    received_at = _utc_now_iso()
+    archive_item = json.dumps({
+        "type": "scalp",
+        "instance_id": instance_id,
+        "session_id": None,
+        "received_at": received_at,
+        "event": payload,
+    })
+
     pipe = r.pipeline()
     pipe.lpush(redis_key, json.dumps(payload))
     pipe.ltrim(redis_key, 0, SCALP_HISTORY_LIST_MAX)
     pipe.expire(redis_key, SCALP_HISTORY_TTL_SECONDS)
+    pipe.rpush(ARCHIVE_QUEUE_KEY, archive_item)
     pipe.execute()
 
     return jsonify({"status": "ok"}), 200

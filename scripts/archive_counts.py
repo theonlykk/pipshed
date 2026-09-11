@@ -6,6 +6,7 @@ Options:
     --limit N        latest rows to show per table (default 3, 0 = counts only)
     --table NAME     only this table
     --instance ID    only rows for this instance_id
+    --carry          latest CARRY_SNAPSHOT row per symbol (skips table counts)
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -25,12 +26,32 @@ TABLES = {
                       "gross_pnl", "close_time_broker", "source"],
 }
 
+CARRY_SQL = """
+SELECT DISTINCT ON (detail->>'symbol')
+       detail->>'symbol'            AS symbol,
+       detail->>'swap_long'         AS swap_long_pts,
+       detail->>'swap_short'        AS swap_short_pts,
+       detail->>'long_pips'         AS long_pips,
+       detail->>'short_pips'        AS short_pips,
+       detail->>'multiplier'        AS mult,
+       detail->>'rollover3days'     AS x3_day,
+       detail->>'swap_mode'         AS swap_mode,
+       detail->>'trade_mode_full'   AS tradeable,
+       detail->>'eligible_long'     AS elig_long,
+       detail->>'eligible_short'    AS elig_short,
+       received_at
+FROM ea_events
+WHERE code = 'CARRY_SNAPSHOT'
+ORDER BY detail->>'symbol', received_at DESC
+"""
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--table", choices=sorted(TABLES))
     parser.add_argument("--instance")
+    parser.add_argument("--carry", action="store_true")
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -40,9 +61,21 @@ def main(argv=None):
 
     conn = psycopg2.connect(url)
     conn.set_session(readonly=True, autocommit=True)
-    tables = [args.table] if args.table else list(TABLES)
     try:
         with conn.cursor() as cur:
+            if args.carry:
+                cur.execute(CARRY_SQL)
+                rows = cur.fetchall()
+                if not rows:
+                    print("no CARRY_SNAPSHOT rows yet.")
+                else:
+                    cols = [desc[0] for desc in cur.description]
+                    print(" | ".join(cols))
+                    for row in rows:
+                        print(" | ".join("" if v is None else str(v) for v in row))
+                return 0
+
+            tables = [args.table] if args.table else list(TABLES)
             for table in tables:
                 where, params = "", ()
                 if args.instance:

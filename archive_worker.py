@@ -329,8 +329,6 @@ def process_processing_batch(redis_client, conn, raw_items):
         conn.rollback()
         raise
     except Exception as exc:
-        if type(exc).__name__ == "_Stop":
-            raise
         conn.rollback()
         log.warning("batch error, retrying one item at a time: %s", exc)
         return process_items_individually(redis_client, conn, raw_items)
@@ -347,8 +345,6 @@ def process_items_individually(redis_client, conn, raw_items):
             conn.rollback()
             raise
         except Exception as exc:
-            if type(exc).__name__ == "_Stop":
-                raise
             conn.rollback()
             try:
                 item = parse_queue_item(raw)
@@ -535,8 +531,6 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:
-            if type(exc).__name__ == "_Stop":
-                raise
             state["last_error"] = str(exc)
             log.error(
                 "worker unexpected error: %s\n%s",

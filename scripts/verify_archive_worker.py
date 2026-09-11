@@ -340,7 +340,7 @@ def test_w7_invalid_json_deadletter():
     print("W7 OK: invalid JSON deadlettered")
 
 
-class _Stop(Exception):
+class _Stop(BaseException):
     pass
 
 

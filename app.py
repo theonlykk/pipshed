@@ -120,6 +120,8 @@ def _is_int_not_bool(value):
 def _validate_archive_action_body(body):
     if body is None:
         return "Invalid JSON"
+    if not isinstance(body, dict):
+        return "body must be an object"
     instance_id = body.get("instance_id")
     if not isinstance(instance_id, str) or not instance_id:
         return "instance_id required"

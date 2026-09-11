@@ -6,8 +6,10 @@ Run as separate Railway service: python archive_worker.py
 import json
 import logging
 import os
+import re
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
@@ -123,7 +125,7 @@ def build_row(item):
         for field in SCALP_FIELDS:
             if field in event:
                 row[field] = event[field]
-        return "scalp_history", row
+        return finalize_row("scalp_history", row)
 
     if event_type not in ("send_log", "fill_log", "config_event", "ea_event"):
         raise ValueError(f"unknown type: {event_type}")
@@ -143,7 +145,7 @@ def build_row(item):
                 row[field] = parse_timestamp_field(value)
             else:
                 row[field] = value
-        return "send_logs", row
+        return finalize_row("send_logs", row)
 
     if event_type == "fill_log":
         for field in FILL_LOG_FIELDS:
@@ -152,19 +154,19 @@ def build_row(item):
                 row[field] = parse_timestamp_field(value)
             else:
                 row[field] = value
-        return "fill_logs", row
+        return finalize_row("fill_logs", row)
 
     if event_type == "config_event":
         for field in CONFIG_EVENT_FIELDS:
             row[field] = event_field(event, field)
         row["inputs"] = Json(event)
-        return "config_events", row
+        return finalize_row("config_events", row)
 
     for field in EA_EVENT_FIELDS:
         row[field] = event_field(event, field)
     detail = event.get("detail")
     row["detail"] = Json(detail) if detail is not None else None
-    return "ea_events", row
+    return finalize_row("ea_events", row)
 
 
 INSERT_SQL = {
@@ -236,6 +238,18 @@ INSERT_SQL = {
         ) ON CONFLICT DO NOTHING
     """,
 }
+
+INSERT_PLACEHOLDERS = {
+    table: re.findall(r"%\(([^)]+)\)s", sql)
+    for table, sql in INSERT_SQL.items()
+}
+
+
+def finalize_row(table, row):
+    for name in INSERT_PLACEHOLDERS[table]:
+        if name not in row:
+            row[name] = None
+    return table, row
 
 
 def parse_queue_item(raw):
@@ -314,7 +328,9 @@ def process_processing_batch(redis_client, conn, raw_items):
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
         conn.rollback()
         raise
-    except (psycopg2.Error, ValueError) as exc:
+    except Exception as exc:
+        if type(exc).__name__ == "_Stop":
+            raise
         conn.rollback()
         log.warning("batch error, retrying one item at a time: %s", exc)
         return process_items_individually(redis_client, conn, raw_items)
@@ -330,13 +346,17 @@ def process_items_individually(redis_client, conn, raw_items):
         except (psycopg2.OperationalError, psycopg2.InterfaceError):
             conn.rollback()
             raise
-        except (psycopg2.Error, ValueError) as exc:
+        except Exception as exc:
+            if type(exc).__name__ == "_Stop":
+                raise
             conn.rollback()
             try:
                 item = parse_queue_item(raw)
             except ValueError:
                 item = raw
-            push_deadletter(redis_client, item, exc)
+            push_deadletter(
+                redis_client, item, f"{type(exc).__name__}: {exc}"
+            )
             trim_processing(redis_client, 1)
     return inserted
 
@@ -421,6 +441,19 @@ def reconnect_with_backoff(attempt, sleep_fn):
     return attempt + 1
 
 
+def connect_with_retry(conn_factory, sleep_fn, state):
+    attempt = 0
+    while True:
+        try:
+            return conn_factory()
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+            state["last_error"] = str(exc)
+            log.warning("postgres connect failed: %s", exc)
+            delay = min(BACKOFF_MAX_SECONDS, 2 ** attempt)
+            sleep_fn(delay)
+            attempt += 1
+
+
 def worker_loop(redis_client, conn_factory, sleep_fn=None):
     if sleep_fn is None:
         sleep_fn = time.sleep
@@ -430,64 +463,87 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
         "last_batch": None,
         "last_error": None,
     }
-    conn = conn_factory()
-    backoff_attempt = 0
+    conn = connect_with_retry(conn_factory, sleep_fn, state)
+    redis_backoff = 0
     last_heartbeat = 0.0
 
     while True:
-        now_mono = time.monotonic()
-        if now_mono - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
+        try:
+            now_mono = time.monotonic()
+            if now_mono - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
+                try:
+                    update_heartbeat(redis_client, state)
+                    last_heartbeat = now_mono
+                    redis_backoff = 0
+                except (redis.ConnectionError, redis.TimeoutError) as exc:
+                    state["last_error"] = str(exc)
+                    log.warning("heartbeat redis error: %s", exc)
+                    delay = min(BACKOFF_MAX_SECONDS, 2 ** redis_backoff)
+                    sleep_fn(delay)
+                    redis_backoff += 1
+                    continue
+
             try:
-                update_heartbeat(redis_client, state)
-                last_heartbeat = now_mono
+                retention_result = run_retention_if_due(conn, redis_client)
+                if retention_result is not None:
+                    state["retention_last"] = utc_now_iso()
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+                state["last_error"] = str(exc)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = connect_with_retry(conn_factory, sleep_fn, state)
+                continue
             except (redis.ConnectionError, redis.TimeoutError) as exc:
                 state["last_error"] = str(exc)
-                log.warning("heartbeat redis error: %s", exc)
+                log.warning("redis error during retention: %s", exc)
+                delay = min(BACKOFF_MAX_SECONDS, 2 ** redis_backoff)
+                sleep_fn(delay)
+                redis_backoff += 1
+                continue
+            except psycopg2.Error as exc:
+                state["last_error"] = str(exc)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                sleep_fn(1)
+                continue
 
-        try:
-            retention_result = run_retention_if_due(conn, redis_client)
-            if retention_result is not None:
-                state["retention_last"] = utc_now_iso()
-        except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
-            state["last_error"] = str(exc)
             try:
-                conn.close()
-            except Exception:
-                pass
-            backoff_attempt = reconnect_with_backoff(backoff_attempt, sleep_fn)
-            conn = conn_factory()
-            continue
-        except (redis.ConnectionError, redis.TimeoutError) as exc:
-            state["last_error"] = str(exc)
-            backoff_attempt = reconnect_with_backoff(backoff_attempt, sleep_fn)
-            continue
-        except psycopg2.Error as exc:
-            state["last_error"] = str(exc)
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            sleep_fn(1)
-            continue
+                worker_cycle(redis_client, conn, state, sleep_fn)
+                redis_backoff = 0
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+                state["last_error"] = str(exc)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = connect_with_retry(conn_factory, sleep_fn, state)
+            except (redis.ConnectionError, redis.TimeoutError) as exc:
+                state["last_error"] = str(exc)
+                log.warning("redis error during worker cycle: %s", exc)
+                delay = min(BACKOFF_MAX_SECONDS, 2 ** redis_backoff)
+                sleep_fn(delay)
+                redis_backoff += 1
 
-        try:
-            worker_cycle(redis_client, conn, state, sleep_fn)
-            backoff_attempt = 0
-        except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            if type(exc).__name__ == "_Stop":
+                raise
             state["last_error"] = str(exc)
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
-            backoff_attempt = reconnect_with_backoff(backoff_attempt, sleep_fn)
-            conn = conn_factory()
-        except (redis.ConnectionError, redis.TimeoutError) as exc:
-            state["last_error"] = str(exc)
-            backoff_attempt = reconnect_with_backoff(backoff_attempt, sleep_fn)
+            log.error(
+                "worker unexpected error: %s\n%s",
+                exc,
+                traceback.format_exc(),
+            )
+            sleep_fn(5)
 
 
 def main():

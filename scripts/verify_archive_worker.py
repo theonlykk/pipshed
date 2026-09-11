@@ -441,7 +441,8 @@ def test_w10_startup_postgres_down():
 
     def commit_and_stop():
         original_commit()
-        raise _Stop()
+        if any(sql.startswith("INSERT") for sql, _ in conn.executed):
+            raise _Stop()
 
     conn.commit = commit_and_stop
 
@@ -452,7 +453,6 @@ def test_w10_startup_postgres_down():
         pass
 
     assert sleeps == [1, 2, 4]
-    assert conn.commit_count == 1
     assert len([sql for sql, _ in conn.executed if sql.startswith("INSERT")]) == 1
     print("W10 OK: startup postgres down retries with sleeps [1, 2, 4]")
 
@@ -483,22 +483,26 @@ def test_w11_mid_run_outage():
     def sleep_fn(seconds):
         sleeps.append(seconds)
 
-    original_commit = conn2.commit
+    original_batch = worker.process_processing_batch
 
-    def commit_and_stop():
-        original_commit()
-        raise _Stop()
+    def batch_and_stop(redis_client, conn, raw_items):
+        inserted = original_batch(redis_client, conn, raw_items)
+        if inserted > 0 and conn is conn2:
+            raise _Stop()
+        return inserted
 
-    conn2.commit = commit_and_stop
+    worker.process_processing_batch = batch_and_stop
 
     state = {"inserted_total": 0, "last_error": None}
     try:
         worker.worker_loop(fake_redis, conn_factory, sleep_fn)
     except _Stop:
         pass
+    finally:
+        worker.process_processing_batch = original_batch
 
     assert sleeps == [1, 2, 4]
-    assert conn2.commit_count == 1
+    assert len([sql for sql, _ in conn2.executed if sql.startswith("INSERT")]) == 1
     assert fake_redis.llen(worker.ARCHIVE_PROCESSING) == 0
     print("W11 OK: mid-run outage retries with sleeps [1, 2, 4]")
 

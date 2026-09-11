@@ -1,6 +1,7 @@
 """Verification for archive_worker (FakeRedis + FakeConnection)."""
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -70,6 +71,11 @@ class FakeCursor:
         self.rowcount = 0
 
     def execute(self, sql, params=None):
+        placeholders = re.findall(r"%\(([^)]+)\)s", sql)
+        if isinstance(params, dict):
+            for name in placeholders:
+                if name not in params:
+                    raise KeyError(name)
         self._last_sql = sql
         self._last_params = params
         self._conn.executed.append((sql.strip(), params))
@@ -334,6 +340,169 @@ def test_w7_invalid_json_deadletter():
     print("W7 OK: invalid JSON deadlettered")
 
 
+class _Stop(Exception):
+    pass
+
+
+def test_w8_live_scalp_payload():
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import archive_worker as worker
+
+    fake_redis = FakeRedis()
+    conn = FakeConnection()
+    live_event = {
+        "close_time": "2026-09-11T03:46:27Z",
+        "direction": "BUY",
+        "entry_price": 1.1050,
+        "exit_price": 1.1060,
+        "gross_pnl": 1.0,
+        "instance_id": "GRIND_EURUSD_OPT",
+        "instrument": "EURUSD",
+        "layer_depth": 1,
+        "stack_depth": 1,
+    }
+    item = json.dumps({
+        "type": "scalp",
+        "instance_id": "GRIND_EURUSD_OPT",
+        "session_id": None,
+        "received_at": "2026-09-11T10:00:00.000000+00:00",
+        "event": live_event,
+    })
+    fake_redis._lists[worker.ARCHIVE_QUEUE] = [item]
+    fake_redis._lists[worker.ARCHIVE_PROCESSING] = []
+
+    state = {"inserted_total": 0}
+    worker.worker_cycle(fake_redis, conn, state, lambda _s: None)
+
+    scalp_inserts = [
+        params for sql, params in conn.executed
+        if sql.startswith("INSERT") and "scalp_history" in sql
+    ]
+    assert len(scalp_inserts) == 1
+    params = scalp_inserts[0]
+    assert params["entry_deal_ticket"] is None
+    assert params["exit_deal_ticket"] is None
+    assert conn.commit_count == 1
+    assert fake_redis.llen(worker.ARCHIVE_PROCESSING) == 0
+    print("W8 OK: live scalp payload inserts with null deal tickets")
+
+
+def test_w9_keyerror_deadletter():
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import archive_worker as worker
+
+    fake_redis = FakeRedis()
+    conn = FakeConnection()
+    bad = json.dumps({
+        "type": "send_log",
+        "instance_id": "INST1",
+        "session_id": "sess1",
+        "event": {"type": "send_log", "seq": 0, "ea_time_ms": 1},
+    })
+    good = make_queue_item(
+        "ea_event",
+        {"type": "ea_event", "seq": 1, "ea_time_ms": 2, "level": "INFO", "code": "X"},
+    )
+    fake_redis._lists[worker.ARCHIVE_PROCESSING] = [bad, good]
+
+    inserted = worker.process_processing_batch(fake_redis, conn, [bad, good])
+    assert inserted == 1
+    assert fake_redis.llen(worker.ARCHIVE_PROCESSING) == 0
+    assert fake_redis.llen(worker.ARCHIVE_DEADLETTER) == 1
+    dead = json.loads(fake_redis.lrange(worker.ARCHIVE_DEADLETTER, 0, 0)[0])
+    assert dead["error"]
+    assert "KeyError" in dead["error"]
+    print("W9 OK: KeyError item deadlettered, valid item inserted")
+
+
+def test_w10_startup_postgres_down():
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import archive_worker as worker
+
+    fake_redis = FakeRedis()
+    conn = FakeConnection()
+    factory_calls = [0]
+    sleeps = []
+
+    def conn_factory():
+        factory_calls[0] += 1
+        if factory_calls[0] <= 3:
+            raise psycopg2.OperationalError("postgres down")
+        return conn
+
+    item = make_queue_item("send_log", {"type": "send_log", "seq": 0, "ea_time_ms": 1})
+    fake_redis._lists[worker.ARCHIVE_QUEUE] = [item]
+    fake_redis._lists[worker.ARCHIVE_PROCESSING] = []
+
+    def sleep_fn(seconds):
+        sleeps.append(seconds)
+
+    original_commit = conn.commit
+
+    def commit_and_stop():
+        original_commit()
+        raise _Stop()
+
+    conn.commit = commit_and_stop
+
+    state = {"inserted_total": 0, "last_error": None}
+    try:
+        worker.worker_loop(fake_redis, conn_factory, sleep_fn)
+    except _Stop:
+        pass
+
+    assert sleeps == [1, 2, 4]
+    assert conn.commit_count == 1
+    assert len([sql for sql, _ in conn.executed if sql.startswith("INSERT")]) == 1
+    print("W10 OK: startup postgres down retries with sleeps [1, 2, 4]")
+
+
+def test_w11_mid_run_outage():
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import archive_worker as worker
+
+    fake_redis = FakeRedis()
+    conn1 = FakeConnection()
+    conn1.fail_on_commit = True
+    conn1.commit_failures_remaining = 1
+    conn2 = FakeConnection()
+    factory_calls = [0]
+    sleeps = []
+
+    def conn_factory():
+        factory_calls[0] += 1
+        if factory_calls[0] == 1:
+            return conn1
+        if factory_calls[0] <= 4:
+            raise psycopg2.OperationalError("postgres down")
+        return conn2
+
+    item = make_queue_item("send_log", {"type": "send_log", "seq": 0, "ea_time_ms": 1})
+    fake_redis._lists[worker.ARCHIVE_PROCESSING] = [item]
+
+    def sleep_fn(seconds):
+        sleeps.append(seconds)
+
+    original_commit = conn2.commit
+
+    def commit_and_stop():
+        original_commit()
+        raise _Stop()
+
+    conn2.commit = commit_and_stop
+
+    state = {"inserted_total": 0, "last_error": None}
+    try:
+        worker.worker_loop(fake_redis, conn_factory, sleep_fn)
+    except _Stop:
+        pass
+
+    assert sleeps == [1, 2, 4]
+    assert conn2.commit_count == 1
+    assert fake_redis.llen(worker.ARCHIVE_PROCESSING) == 0
+    print("W11 OK: mid-run outage retries with sleeps [1, 2, 4]")
+
+
 def main():
     test_w0_lmove()
     test_w1_batch_insert()
@@ -343,6 +512,10 @@ def main():
     test_w5_startup_processing()
     test_w6_retention()
     test_w7_invalid_json_deadletter()
+    test_w8_live_scalp_payload()
+    test_w9_keyerror_deadletter()
+    test_w10_startup_postgres_down()
+    test_w11_mid_run_outage()
     print("All archive worker checks passed.")
 
 

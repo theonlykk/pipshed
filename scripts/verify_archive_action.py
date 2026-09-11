@@ -263,6 +263,15 @@ def main():
     assert mock.llen(queue_key) == 0
     print("503 OK: pipeline failure leaves queue empty")
 
+    resp = client.post(
+        "/api/telemetry/action",
+        json=[1, 2],
+        headers=auth_headers(),
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "body must be an object"
+    print("A1 OK: non-object JSON body returns 400")
+
     print("All archive action checks passed.")
 
 

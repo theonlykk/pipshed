@@ -12,6 +12,8 @@ Routes:
   GET  /api/telemetry/today_scalps    — cross-instance broker-today scalp exits
   GET  /api/telemetry/today_closed    — cross-instance broker-today pod closes
   GET  /api/telemetry/open_positions — cross-instance open pod snapshot
+  GET  /api/g/<token>/status       — public grind status (unauthenticated)
+  GET  /api/g/<token>/scalps       — public broker-today scalp exits
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
 """
@@ -652,6 +654,47 @@ def _build_grind_ring_summaries(grind_cards):
     return rings
 
 
+_PUBLIC_SCALP_KEYS = (
+    "close_time",
+    "instrument",
+    "direction",
+    "entry_price",
+    "exit_price",
+    "layer_depth",
+    "stack_depth",
+    "gross_pnl",
+    "instance_id",
+)
+
+
+def _public_scalp_fields(record):
+    """Whitelist scalp exit fields safe for the unauthenticated scalps route."""
+    return {key: record.get(key) for key in _PUBLIC_SCALP_KEYS}
+
+
+def _collect_today_scalp_records(selected_date=None):
+    """Cross-instance scalp exits for one broker calendar date."""
+    broker_today = _broker_today()
+    date = selected_date or broker_today
+    all_records = []
+
+    for inst in GRIND_INSTANCES:
+        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
+        records = [json.loads(item) for item in raw_list]
+        day_records = [
+            record
+            for record in records
+            if _closed_record_date(record) == date
+        ]
+        for record in day_records:
+            merged = dict(record)
+            merged["instance_id"] = inst
+            all_records.append(merged)
+
+    all_records.sort(key=lambda item: item.get("close_time", ""))
+    return date, all_records
+
+
 def _apply_no_cache_headers(response):
     """Block browser, proxy, and CDN caching for dynamic unauthenticated responses.
 
@@ -724,6 +767,37 @@ def public_grind_status(token, _ignored):
         return _apply_no_cache_headers(response), 200
     except Exception:
         app.logger.exception("public_grind_status failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/scalps",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/scalps/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_grind_scalps(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        date_filter = request.args.get("date")
+        selected_date, all_records = _collect_today_scalp_records(date_filter)
+        payload = {
+            "date": selected_date,
+            "total": len(all_records),
+            "records": [_public_scalp_fields(record) for record in all_records],
+        }
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_grind_scalps failed")
         response = jsonify({"error": "internal error"})
         return _apply_no_cache_headers(response), 500
 
@@ -1072,25 +1146,9 @@ def telemetry_today_scalps():
     """Cross-instance layer exits (scalp_history) for a broker calendar date."""
     broker_today = _broker_today()
     date_filter = request.args.get("date")
-    selected_date = date_filter or broker_today
+    selected_date, all_records = _collect_today_scalp_records(date_filter)
 
     available_dates, earliest_date, retention = _collect_scalp_history_meta()
-    all_records = []
-
-    for inst in GRIND_INSTANCES:
-        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
-        records = [json.loads(item) for item in raw_list]
-        day_records = [
-            record
-            for record in records
-            if _closed_record_date(record) == selected_date
-        ]
-        for record in day_records:
-            merged = dict(record)
-            merged["instance_id"] = inst
-            all_records.append(merged)
-
-    all_records.sort(key=lambda item: item.get("close_time", ""))
 
     return jsonify({
         "broker_today": broker_today,

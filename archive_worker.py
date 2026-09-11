@@ -28,12 +28,26 @@ ARCHIVE_PROCESSING = "fxmatrix:archive:processing"
 ARCHIVE_DEADLETTER = "fxmatrix:archive:deadletter"
 ARCHIVE_WORKER_KEY = "fxmatrix:archive:worker"
 ARCHIVE_RETENTION_LAST = "fxmatrix:archive:retention_last"
+ARCHIVE_CARRY_KEY = "fxmatrix:carry:table"
+ARCHIVE_CARRY_LAST_BUILD = "fxmatrix:carry:last_build"
 
 BATCH_MAX = 500
 HEARTBEAT_INTERVAL_SECONDS = 10
 WORKER_TTL_SECONDS = 120
 RETENTION_INTERVAL = timedelta(hours=24)
+CARRY_BUILD_INTERVAL = timedelta(hours=1)
 BACKOFF_MAX_SECONDS = 30
+
+CARRY_SQL = """
+SELECT DISTINCT ON (detail->>'symbol')
+       detail->>'symbol', detail->>'swap_long', detail->>'swap_short',
+       detail->>'long_pips', detail->>'short_pips', detail->>'multiplier',
+       detail->>'rollover3days', detail->>'swap_mode', detail->>'digits',
+       detail->>'trade_mode_full', received_at
+FROM ea_events
+WHERE code = 'CARRY_SNAPSHOT'
+ORDER BY detail->>'symbol', received_at DESC
+"""
 
 SEND_LOG_FIELDS = (
     "magic", "action", "order_type", "side", "layer_index", "role",
@@ -67,6 +81,138 @@ SCALP_FIELDS = (
 
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def carry_parse_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def carry_parse_int(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def carry_parse_bool(value):
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes"):
+        return True
+    if text in ("false", "0", "no"):
+        return False
+    return None
+
+
+def carry_format_snapshot_at(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc).isoformat()
+        return value.isoformat()
+    return str(value)
+
+
+def build_carry_table(conn):
+    rows = []
+    with conn.cursor() as cur:
+        cur.execute(CARRY_SQL)
+        for (
+            symbol,
+            swap_long,
+            swap_short,
+            long_pips,
+            short_pips,
+            multiplier,
+            rollover3days,
+            swap_mode,
+            digits,
+            trade_mode_full,
+            received_at,
+        ) in cur.fetchall():
+            if symbol is None or str(symbol).strip() == "":
+                continue
+            long_pips_val = carry_parse_float(long_pips)
+            short_pips_val = carry_parse_float(short_pips)
+            row = {
+                "symbol": symbol,
+                "swap_long_pts": carry_parse_float(swap_long),
+                "swap_short_pts": carry_parse_float(swap_short),
+                "long_pips": long_pips_val,
+                "short_pips": short_pips_val,
+                "mult": carry_parse_int(multiplier),
+                "rollover3days": carry_parse_int(rollover3days),
+                "swap_mode": carry_parse_int(swap_mode),
+                "digits": carry_parse_int(digits),
+                "trade_mode_full": carry_parse_bool(trade_mode_full),
+                "snapshot_at": carry_format_snapshot_at(received_at),
+            }
+            row["long_week_pips"] = (
+                round(long_pips_val * 7, 2) if long_pips_val is not None else None
+            )
+            row["short_week_pips"] = (
+                round(short_pips_val * 7, 2) if short_pips_val is not None else None
+            )
+            rows.append(row)
+    return {"generated_at": utc_now_iso(), "rows": rows}
+
+
+def publish_carry_table(redis_client, table):
+    redis_client.set(ARCHIVE_CARRY_KEY, json.dumps(table))
+
+
+def batch_contains_carry_snapshot(raw_items):
+    for raw in raw_items:
+        try:
+            item = parse_queue_item(raw)
+        except ValueError:
+            continue
+        if item.get("type") != "ea_event":
+            continue
+        event = item.get("event")
+        if not isinstance(event, dict):
+            continue
+        if event.get("code") == "CARRY_SNAPSHOT":
+            return True
+    return False
+
+
+def run_carry_build_if_due(conn, redis_client, force=False):
+    if not force:
+        last_raw = redis_client.get(ARCHIVE_CARRY_LAST_BUILD)
+        now = datetime.now(timezone.utc)
+        if last_raw:
+            try:
+                last_run = datetime.fromisoformat(last_raw)
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                if now - last_run < CARRY_BUILD_INTERVAL:
+                    return None
+            except ValueError:
+                pass
+    table = build_carry_table(conn)
+    publish_carry_table(redis_client, table)
+    redis_client.set(ARCHIVE_CARRY_LAST_BUILD, utc_now_iso())
+    return table
+
+
+def try_carry_build(conn, redis_client, force=False):
+    try:
+        return run_carry_build_if_due(conn, redis_client, force=force)
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        raise
+    except Exception as exc:
+        log.warning("carry table build failed: %s", exc)
+        return None
 
 
 def parse_received_at(value):
@@ -416,6 +562,8 @@ def worker_cycle(redis_client, conn, state, sleep_fn):
         if inserted:
             state["last_batch"] = inserted
             state["inserted_total"] = state.get("inserted_total", 0) + inserted
+            if batch_contains_carry_snapshot(raw_items):
+                try_carry_build(conn, redis_client, force=True)
         return False
 
     moved = move_batch_to_processing(redis_client)
@@ -427,6 +575,8 @@ def worker_cycle(redis_client, conn, state, sleep_fn):
     inserted = process_processing_batch(redis_client, conn, raw_items)
     state["last_batch"] = inserted
     state["inserted_total"] = state.get("inserted_total", 0) + inserted
+    if inserted and batch_contains_carry_snapshot(raw_items):
+        try_carry_build(conn, redis_client, force=True)
     return False
 
 
@@ -460,6 +610,7 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
         "last_error": None,
     }
     conn = connect_with_retry(conn_factory, sleep_fn, state)
+    try_carry_build(conn, redis_client, force=True)
     redis_backoff = 0
     last_heartbeat = 0.0
 
@@ -483,6 +634,7 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
                 retention_result = run_retention_if_due(conn, redis_client)
                 if retention_result is not None:
                     state["retention_last"] = utc_now_iso()
+                try_carry_build(conn, redis_client, force=False)
             except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
                 state["last_error"] = str(exc)
                 try:

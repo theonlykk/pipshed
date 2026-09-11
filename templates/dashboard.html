@@ -956,6 +956,26 @@
   </div>
 </div>
 
+<div class="card" id="carrySection" style="margin-bottom:16px">
+  <div class="card-label">Carry (per night, pips)</div>
+  <table class="teams-table" id="carryTable" style="margin-top:10px">
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Long</th>
+        <th>Short</th>
+        <th>Long/week</th>
+        <th>Short/week</th>
+        <th>Mult</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody id="carryBody">
+      <tr class="empty-row"><td colspan="7">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
 <!-- Row 2: Pod cards — ADR-024 V3: slot-indexed, populated dynamically by render() -->
 <div class="grid-3" id="pod-grid">
   <div class="card pod-card" id="pod-0">
@@ -1457,6 +1477,52 @@
 
   fetchAggregate();
   setInterval(fetchAggregate, 5000);
+
+  const PUBLIC_CARRY_TOKEN = 'k7m9p2x4q';
+
+  function carryPipsClass(val) {
+    if (val === null || val === undefined) return '';
+    return Number(val) >= 0 ? 'positive' : 'negative';
+  }
+
+  function formatCarryUpdated(snapshotAt) {
+    if (!snapshotAt) return '—';
+    return String(snapshotAt).slice(0, 16).replace('T', ' ');
+  }
+
+  function renderCarryTable(payload) {
+    const body = document.getElementById('carryBody');
+    if (!body) return;
+    const rows = payload && payload.rows ? payload.rows : [];
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="7">No carry data yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function(row) {
+      return '<tr>' +
+        '<td>' + (row.symbol || '—') + '</td>' +
+        '<td class="' + carryPipsClass(row.long_pips) + '">' + fmt(row.long_pips, 3) + '</td>' +
+        '<td class="' + carryPipsClass(row.short_pips) + '">' + fmt(row.short_pips, 3) + '</td>' +
+        '<td class="' + carryPipsClass(row.long_week_pips) + '">' + fmt(row.long_week_pips, 2) + '</td>' +
+        '<td class="' + carryPipsClass(row.short_week_pips) + '">' + fmt(row.short_week_pips, 2) + '</td>' +
+        '<td>' + (row.mult != null ? row.mult : '—') + '</td>' +
+        '<td>' + formatCarryUpdated(row.snapshot_at) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  async function fetchCarryTable() {
+    try {
+      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/carry/' + Date.now());
+      if (!res.ok) throw new Error('fetch failed');
+      renderCarryTable(await res.json());
+    } catch (e) {
+      renderCarryTable(null);
+    }
+  }
+
+  fetchCarryTable();
+  setInterval(fetchCarryTable, 5000);
 
   let todayAllCache = { headers: ['Time', 'Pair', 'Direction', 'Entry', 'Exit', 'Pips'], rows: [], summary: '' };
   let openPosCache  = { headers: ['Pair', 'Direction', 'Entry', 'Layers', 'Net PnL'], rows: [] };

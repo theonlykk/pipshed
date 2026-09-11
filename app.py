@@ -16,6 +16,7 @@ Routes:
   GET  /api/g/<token>/status       — public grind status (unauthenticated)
   GET  /api/g/<token>/scalps       — public broker-today scalp exits
   GET  /api/g/<token>/archive      — public archive worker health
+  GET  /api/g/<token>/carry        — public carry swap table (Redis only)
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
 """
@@ -48,6 +49,7 @@ ARCHIVE_QUEUE_KEY = "fxmatrix:archive:queue"
 ARCHIVE_PROCESSING_KEY = "fxmatrix:archive:processing"
 ARCHIVE_DEADLETTER_KEY = "fxmatrix:archive:deadletter"
 ARCHIVE_WORKER_KEY = "fxmatrix:archive:worker"
+ARCHIVE_CARRY_KEY = "fxmatrix:carry:table"
 ARCHIVE_ACTION_MAX_EVENTS = 500
 ARCHIVE_EVENT_TYPES = frozenset({"send_log", "fill_log", "config_event", "ea_event"})
 
@@ -884,6 +886,35 @@ def public_archive_status(token, _ignored):
         return _apply_no_cache_headers(response), 200
     except Exception:
         app.logger.exception("public_archive_status failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/carry",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/carry/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_carry_table(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        raw = r.get(ARCHIVE_CARRY_KEY)
+        if raw:
+            payload = json.loads(raw)
+        else:
+            payload = {"generated_at": None, "rows": []}
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_carry_table failed")
         response = jsonify({"error": "internal error"})
         return _apply_no_cache_headers(response), 500
 

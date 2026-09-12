@@ -32,12 +32,12 @@ def _utc_now_iso():
 
 
 def _seed_heartbeat(mock, instance_id, orders=None, positions=None,
-                    open_long=0, open_short=0):
+                    open_long=0, open_short=0, balance=100000.00, equity=100050.25):
     payload = {
         "instance_id": instance_id,
         "timestamp": _utc_now_iso(),
-        "account_balance": 100000.00,
-        "account_equity": 100050.25,
+        "account_balance": balance,
+        "account_equity": equity,
         "open_layers_long": open_long,
         "open_layers_short": open_short,
         "book": {
@@ -296,6 +296,198 @@ def test_c5_no_carry_data():
     print("C5 OK: missing symbol carry yields no carry data")
 
 
+def test_s4_layout_order():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    client = pipshed.app.test_client()
+    broker_day = pipshed._broker_today()
+
+    _seed_heartbeat(mock, "GRIND_EURGBP_OPT")
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85020, 2.00, broker_day)
+
+    resp = client.get("/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary")
+    text = resp.get_data(as_text=True)
+
+    account_pos = text.find("Account")
+    open_mtm_pos = text.find("Open MTM")
+    scalps_pos = text.find("Scalps")
+    symbol_pos = text.find("EURGBP")
+    assert account_pos != -1 and open_mtm_pos != -1
+    assert account_pos < open_mtm_pos, "Account must appear before Open MTM"
+    assert scalps_pos != -1 and symbol_pos != -1
+    assert scalps_pos < symbol_pos, "Scalps block must appear before per-symbol lines"
+    print("S4 OK: layout order account before MTM, scalps before symbols")
+
+
+def test_s5_financing_accrued():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    client = pipshed.app.test_client()
+
+    _seed_heartbeat(
+        mock,
+        "GRIND_GBPUSD_OPT",
+        balance=10036.66,
+        equity=10007.24,
+        positions=[{"ticket": 1, "profit": -27.20}],
+    )
+
+    resp = client.get("/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary")
+    text = resp.get_data(as_text=True)
+    assert "Financing accrued -2.22 USD" in text
+    print("S5 OK: financing accrued derived from equity, balance, MTM")
+
+
+def test_s6_cycle_day_count():
+    import app as pipshed
+    from unittest.mock import patch
+
+    mock = MockRedis()
+    pipshed.r = mock
+    client = pipshed.app.test_client()
+    old_cycle = os.environ.get("CYCLE_START_DATE")
+    os.environ["CYCLE_START_DATE"] = "2026-09-10"
+    try:
+        _seed_heartbeat(mock, "GRIND_GBPUSD_OPT")
+        with patch.object(pipshed, "_broker_today", return_value="2026-09-12"):
+            resp = client.get(
+                "/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary?date=2026-09-12"
+            )
+            text = resp.get_data(as_text=True)
+            assert "day 2" in text
+        print("S6 OK: cycle weekday count for Sat 2026-09-12 is day 2")
+    finally:
+        if old_cycle is not None:
+            os.environ["CYCLE_START_DATE"] = old_cycle
+        else:
+            os.environ.pop("CYCLE_START_DATE", None)
+
+
+def test_s7_cycle_totals_multi_day():
+    import app as pipshed
+    from unittest.mock import patch
+
+    mock = MockRedis()
+    pipshed.r = mock
+    client = pipshed.app.test_client()
+    old_cycle = os.environ.get("CYCLE_START_DATE")
+    os.environ["CYCLE_START_DATE"] = "2026-09-10"
+    try:
+        _seed_heartbeat(mock, "GRIND_GBPUSD_OPT")
+        _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85, 0.85020, 2.00, "2026-09-10")
+        _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.86, 0.86020, 3.00, "2026-09-11")
+        _seed_scalp(mock, "GRIND_AUDCAD_OPT", "AUDCAD", 0.90, 0.90020, 4.00, "2026-09-12")
+        with patch.object(pipshed, "_broker_today", return_value="2026-09-12"):
+            resp = client.get(
+                "/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary?date=2026-09-12"
+            )
+            text = resp.get_data(as_text=True)
+            assert "3 scalps" in text or "3 closed" in text
+            cycle_lines = [ln for ln in text.splitlines() if ln.strip().startswith("Cycle")]
+            assert cycle_lines, "missing Cycle line"
+            totals_line = [ln for ln in text.splitlines() if "commission" in ln and "net" in ln.lower()]
+            assert totals_line, "missing cycle totals line"
+            assert "+9.00" in totals_line[0] or "9.00 USD gross" in text
+        print("S7 OK: cycle totals aggregate scalps across broker days")
+    finally:
+        if old_cycle is not None:
+            os.environ["CYCLE_START_DATE"] = old_cycle
+        else:
+            os.environ.pop("CYCLE_START_DATE", None)
+
+
+def test_s8_historical_date_markers():
+    import app as pipshed
+    from unittest.mock import patch
+
+    mock = MockRedis()
+    pipshed.r = mock
+    client = pipshed.app.test_client()
+
+    _seed_heartbeat(mock, "GRIND_GBPUSD_OPT")
+    with patch.object(pipshed, "_broker_today", return_value="2026-09-12"):
+        resp = client.get(
+            "/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary?date=2026-09-11"
+        )
+        text = resp.get_data(as_text=True)
+        assert "(historical)" in text
+        assert "(live, not historical)" in text
+    print("S8 OK: historical date marks header and live account suffix")
+
+
+def test_s9_invalid_date():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    client = pipshed.app.test_client()
+
+    resp = client.get("/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary?date=not-a-date")
+    assert resp.status_code == 400
+    assert resp.content_type.startswith("text/plain")
+    print("S9 OK: invalid date returns 400 plain text")
+
+
+def test_s10_collect_scalp_records_between():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85, 0.85020, 1.00, "2026-09-10")
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.86, 0.86020, 2.00, "2026-09-11")
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.87, 0.87020, 3.00, "2026-09-12")
+
+    records = pipshed._collect_scalp_records_between("2026-09-10", "2026-09-11")
+    dates = {pipshed._closed_record_date(rec) for rec in records}
+    assert dates == {"2026-09-10", "2026-09-11"}
+    assert len(records) == 2
+    print("S10 OK: range helper returns inclusive broker dates only")
+
+
+def test_c7_mult_tomorrow_carry_build():
+    from datetime import datetime as dt, timezone as tz
+    import archive_worker as aw
+    from verify_carry_table import FakeConnection
+
+    conn = FakeConnection()
+    conn.carry_rows = [
+        (
+            "EURGBP", "-7.06", "0.37", "0", "0", "0", "1", "3", "1", "5",
+            "true", dt(2026, 9, 12, 22, 34, tzinfo=tz.utc),
+        ),
+    ]
+    table = aw.build_carry_table(conn)
+    row = table["rows"][0]
+    assert row["long_pips"] == -0.706
+    assert row["mult_used"] == 1
+    print("C7 OK: mult_tomorrow drives published long_pips and mult_used")
+
+
+def test_c8_mult_tomorrow_fallback():
+    from datetime import datetime as dt, timezone as tz
+    import archive_worker as aw
+    from verify_carry_table import FakeConnection
+
+    conn = FakeConnection()
+    conn.carry_rows = [
+        (
+            "EURGBP", "-7.06", "0.37", "-0.706", "0.037", "1", None, "3", "1", "5",
+            "true", dt(2026, 9, 11, 22, 34, tzinfo=tz.utc),
+        ),
+    ]
+    table = aw.build_carry_table(conn)
+    row = table["rows"][0]
+    assert row["long_pips"] == -0.706
+    assert row["mult_used"] == 1
+    assert row["mult_snapshot"] == 1
+    print("C8 OK: absent mult_tomorrow falls back to multiplier")
+
+
 def test_c6_wrong_token():
     import app as pipshed
 
@@ -314,12 +506,21 @@ def main():
     test_s1_summary_text()
     test_s2_empty_day()
     test_s3_cycle_start_unset()
+    test_s4_layout_order()
+    test_s5_financing_accrued()
+    test_s6_cycle_day_count()
+    test_s7_cycle_totals_multi_day()
+    test_s8_historical_date_markers()
+    test_s9_invalid_date()
+    test_s10_collect_scalp_records_between()
     test_c1_long_ext_carry()
     test_c2_short_ext_carry()
     test_c3_ent_unchanged()
     test_c4_unparsed_comment()
     test_c5_no_carry_data()
     test_c6_wrong_token()
+    test_c7_mult_tomorrow_carry_build()
+    test_c8_mult_tomorrow_fallback()
     print("All summary and carry audit checks passed.")
     return 0
 

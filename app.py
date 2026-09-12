@@ -17,6 +17,8 @@ Routes:
   GET  /api/g/<token>/scalps       — public broker-today scalp exits
   GET  /api/g/<token>/archive      — public archive worker health
   GET  /api/g/<token>/carry        — public carry swap table (Redis only)
+  GET  /api/g/<token>/summary      — public broker-day plain-text summary
+  GET  /api/g/<token>/carry_audit  — public carry-adjusted order audit (JSON)
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
 """
@@ -28,7 +30,7 @@ from zoneinfo import ZoneInfo
 
 import redis
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 load_dotenv()
 
@@ -103,6 +105,7 @@ GRIND_KNOWN_SYMBOLS = frozenset(inst.split("_")[1] for inst in GRIND_INSTANCES)
 
 # FTMO / MT5 server time — matches EA trade_date (TimeCurrent() on broker)
 BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
+CYCLE_START_DATE = os.environ.get("CYCLE_START_DATE")
 
 
 def _broker_today():
@@ -750,6 +753,327 @@ def _collect_today_scalp_records(selected_date=None):
     return date, all_records
 
 
+def _broker_day_label():
+    """Human-readable broker calendar date, e.g. Fri 12 Sep 2026."""
+    now = datetime.now(ZoneInfo(BROKER_TIMEZONE))
+    return now.strftime("%a %d %b %Y")
+
+
+def _pip_multiplier_for_prices(*prices):
+    """Return 10000 for 5-digit symbols, 100 when price implies 3-digit."""
+    for price in prices:
+        if isinstance(price, (int, float)) and not isinstance(price, bool):
+            if float(price) > 50:
+                return 100
+    return 10000
+
+
+def _scalp_gross_pips(record):
+    """Absolute pip distance for one scalp exit."""
+    entry = record.get("entry_price")
+    exit_price = record.get("exit_price")
+    if not isinstance(entry, (int, float)) or not isinstance(exit_price, (int, float)):
+        return None
+    if isinstance(entry, bool) or isinstance(exit_price, bool):
+        return None
+    mult = _pip_multiplier_for_prices(entry, exit_price)
+    return abs(float(exit_price) - float(entry)) * mult
+
+
+def _fmt_signed(value, decimals):
+    """Format a number with explicit + or - sign."""
+    return f"{value:+.{decimals}f}"
+
+
+def _cycle_summary_line():
+    """Cycle day line for the daily summary, or not-configured placeholder."""
+    if not CYCLE_START_DATE:
+        return "Cycle        (start date not configured)"
+    try:
+        start = datetime.strptime(CYCLE_START_DATE, "%Y-%m-%d").date()
+    except ValueError:
+        return "Cycle        (start date not configured)"
+    today = datetime.now(ZoneInfo(BROKER_TIMEZONE)).date()
+    day_num = (today - start).days + 1
+    return f"Cycle        day {day_num} (since {CYCLE_START_DATE})"
+
+
+def _collect_open_book_stats():
+    """Open position count, pair count, deepest stack, and MTM from heartbeat book."""
+    position_count = 0
+    symbols_with_positions = set()
+    deepest_stack = 0
+    open_mtm = 0.0
+    has_mtm = False
+
+    for inst in GRIND_INSTANCES:
+        raw = r.get(f"fxmatrix:state:{inst}")
+        if raw is None:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+
+        open_long = data.get("open_layers_long")
+        open_short = data.get("open_layers_short")
+        if isinstance(open_long, (int, float)) and not isinstance(open_long, bool):
+            if isinstance(open_short, (int, float)) and not isinstance(open_short, bool):
+                stack = int(open_long) + int(open_short)
+                deepest_stack = max(deepest_stack, stack)
+
+        book = data.get("book")
+        if not isinstance(book, dict):
+            continue
+        positions = book.get("positions")
+        if not isinstance(positions, list):
+            continue
+
+        symbol = inst.split("_")[1] if "_" in inst else inst
+        for pos in positions:
+            if not isinstance(pos, dict):
+                continue
+            position_count += 1
+            symbols_with_positions.add(symbol)
+            profit = pos.get("profit")
+            if isinstance(profit, (int, float)) and not isinstance(profit, bool):
+                open_mtm += float(profit)
+                has_mtm = True
+
+    return {
+        "position_count": position_count,
+        "pair_count": len(symbols_with_positions),
+        "deepest_stack": deepest_stack,
+        "open_mtm": round(open_mtm, 2) if has_mtm else 0.0,
+    }
+
+
+def _build_daily_summary_text():
+    """Plain-text broker-day summary for copy/paste."""
+    _, scalps = _collect_today_scalp_records()
+    metrics = _read_global_account_metrics()
+    book_stats = _collect_open_book_stats()
+
+    lines = [f"FXGRIND -- {_broker_day_label()}"]
+
+    if not scalps:
+        lines.append("No scalps yet today.")
+        lines.append("")
+    else:
+        total_pips = 0.0
+        total_usd = 0.0
+        by_symbol = {}
+
+        for record in scalps:
+            instrument = record.get("instrument") or "?"
+            pips = _scalp_gross_pips(record)
+            usd = record.get("gross_pnl")
+            if pips is not None:
+                total_pips += pips
+            if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+                total_usd += float(usd)
+
+            bucket = by_symbol.setdefault(instrument, {"count": 0, "pips": 0.0, "usd": 0.0})
+            bucket["count"] += 1
+            if pips is not None:
+                bucket["pips"] += pips
+            if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+                bucket["usd"] += float(usd)
+
+        scalp_count = len(scalps)
+        lines.append(
+            f"{scalp_count} scalps, {_fmt_signed(total_pips, 1)} pips gross, "
+            f"{_fmt_signed(total_usd, 2)} USD gross"
+        )
+        lines.append("")
+
+        for instrument in sorted(by_symbol.keys(), key=lambda s: (-by_symbol[s]["usd"], s)):
+            bucket = by_symbol[instrument]
+            scalp_word = "scalp" if bucket["count"] == 1 else "scalps"
+            lines.append(
+                f"  {instrument:<6} {bucket['count']} {scalp_word}   "
+                f"{_fmt_signed(bucket['pips'], 1)} pips   "
+                f"{_fmt_signed(bucket['usd'], 2)} USD"
+            )
+        lines.append("")
+
+    lines.append(
+        f"Open risk    {book_stats['position_count']} positions across "
+        f"{book_stats['pair_count']} pairs, deepest stack {book_stats['deepest_stack']}"
+    )
+    lines.append(f"Open MTM     {_fmt_signed(book_stats['open_mtm'], 2)} USD")
+
+    commission = round(-0.05 * len(scalps), 2)
+    gross_usd = sum(
+        float(rec["gross_pnl"])
+        for rec in scalps
+        if isinstance(rec.get("gross_pnl"), (int, float)) and not isinstance(rec.get("gross_pnl"), bool)
+    )
+    net_today = round(gross_usd + commission, 2)
+    lines.append(f"Commission   {_fmt_signed(commission, 2)} USD")
+    lines.append(f"Net today    {_fmt_signed(net_today, 2)} USD")
+
+    equity = metrics.get("equity") if metrics else None
+    balance = metrics.get("balance") if metrics else None
+    equity_str = f"{equity:.2f}" if equity is not None else "—"
+    balance_str = f"{balance:.2f}" if balance is not None else "—"
+    lines.append(f"Equity       {equity_str} USD    Balance {balance_str} USD")
+    lines.append(_cycle_summary_line())
+
+    return "\n".join(lines) + "\n"
+
+
+def _parse_grind_comment(comment):
+    """Parse GRIND|slot|L|S|Lnn|ENT|EXT order comments."""
+    if not isinstance(comment, str):
+        return None
+    parts = comment.split("|")
+    if len(parts) < 5 or parts[0] != "GRIND":
+        return None
+    side = parts[2]
+    if side not in ("L", "S"):
+        return None
+    role_tag = parts[4]
+    if role_tag not in ("ENT", "EXT"):
+        return None
+    layer_token = parts[3]
+    if not layer_token.startswith("L"):
+        return None
+    try:
+        layer = int(layer_token[1:])
+    except ValueError:
+        return None
+    return {
+        "slot": parts[1],
+        "side": side,
+        "layer": layer,
+        "role": role_tag,
+    }
+
+
+def _pip_size_from_carry_row(carry_row, ref_price=None):
+    """Pip size in price units from carry-table digits or price heuristic."""
+    if isinstance(carry_row, dict) and carry_row.get("digits") is not None:
+        digits = carry_row["digits"]
+        if isinstance(digits, (int, float)) and not isinstance(digits, bool):
+            return 10 ** (-(int(digits) - 1))
+    if isinstance(ref_price, (int, float)) and not isinstance(ref_price, bool):
+        if float(ref_price) > 50:
+            return 0.01
+    return 0.0001
+
+
+def _read_carry_rows_by_symbol():
+    """Load carry table rows indexed by symbol."""
+    raw = r.get(ARCHIVE_CARRY_KEY)
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return {}
+    out = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = row.get("symbol")
+        if isinstance(symbol, str) and symbol:
+            out[symbol] = row
+    return out
+
+
+def _build_carry_audit_rows():
+    """Working orders with tonight's carry-adjusted prices (independent of EA projection)."""
+    carry_by_symbol = _read_carry_rows_by_symbol()
+    rows = []
+
+    for inst in GRIND_INSTANCES:
+        raw = r.get(f"fxmatrix:state:{inst}")
+        if raw is None:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+
+        book = data.get("book")
+        if not isinstance(book, dict):
+            continue
+        orders = book.get("orders")
+        if not isinstance(orders, list):
+            continue
+
+        symbol = inst.split("_")[1] if "_" in inst else inst
+        carry_row = carry_by_symbol.get(symbol)
+
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            price_now = order.get("price")
+            if not isinstance(price_now, (int, float)) or isinstance(price_now, bool):
+                continue
+            price_now = round(float(price_now), 5)
+
+            parsed = _parse_grind_comment(order.get("comment"))
+            row = {
+                "instance": inst,
+                "side": parsed["side"] if parsed else None,
+                "layer": parsed["layer"] if parsed else None,
+                "role": parsed["role"] if parsed else None,
+                "type": order.get("type"),
+                "price_now": price_now,
+                "carry_pips": None,
+                "pip_size": None,
+                "price_tonight": price_now,
+                "changed": False,
+                "why": "unparsed comment",
+            }
+
+            if parsed is None:
+                rows.append(row)
+                continue
+
+            if carry_row is None:
+                row["why"] = "no carry data"
+                rows.append(row)
+                continue
+
+            pip_size = _pip_size_from_carry_row(carry_row, price_now)
+            row["pip_size"] = pip_size
+
+            if parsed["role"] == "ENT":
+                row["why"] = "entry order -- carry applies to inventory, not unfilled quotes"
+                rows.append(row)
+                continue
+
+            side = parsed["side"]
+            carry_pips = carry_row.get("long_pips") if side == "L" else carry_row.get("short_pips")
+            if not isinstance(carry_pips, (int, float)) or isinstance(carry_pips, bool):
+                row["why"] = "no carry data"
+                rows.append(row)
+                continue
+
+            carry_pips = float(carry_pips)
+            direction = 1 if side == "L" else -1
+            price_tonight = round(price_now - direction * carry_pips * pip_size, 5)
+
+            row["carry_pips"] = carry_pips
+            row["price_tonight"] = price_tonight
+            row["changed"] = True
+            row["why"] = "carry applied"
+            rows.append(row)
+
+    rows.sort(key=lambda item: (
+        item.get("instance") or "",
+        item.get("side") or "",
+        item.get("layer") if item.get("layer") is not None else -1,
+    ))
+    return rows
+
+
 def _apply_no_cache_headers(response):
     """Block browser, proxy, and CDN caching for dynamic unauthenticated responses.
 
@@ -915,6 +1239,59 @@ def public_carry_table(token, _ignored):
         return _apply_no_cache_headers(response), 200
     except Exception:
         app.logger.exception("public_carry_table failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/summary",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/summary/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_daily_summary(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        text = _build_daily_summary_text()
+        response = Response(text, mimetype="text/plain")
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_daily_summary failed")
+        response = Response("error\n", mimetype="text/plain", status=500)
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/carry_audit",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/carry_audit/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_carry_audit(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        payload = {
+            "generated_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rows": _build_carry_audit_rows(),
+        }
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_carry_audit failed")
         response = jsonify({"error": "internal error"})
         return _apply_no_cache_headers(response), 500
 

@@ -765,6 +765,21 @@
       line-height: 1.4;
     }
 
+    .daily-summary-pre {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      margin-top: 10px;
+      color: var(--text);
+    }
+    .carry-audit-changed td {
+      color: var(--amber);
+    }
+    .carry-audit-unchanged td {
+      color: var(--muted);
+    }
+
     .macro-exposure-row {
       display: flex;
       justify-content: space-between;
@@ -819,6 +834,14 @@
     <div class="status-dot"></div>
     <span id="statusText">Connecting...</span>
   </div>
+</div>
+
+<div class="card" id="summarySection" style="margin-bottom:16px">
+  <div class="teams-section-header">
+    <div class="card-label">Daily summary</div>
+    <button type="button" class="teams-copy-btn" id="summaryCopyBtn" onclick="copyDailySummary()">Copy</button>
+  </div>
+  <pre class="daily-summary-pre" id="dailySummaryPre">Loading...</pre>
 </div>
 
 <!-- Row 1: Equity vs Balance + Intraday low-water -->
@@ -972,6 +995,29 @@
     </thead>
     <tbody id="carryBody">
       <tr class="empty-row"><td colspan="7">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card" id="carryAuditSection" style="margin-bottom:16px">
+  <div class="card-label">Carry audit (tonight)</div>
+  <table class="teams-table" id="carryAuditTable" style="margin-top:10px">
+    <thead>
+      <tr>
+        <th>Instance</th>
+        <th>Side</th>
+        <th>Layer</th>
+        <th>Role</th>
+        <th>Type</th>
+        <th>Price now</th>
+        <th>Carry tonight</th>
+        <th>Price tonight</th>
+        <th>Changed</th>
+        <th>Why</th>
+      </tr>
+    </thead>
+    <tbody id="carryAuditBody">
+      <tr class="empty-row"><td colspan="10">Loading...</td></tr>
     </tbody>
   </table>
 </div>
@@ -1521,8 +1567,85 @@
     }
   }
 
+  async function fetchDailySummary() {
+    const pre = document.getElementById('dailySummaryPre');
+    try {
+      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/summary/' + Date.now());
+      if (!res.ok) throw new Error('fetch failed');
+      pre.textContent = await res.text();
+    } catch (e) {
+      pre.textContent = 'Summary unavailable.';
+    }
+  }
+
+  function copyDailySummary() {
+    const btn = document.getElementById('summaryCopyBtn');
+    const text = document.getElementById('dailySummaryPre').textContent || '';
+    if (!text || text === 'Loading...' || text === 'Summary unavailable.') {
+      if (btn) {
+        const prev = btn.textContent;
+        btn.textContent = 'Nothing to copy';
+        setTimeout(function() { btn.textContent = prev; }, 1500);
+      }
+      return;
+    }
+    const done = function() {
+      if (!btn) return;
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(function() {
+        btn.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    };
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(done);
+    }
+  }
+
+  function renderCarryAudit(payload) {
+    const body = document.getElementById('carryAuditBody');
+    if (!body) return;
+    const rows = payload && Array.isArray(payload.rows) ? payload.rows : [];
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="10">No working orders.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function(row) {
+      const cls = row.changed ? 'carry-audit-changed' : 'carry-audit-unchanged';
+      const carryVal = row.carry_pips != null ? fmt(row.carry_pips, 3) : '—';
+      const priceTonight = row.price_tonight != null ? fmt(row.price_tonight, 5) : '—';
+      return '<tr class="' + cls + '">' +
+        '<td>' + (row.instance || '—') + '</td>' +
+        '<td>' + (row.side || '—') + '</td>' +
+        '<td>' + (row.layer != null ? row.layer : '—') + '</td>' +
+        '<td>' + (row.role || '—') + '</td>' +
+        '<td>' + (row.type || '—') + '</td>' +
+        '<td>' + fmt(row.price_now, 5) + '</td>' +
+        '<td>' + carryVal + '</td>' +
+        '<td>' + priceTonight + '</td>' +
+        '<td>' + (row.changed ? 'yes' : 'no') + '</td>' +
+        '<td>' + (row.why || '—') + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  async function fetchCarryAudit() {
+    try {
+      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/carry_audit/' + Date.now());
+      if (!res.ok) throw new Error('fetch failed');
+      renderCarryAudit(await res.json());
+    } catch (e) {
+      renderCarryAudit(null);
+    }
+  }
+
+  fetchDailySummary();
   fetchCarryTable();
+  fetchCarryAudit();
+  setInterval(fetchDailySummary, 5000);
   setInterval(fetchCarryTable, 5000);
+  setInterval(fetchCarryAudit, 5000);
 
   let todayAllCache = { headers: ['Time', 'Pair', 'Direction', 'Entry', 'Exit', 'Pips'], rows: [], summary: '' };
   let openPosCache  = { headers: ['Pair', 'Direction', 'Entry', 'Layers', 'Net PnL'], rows: [] };

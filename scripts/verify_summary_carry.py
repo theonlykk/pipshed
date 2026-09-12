@@ -85,13 +85,13 @@ def test_s1_summary_text():
     text = resp.get_data(as_text=True)
 
     assert "FXGRIND --" in text
-    assert "3 scalps" in text
-    assert "+5.0 pips gross" in text
+    assert "3 closed" in text
+    assert "+5.0 pips" in text
     assert "+5.00 USD gross" in text
-    assert "Commission   -0.15 USD" in text
-    assert "Net today    +4.85 USD" in text
-    assert "Equity       100050.25 USD" in text
-    assert "Balance 100000.00 USD" in text
+    assert "Commission -0.15 USD" in text
+    assert "Net +4.85 USD" in text
+    assert "Equity 100,050.25" in text
+    assert "Balance 100,000.00 USD" in text
 
     eurgbp_pos = text.find("EURGBP")
     audcad_pos = text.find("AUDCAD")
@@ -123,27 +123,27 @@ def test_s2_empty_day():
     resp = client.get("/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary")
     assert resp.status_code == 200
     text = resp.get_data(as_text=True)
-    assert "No scalps yet today." in text
-    assert "Equity       100050.25 USD" in text
+    assert "Scalps       none closed" in text
+    assert "Equity 100,050.25" in text
     print("S2 OK: empty day message with equity")
 
 
-def test_s3_cycle_start_unset():
+def test_s3_cycle_start_default():
     import app as pipshed
 
     mock = MockRedis()
     pipshed.r = mock
     client = pipshed.app.test_client()
-    old = os.environ.pop("CYCLE_START_DATE", None)
+    old_cycle = pipshed.CYCLE_START_DATE
+    pipshed.CYCLE_START_DATE = pipshed.DEFAULT_CYCLE_START_DATE
     try:
         _seed_heartbeat(mock, "GRIND_GBPUSD_OPT")
         resp = client.get("/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary")
         text = resp.get_data(as_text=True)
-        assert "Cycle        (start date not configured)" in text
-        print("S3 OK: cycle line when CYCLE_START_DATE unset")
+        assert "since Thu 10 Sep 2026" in text
+        print("S3 OK: default cycle start date used when env unset")
     finally:
-        if old is not None:
-            os.environ["CYCLE_START_DATE"] = old
+        pipshed.CYCLE_START_DATE = old_cycle
 
 
 def _ext_order(comment, price, order_type="ORDER_TYPE_SELL_LIMIT"):
@@ -349,8 +349,8 @@ def test_s6_cycle_day_count():
     mock = MockRedis()
     pipshed.r = mock
     client = pipshed.app.test_client()
-    old_cycle = os.environ.get("CYCLE_START_DATE")
-    os.environ["CYCLE_START_DATE"] = "2026-09-10"
+    old_cycle = pipshed.CYCLE_START_DATE
+    pipshed.CYCLE_START_DATE = "2026-09-10"
     try:
         _seed_heartbeat(mock, "GRIND_GBPUSD_OPT")
         with patch.object(pipshed, "_broker_today", return_value="2026-09-12"):
@@ -361,10 +361,7 @@ def test_s6_cycle_day_count():
             assert "day 2" in text
         print("S6 OK: cycle weekday count for Sat 2026-09-12 is day 2")
     finally:
-        if old_cycle is not None:
-            os.environ["CYCLE_START_DATE"] = old_cycle
-        else:
-            os.environ.pop("CYCLE_START_DATE", None)
+        pipshed.CYCLE_START_DATE = old_cycle
 
 
 def test_s7_cycle_totals_multi_day():
@@ -374,8 +371,8 @@ def test_s7_cycle_totals_multi_day():
     mock = MockRedis()
     pipshed.r = mock
     client = pipshed.app.test_client()
-    old_cycle = os.environ.get("CYCLE_START_DATE")
-    os.environ["CYCLE_START_DATE"] = "2026-09-10"
+    old_cycle = pipshed.CYCLE_START_DATE
+    pipshed.CYCLE_START_DATE = "2026-09-10"
     try:
         _seed_heartbeat(mock, "GRIND_GBPUSD_OPT")
         _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85, 0.85020, 2.00, "2026-09-10")
@@ -386,18 +383,16 @@ def test_s7_cycle_totals_multi_day():
                 "/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary?date=2026-09-12"
             )
             text = resp.get_data(as_text=True)
-            assert "3 scalps" in text or "3 closed" in text
-            cycle_lines = [ln for ln in text.splitlines() if ln.strip().startswith("Cycle")]
-            assert cycle_lines, "missing Cycle line"
-            totals_line = [ln for ln in text.splitlines() if "commission" in ln and "net" in ln.lower()]
+            assert "1 closed" in text
+            totals_line = [
+                ln for ln in text.splitlines()
+                if ln.startswith("             ") and "USD gross" in ln
+            ]
             assert totals_line, "missing cycle totals line"
-            assert "+9.00" in totals_line[0] or "9.00 USD gross" in text
+            assert "3 scalps, +9.00 USD gross" in totals_line[0]
         print("S7 OK: cycle totals aggregate scalps across broker days")
     finally:
-        if old_cycle is not None:
-            os.environ["CYCLE_START_DATE"] = old_cycle
-        else:
-            os.environ.pop("CYCLE_START_DATE", None)
+        pipshed.CYCLE_START_DATE = old_cycle
 
 
 def test_s8_historical_date_markers():
@@ -505,7 +500,7 @@ def test_c6_wrong_token():
 def main():
     test_s1_summary_text()
     test_s2_empty_day()
-    test_s3_cycle_start_unset()
+    test_s3_cycle_start_default()
     test_s4_layout_order()
     test_s5_financing_accrued()
     test_s6_cycle_day_count()

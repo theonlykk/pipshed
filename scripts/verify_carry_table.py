@@ -49,7 +49,7 @@ class FakeRedis:
 class FakeCursor:
     CARRY_COLUMNS = (
         "symbol", "swap_long", "swap_short", "long_pips", "short_pips",
-        "multiplier", "rollover3days", "swap_mode", "digits",
+        "multiplier", "mult_tomorrow", "rollover3days", "swap_mode", "digits",
         "trade_mode_full", "received_at",
     )
 
@@ -126,11 +126,11 @@ def test_ct1_build_carry_table_types():
     conn = FakeConnection()
     conn.carry_rows = [
         (
-            "EURUSD", "-8.76", "0.37", "-0.876", "0.037", "3", "3", "1", "5",
+            "EURUSD", "-8.76", "0.37", "-0.876", "0.037", "3", None, "3", "1", "5",
             "true", datetime(2026, 9, 11, 22, 34, tzinfo=timezone.utc),
         ),
         (
-            "GBPUSD", "-6.50", "0.20", "-0.650", "0.020", "1", "3", "1", "5",
+            "GBPUSD", "-6.50", "0.20", "-0.650", "0.020", "1", None, "3", "1", "5",
             "false", datetime(2026, 9, 11, 22, 34, tzinfo=timezone.utc),
         ),
     ]
@@ -140,7 +140,10 @@ def test_ct1_build_carry_table_types():
     assert row0["symbol"] == "EURUSD"
     assert isinstance(row0["swap_long_pts"], float)
     assert isinstance(row0["long_pips"], float)
+    assert row0["long_pips"] == -2.628
     assert isinstance(row0["mult"], int)
+    assert row0["mult_used"] == 3
+    assert row0["mult_snapshot"] == 3
     assert row0["trade_mode_full"] is True
     assert row0["snapshot_at"] is not None
     row1 = table["rows"][1]
@@ -154,7 +157,7 @@ def test_ct2_long_week_pips():
     conn = FakeConnection()
     conn.carry_rows = [
         (
-            "EURUSD", "-8.76", "0.37", "-0.876", "0.037", "1", "3", "1", "5",
+            "EURUSD", "-8.76", "0.37", "-0.876", "0.037", "1", None, "3", "1", "5",
             "true", datetime(2026, 9, 11, 22, 34, tzinfo=timezone.utc),
         ),
     ]
@@ -171,11 +174,11 @@ def test_ct3_skip_null_symbol():
     conn = FakeConnection()
     conn.carry_rows = [
         (
-            None, "-8.76", "0.37", "-0.876", "0.037", "1", "3", "1", "5",
+            None, "-8.76", "0.37", "-0.876", "0.037", "1", None, "3", "1", "5",
             "true", datetime(2026, 9, 11, 22, 34, tzinfo=timezone.utc),
         ),
         (
-            "EURUSD", "-8.76", "0.37", "-0.876", "0.037", "1", "3", "1", "5",
+            "EURUSD", "-8.76", "0.37", "-0.876", "0.037", "1", None, "3", "1", "5",
             "true", datetime(2026, 9, 11, 22, 34, tzinfo=timezone.utc),
         ),
     ]

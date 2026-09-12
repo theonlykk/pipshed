@@ -42,8 +42,8 @@ CARRY_SQL = """
 SELECT DISTINCT ON (detail->>'symbol')
        detail->>'symbol', detail->>'swap_long', detail->>'swap_short',
        detail->>'long_pips', detail->>'short_pips', detail->>'multiplier',
-       detail->>'rollover3days', detail->>'swap_mode', detail->>'digits',
-       detail->>'trade_mode_full', received_at
+       detail->>'mult_tomorrow', detail->>'rollover3days', detail->>'swap_mode',
+       detail->>'digits', detail->>'trade_mode_full', received_at
 FROM ea_events
 WHERE code = 'CARRY_SNAPSHOT'
 ORDER BY detail->>'symbol', received_at DESC
@@ -133,6 +133,7 @@ def build_carry_table(conn):
             long_pips,
             short_pips,
             multiplier,
+            mult_tomorrow,
             rollover3days,
             swap_mode,
             digits,
@@ -141,15 +142,30 @@ def build_carry_table(conn):
         ) in cur.fetchall():
             if symbol is None or str(symbol).strip() == "":
                 continue
-            long_pips_val = carry_parse_float(long_pips)
-            short_pips_val = carry_parse_float(short_pips)
+            swap_long_pts = carry_parse_float(swap_long)
+            swap_short_pts = carry_parse_float(swap_short)
+            mult_snapshot = carry_parse_int(multiplier)
+            mult_tomorrow_val = carry_parse_int(mult_tomorrow)
+            mult_used = (
+                mult_tomorrow_val
+                if mult_tomorrow_val is not None
+                else mult_snapshot
+            )
+            long_pips_val = None
+            short_pips_val = None
+            if swap_long_pts is not None and mult_used is not None:
+                long_pips_val = round(swap_long_pts * mult_used / 10, 3)
+            if swap_short_pts is not None and mult_used is not None:
+                short_pips_val = round(swap_short_pts * mult_used / 10, 3)
             row = {
                 "symbol": symbol,
-                "swap_long_pts": carry_parse_float(swap_long),
-                "swap_short_pts": carry_parse_float(swap_short),
+                "swap_long_pts": swap_long_pts,
+                "swap_short_pts": swap_short_pts,
                 "long_pips": long_pips_val,
                 "short_pips": short_pips_val,
-                "mult": carry_parse_int(multiplier),
+                "mult": mult_used,
+                "mult_used": mult_used,
+                "mult_snapshot": mult_snapshot,
                 "rollover3days": carry_parse_int(rollover3days),
                 "swap_mode": carry_parse_int(swap_mode),
                 "digits": carry_parse_int(digits),

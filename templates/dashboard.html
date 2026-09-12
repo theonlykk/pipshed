@@ -839,7 +839,12 @@
 <div class="card" id="summarySection" style="margin-bottom:16px">
   <div class="teams-section-header">
     <div class="card-label">Daily summary</div>
-    <button type="button" class="teams-copy-btn" id="summaryCopyBtn" onclick="copyDailySummary()">Copy</button>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button type="button" class="teams-copy-btn" id="summaryPrevBtn" onclick="summaryShiftDay(-1)">Previous</button>
+      <input type="date" id="summaryDateInput" class="teams-copy-btn" style="padding:4px 8px" onchange="onSummaryDateChange()" />
+      <button type="button" class="teams-copy-btn" id="summaryNextBtn" onclick="summaryShiftDay(1)">Next</button>
+      <button type="button" class="teams-copy-btn" id="summaryCopyBtn" onclick="copyDailySummary()">Copy</button>
+    </div>
   </div>
   <pre class="daily-summary-pre" id="dailySummaryPre">Loading...</pre>
 </div>
@@ -1567,12 +1572,55 @@
     }
   }
 
+  let summarySelectedDate = null;
+  let summaryBrokerToday = null;
+
+  function summaryDateQuery() {
+    return summarySelectedDate ? ('?date=' + encodeURIComponent(summarySelectedDate)) : '';
+  }
+
+  function syncSummaryDateInput() {
+    const input = document.getElementById('summaryDateInput');
+    if (!input) return;
+    const value = summarySelectedDate || summaryBrokerToday;
+    if (value) input.value = value;
+  }
+
+  function onSummaryDateChange() {
+    const input = document.getElementById('summaryDateInput');
+    summarySelectedDate = input && input.value ? input.value : null;
+    fetchDailySummary();
+  }
+
+  function summaryShiftDay(delta) {
+    const base = summarySelectedDate || summaryBrokerToday;
+    if (!base) return;
+    const parts = base.split('-').map(Number);
+    const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    dt.setUTCDate(dt.getUTCDate() + delta);
+    summarySelectedDate = dt.toISOString().slice(0, 10);
+    syncSummaryDateInput();
+    fetchDailySummary();
+  }
+
   async function fetchDailySummary() {
     const pre = document.getElementById('dailySummaryPre');
     try {
-      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/summary/' + Date.now());
+      const res = await fetch(
+        '/api/g/' + PUBLIC_CARRY_TOKEN + '/summary' + summaryDateQuery() + (
+          summaryDateQuery() ? '&' : '?'
+        ) + '_=' + Date.now()
+      );
       if (!res.ok) throw new Error('fetch failed');
       pre.textContent = await res.text();
+      if (!summaryBrokerToday) {
+        const scalpsRes = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/scalps/' + Date.now());
+        if (scalpsRes.ok) {
+          const payload = await scalpsRes.json();
+          summaryBrokerToday = payload.date || null;
+          if (!summarySelectedDate) syncSummaryDateInput();
+        }
+      }
     } catch (e) {
       pre.textContent = 'Summary unavailable.';
     }

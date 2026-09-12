@@ -105,7 +105,8 @@ GRIND_KNOWN_SYMBOLS = frozenset(inst.split("_")[1] for inst in GRIND_INSTANCES)
 
 # FTMO / MT5 server time — matches EA trade_date (TimeCurrent() on broker)
 BROKER_TIMEZONE = os.environ.get("BROKER_TIMEZONE", "Europe/Athens")
-CYCLE_START_DATE = os.environ.get("CYCLE_START_DATE")
+DEFAULT_CYCLE_START_DATE = "2026-09-10"
+CYCLE_START_DATE = os.environ.get("CYCLE_START_DATE", DEFAULT_CYCLE_START_DATE)
 
 
 def _broker_today():
@@ -753,10 +754,43 @@ def _collect_today_scalp_records(selected_date=None):
     return date, all_records
 
 
-def _broker_day_label():
-    """Human-readable broker calendar date, e.g. Fri 12 Sep 2026."""
-    now = datetime.now(ZoneInfo(BROKER_TIMEZONE))
-    return now.strftime("%a %d %b %Y")
+def _collect_scalp_records_between(start_date, end_date):
+    """Cross-instance scalp exits for an inclusive broker-date range."""
+    all_records = []
+
+    for inst in GRIND_INSTANCES:
+        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
+        records = [json.loads(item) for item in raw_list]
+        range_records = [
+            record
+            for record in records
+            if (rec_date := _closed_record_date(record))
+            and start_date <= rec_date <= end_date
+        ]
+        for record in range_records:
+            merged = dict(record)
+            merged["instance_id"] = inst
+            all_records.append(merged)
+
+    all_records.sort(key=lambda item: item.get("close_time", ""))
+    return all_records
+
+
+def _parse_broker_date(date_str):
+    """Validate YYYY-MM-DD broker date string."""
+    if not isinstance(date_str, str) or not date_str:
+        return None
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return date_str
+
+
+def _format_broker_date_label(date_str):
+    """Human-readable broker calendar date, e.g. Sat 12 Sep 2026."""
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    return dt.strftime("%a %d %b %Y")
 
 
 def _pip_multiplier_for_prices(*prices):
@@ -785,17 +819,41 @@ def _fmt_signed(value, decimals):
     return f"{value:+.{decimals}f}"
 
 
-def _cycle_summary_line():
-    """Cycle day line for the daily summary, or not-configured placeholder."""
-    if not CYCLE_START_DATE:
-        return "Cycle        (start date not configured)"
-    try:
-        start = datetime.strptime(CYCLE_START_DATE, "%Y-%m-%d").date()
-    except ValueError:
-        return "Cycle        (start date not configured)"
-    today = datetime.now(ZoneInfo(BROKER_TIMEZONE)).date()
-    day_num = (today - start).days + 1
-    return f"Cycle        day {day_num} (since {CYCLE_START_DATE})"
+def _fmt_money(value, signed=True):
+    """Format USD with thousands separators; optional explicit sign."""
+    amount = abs(float(value))
+    text = f"{amount:,.2f}"
+    if not signed:
+        return text
+    if float(value) >= 0:
+        return f"+{text}"
+    return f"-{text}"
+
+
+def _cycle_day_number(start_date_str, selected_date_str, broker_today_str):
+    """Weekday-based cycle day count for the selected broker date."""
+    start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    selected = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+    broker_today = datetime.strptime(broker_today_str, "%Y-%m-%d").date()
+    count = 0
+    day = start
+    while day <= selected:
+        if day.weekday() < 5:
+            count += 1
+        day += timedelta(days=1)
+    if selected.weekday() < 5 and selected == broker_today:
+        count -= 1
+    return max(count, 1)
+
+
+def _scalp_usd_gross(records):
+    """Sum gross USD from scalp records."""
+    total = 0.0
+    for record in records:
+        usd = record.get("gross_pnl")
+        if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+            total += float(usd)
+    return total
 
 
 def _collect_open_book_stats():
@@ -848,17 +906,53 @@ def _collect_open_book_stats():
     }
 
 
-def _build_daily_summary_text():
+def _build_daily_summary_text(selected_date=None):
     """Plain-text broker-day summary for copy/paste."""
-    _, scalps = _collect_today_scalp_records()
+    broker_today = _broker_today()
+    date = selected_date or broker_today
+    is_historical = date != broker_today
+    live_suffix = " (live, not historical)" if is_historical else ""
+    header_tag = "(historical)" if is_historical else "(today)"
+
+    _, scalps = _collect_today_scalp_records(date)
     metrics = _read_global_account_metrics()
     book_stats = _collect_open_book_stats()
 
-    lines = [f"FXGRIND -- {_broker_day_label()}"]
+    lines = [
+        f"FXGRIND -- {_format_broker_date_label(date)}            {header_tag}",
+        "",
+    ]
+
+    equity = metrics.get("equity") if metrics else None
+    balance = metrics.get("balance") if metrics else None
+    if equity is not None and balance is not None:
+        lines.append(
+            f"Account      Equity {_fmt_money(equity, signed=False)}   "
+            f"Balance {_fmt_money(balance, signed=False)} USD{live_suffix}"
+        )
+    else:
+        lines.append(f"Account      n/a{live_suffix}")
+
+    lines.append(
+        f"Open risk    {book_stats['position_count']} positions, "
+        f"{book_stats['pair_count']} pairs, deepest stack "
+        f"{book_stats['deepest_stack']}{live_suffix}"
+    )
+
+    open_mtm = book_stats["open_mtm"]
+    if equity is not None and balance is not None:
+        financing = round((equity - balance) - open_mtm, 2)
+        financing_str = _fmt_money(financing)
+    else:
+        financing_str = "n/a"
+    lines.append(
+        f"Open MTM     {_fmt_money(open_mtm)} USD{live_suffix}         "
+        f"Financing accrued {financing_str} USD{live_suffix}"
+    )
+    lines.append("")
 
     if not scalps:
-        lines.append("No scalps yet today.")
-        lines.append("")
+        lines.append("Scalps       none closed")
     else:
         total_pips = 0.0
         total_usd = 0.0
@@ -880,10 +974,15 @@ def _build_daily_summary_text():
             if isinstance(usd, (int, float)) and not isinstance(usd, bool):
                 bucket["usd"] += float(usd)
 
-        scalp_count = len(scalps)
+        commission = round(-0.05 * len(scalps), 2)
+        net_today = round(total_usd + commission, 2)
         lines.append(
-            f"{scalp_count} scalps, {_fmt_signed(total_pips, 1)} pips gross, "
-            f"{_fmt_signed(total_usd, 2)} USD gross"
+            f"Scalps       {len(scalps)} closed, {_fmt_signed(total_pips, 1)} pips, "
+            f"{_fmt_money(total_usd)} USD gross"
+        )
+        lines.append(
+            f"             Commission {_fmt_money(commission)} USD   "
+            f"Net {_fmt_money(net_today)} USD"
         )
         lines.append("")
 
@@ -893,32 +992,31 @@ def _build_daily_summary_text():
             lines.append(
                 f"  {instrument:<6} {bucket['count']} {scalp_word}   "
                 f"{_fmt_signed(bucket['pips'], 1)} pips   "
-                f"{_fmt_signed(bucket['usd'], 2)} USD"
+                f"{_fmt_money(bucket['usd'])} USD"
             )
         lines.append("")
 
+    cycle_start = CYCLE_START_DATE or DEFAULT_CYCLE_START_DATE
+    day_num = _cycle_day_number(cycle_start, date, broker_today)
+    cycle_records = _collect_scalp_records_between(cycle_start, date)
+    cycle_gross = _scalp_usd_gross(cycle_records)
+    cycle_commission = round(-0.05 * len(cycle_records), 2)
+    cycle_net = round(cycle_gross + cycle_commission, 2)
+
+    truncated = ""
+    if cycle_records:
+        earliest = min(_closed_record_date(record) for record in cycle_records)
+        if earliest > cycle_start:
+            truncated = " (history truncated)"
+
     lines.append(
-        f"Open risk    {book_stats['position_count']} positions across "
-        f"{book_stats['pair_count']} pairs, deepest stack {book_stats['deepest_stack']}"
+        f"Cycle        day {day_num} (since {_format_broker_date_label(cycle_start)})"
+        f"{truncated}"
     )
-    lines.append(f"Open MTM     {_fmt_signed(book_stats['open_mtm'], 2)} USD")
-
-    commission = round(-0.05 * len(scalps), 2)
-    gross_usd = sum(
-        float(rec["gross_pnl"])
-        for rec in scalps
-        if isinstance(rec.get("gross_pnl"), (int, float)) and not isinstance(rec.get("gross_pnl"), bool)
+    lines.append(
+        f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD gross, "
+        f"{_fmt_money(cycle_commission)} commission, {_fmt_money(cycle_net)} net"
     )
-    net_today = round(gross_usd + commission, 2)
-    lines.append(f"Commission   {_fmt_signed(commission, 2)} USD")
-    lines.append(f"Net today    {_fmt_signed(net_today, 2)} USD")
-
-    equity = metrics.get("equity") if metrics else None
-    balance = metrics.get("balance") if metrics else None
-    equity_str = f"{equity:.2f}" if equity is not None else "—"
-    balance_str = f"{balance:.2f}" if balance is not None else "—"
-    lines.append(f"Equity       {equity_str} USD    Balance {balance_str} USD")
-    lines.append(_cycle_summary_line())
 
     return "\n".join(lines) + "\n"
 
@@ -1259,7 +1357,15 @@ def public_daily_summary(token, _ignored):
         return jsonify({"error": "not found"}), 404
 
     try:
-        text = _build_daily_summary_text()
+        date_filter = request.args.get("date")
+        if date_filter is not None:
+            parsed = _parse_broker_date(date_filter)
+            if parsed is None:
+                response = Response("invalid date\n", mimetype="text/plain")
+                return _apply_no_cache_headers(response), 400
+            text = _build_daily_summary_text(parsed)
+        else:
+            text = _build_daily_summary_text()
         response = Response(text, mimetype="text/plain")
         return _apply_no_cache_headers(response), 200
     except Exception:

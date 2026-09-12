@@ -46,3 +46,23 @@ only and never connects to Postgres.
   matching existing dashboard exposure assumptions.
 - **Negative:** Open MTM sums `book.positions[].profit` from heartbeats; if
   the book is stale, MTM will lag.
+
+## Update 2026-09-12 (ADR-138)
+
+**Defect:** Live check on 2026-09-12 found `/carry_audit` reporting
+`carry_pips` of 0.0 for every order. Cause: the carry table published
+`long_pips` / `short_pips` using the snapshot's **today** `multiplier`.
+On Saturday the broker weekday table has multiplier 0, so all published
+pips collapsed to zero even though the imminent rollover uses **Monday's**
+multiplier (1).
+
+**Fix:** `archive_worker.build_carry_table` now uses `mult_tomorrow` when
+present (fallback: `multiplier`), recomputing pips as
+`swap_points * mult_used / 10`. Rows publish `mult_used` and
+`mult_snapshot` alongside the recomputed pips.
+
+**Summary v2:** Layout leads with account (not commission), adds financing
+accrued `(equity - balance) - open_mtm`, cycle weekday totals via
+`_collect_scalp_records_between`, optional `?date=` with `(historical)` /
+`(live, not historical)` markers on fields that cannot be reconstructed
+for past broker days.

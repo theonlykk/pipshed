@@ -7,6 +7,7 @@ Options:
     --table NAME     only this table
     --instance ID    only rows for this instance_id
     --carry          latest CARRY_SNAPSHOT row per symbol (skips table counts)
+    --rollovers      rollover crossings per closed layer from fill_logs (skips table counts)
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -45,6 +46,31 @@ WHERE code = 'CARRY_SNAPSHOT'
 ORDER BY detail->>'symbol', received_at DESC
 """
 
+ROLLOVERS_SQL = """
+WITH legs AS (
+  SELECT instance_id, position_id,
+         MIN(deal_time_broker) FILTER (WHERE entry_type = 'IN')  AS opened,
+         MAX(deal_time_broker) FILTER (WHERE entry_type <> 'IN') AS closed,
+         MAX(layer_index)      FILTER (WHERE entry_type = 'IN')  AS layer_index,
+         SUM(COALESCE(swap,0))                                   AS swap_booked
+  FROM fill_logs
+  GROUP BY instance_id, position_id
+), spans AS (
+  SELECT *,
+         (closed::date - opened::date) AS rollovers,
+         EXTRACT(EPOCH FROM (closed - opened))/60.0 AS hold_min
+  FROM legs WHERE closed IS NOT NULL
+)
+SELECT instance_id,
+       count(*)                                        AS layers,
+       count(*) FILTER (WHERE rollovers > 0)           AS crossed,
+       round(100.0*count(*) FILTER (WHERE rollovers>0)/count(*),1) AS pct_crossed,
+       round(avg(rollovers)::numeric,2)                AS mean_rollovers,
+       round(avg(hold_min)::numeric,1)                 AS mean_hold_min,
+       round(sum(swap_booked)::numeric,2)              AS swap_usd
+FROM spans GROUP BY instance_id ORDER BY instance_id;
+"""
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -52,6 +78,7 @@ def main(argv=None):
     parser.add_argument("--table", choices=sorted(TABLES))
     parser.add_argument("--instance")
     parser.add_argument("--carry", action="store_true")
+    parser.add_argument("--rollovers", action="store_true")
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -68,6 +95,18 @@ def main(argv=None):
                 rows = cur.fetchall()
                 if not rows:
                     print("no CARRY_SNAPSHOT rows yet.")
+                else:
+                    cols = [desc[0] for desc in cur.description]
+                    print(" | ".join(cols))
+                    for row in rows:
+                        print(" | ".join("" if v is None else str(v) for v in row))
+                return 0
+
+            if args.rollovers:
+                cur.execute(ROLLOVERS_SQL)
+                rows = cur.fetchall()
+                if not rows:
+                    print("no closed layers in fill_logs yet.")
                 else:
                     cols = [desc[0] for desc in cur.description]
                     print(" | ".join(cols))

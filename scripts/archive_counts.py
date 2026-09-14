@@ -8,6 +8,7 @@ Options:
     --instance ID    only rows for this instance_id
     --carry          latest CARRY_SNAPSHOT row per symbol (skips table counts)
     --rollovers      rollover crossings per closed layer from fill_logs (skips table counts)
+    --slippage       slippage distribution and I6-breach fills from fill_logs (skips table counts)
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -71,6 +72,42 @@ SELECT instance_id,
 FROM spans GROUP BY instance_id ORDER BY instance_id;
 """
 
+SLIPPAGE_DIST_SQL = """
+SELECT instance_id,
+       count(*)                                                    AS fills,
+       count(*) FILTER (WHERE slippage_pips > 0)                   AS favourable,
+       count(*) FILTER (WHERE slippage_pips < 0)                   AS adverse,
+       count(*) FILTER (WHERE abs(slippage_pips) > 0.2)            AS beyond_i6,
+       count(*) FILTER (WHERE slippage_pips < -0.2)                AS adverse_beyond_i6,
+       round(avg(slippage_pips)::numeric, 3)                       AS mean_pips,
+       round(min(slippage_pips)::numeric, 2)                       AS worst_adverse,
+       round(max(slippage_pips)::numeric, 2)                       AS best_favourable
+FROM fill_logs
+WHERE slippage_pips IS NOT NULL
+GROUP BY instance_id
+ORDER BY adverse_beyond_i6 DESC, instance_id;
+"""
+
+SLIPPAGE_BREACH_SQL = """
+SELECT deal_time_broker, instance_id, entry_type, deal_type, role,
+       order_price_open, deal_price, slippage_pips, halted_at_receipt
+FROM fill_logs
+WHERE slippage_pips IS NOT NULL
+  AND abs(slippage_pips) > 0.2
+ORDER BY deal_time_broker DESC
+LIMIT 40;
+"""
+
+
+def _print_query_rows(cur, rows, empty_message):
+    if not rows:
+        print(empty_message)
+        return
+    cols = [desc[0] for desc in cur.description]
+    print(" | ".join(cols))
+    for row in rows:
+        print(" | ".join("" if v is None else str(v) for v in row))
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -79,6 +116,7 @@ def main(argv=None):
     parser.add_argument("--instance")
     parser.add_argument("--carry", action="store_true")
     parser.add_argument("--rollovers", action="store_true")
+    parser.add_argument("--slippage", action="store_true")
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -112,6 +150,19 @@ def main(argv=None):
                     print(" | ".join(cols))
                     for row in rows:
                         print(" | ".join("" if v is None else str(v) for v in row))
+                return 0
+
+            if args.slippage:
+                cur.execute(SLIPPAGE_DIST_SQL)
+                dist_rows = cur.fetchall()
+                _print_query_rows(cur, dist_rows, "no fills with slippage recorded yet.")
+                print()
+                cur.execute(SLIPPAGE_BREACH_SQL)
+                breach_rows = cur.fetchall()
+                breach_cols = [desc[0] for desc in cur.description]
+                print(" | ".join(breach_cols))
+                for row in breach_rows:
+                    print(" | ".join("" if v is None else str(v) for v in row))
                 return 0
 
             tables = [args.table] if args.table else list(TABLES)

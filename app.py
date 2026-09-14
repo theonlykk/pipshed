@@ -68,6 +68,8 @@ GRIND_INSTANCES = [
     "GRIND_AUDCHF_ALT",
     "GRIND_CADCHF_OPT",
     "GRIND_CADCHF_ALT",
+    "GRIND_NZDCHF_OPT",
+    "GRIND_NZDCHF_ALT",
 ]
 
 GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_OPT")]
@@ -82,6 +84,14 @@ GRIND_RINGS = {
     "aud_cad_chf": {
         "label": "AUD / CAD / CHF",
         "symbols": ["AUDCAD", "AUDCHF", "CADCHF"],
+    },
+    # Single-pair pilot. NZDCHF scored 2nd of ten on the 2026-09-13
+    # calibration sweep. Ring membership is UNDECIDED (see
+    # HANDOFF_2026-09-13 s3): the data favours an AUD/NZD/CAD/CHF
+    # 4-cycle, which would make this an edge rather than a pilot.
+    "nzdchf_pilot": {
+        "label": "NZDCHF (pilot)",
+        "symbols": ["NZDCHF"],
     },
 }
 

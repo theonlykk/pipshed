@@ -984,6 +984,52 @@
   </div>
 </div>
 
+<div class="grind-ring-section" id="grindRing-nzdchf_pilot">
+  <div class="instance-group-label">Ring 3 — NZDCHF (pilot)</div>
+  <div class="grind-arm-compare-strip">
+    <div class="grind-arm-compare-col opt" id="grindArmCompareOpt-nzdchf_pilot">
+      <div class="grind-arm-compare-title">Arm A <span class="grind-arm-label">(OPT)</span></div>
+      <div id="grindOptHaltedBanner-nzdchf_pilot" style="display:none"></div>
+      <div class="grind-arm-compare-status no-data" id="grindOptStatus-nzdchf_pilot">Arm A: …</div>
+      <div class="grind-arm-compare-detail" id="grindOptDetail-nzdchf_pilot">Loading…</div>
+      <div class="grind-arm-compare-metrics">
+        <div class="grind-arm-realised-block">
+          <div class="grind-arm-metric-label grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+          <div class="grind-arm-realised-value grind-arm-metric-value" id="grindOptRealised-nzdchf_pilot">—</div>
+        </div>
+        <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindOptLayers-nzdchf_pilot">—</div></div>
+        <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindOptActivity-nzdchf_pilot">—</div></div>
+        <div><div class="grind-arm-metric-label grind-pnl-label" title="Position profit + swap only; excludes commission.">Net MTM</div><div class="grind-arm-metric-value" id="grindOptMtm-nzdchf_pilot">—</div></div>
+        <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindOptApi-nzdchf_pilot">—</div></div>
+      </div>
+    </div>
+    <div class="grind-arm-compare-col alt" id="grindArmCompareAlt-nzdchf_pilot">
+      <div class="grind-arm-compare-title">Arm B <span class="grind-arm-label">(ALT)</span></div>
+      <div id="grindAltHaltedBanner-nzdchf_pilot" style="display:none"></div>
+      <div class="grind-arm-compare-status no-data" id="grindAltStatus-nzdchf_pilot">Arm B: …</div>
+      <div class="grind-arm-compare-detail" id="grindAltDetail-nzdchf_pilot">Loading…</div>
+      <div class="grind-arm-compare-metrics">
+        <div class="grind-arm-realised-block">
+          <div class="grind-arm-metric-label grind-pnl-label" title="Deal profit + swap + commission for today. Includes commission, unlike Net MTM.">Realised today</div>
+          <div class="grind-arm-realised-value grind-arm-metric-value" id="grindAltRealised-nzdchf_pilot">—</div>
+        </div>
+        <div><div class="grind-arm-metric-label">Open layers</div><div class="grind-arm-metric-value" id="grindAltLayers-nzdchf_pilot">—</div></div>
+        <div><div class="grind-arm-metric-label">Scalps today</div><div class="grind-arm-metric-value" id="grindAltActivity-nzdchf_pilot">—</div></div>
+        <div><div class="grind-arm-metric-label grind-pnl-label" title="Position profit + swap only; excludes commission.">Net MTM</div><div class="grind-arm-metric-value" id="grindAltMtm-nzdchf_pilot">—</div></div>
+        <div><div class="grind-arm-metric-label">API today</div><div class="grind-arm-metric-value" id="grindAltApi-nzdchf_pilot">—</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="instance-group">
+    <div class="instance-group-label">Instances</div>
+    <div class="instance-bar" id="instanceBar-nzdchf_pilot"></div>
+  </div>
+  <div class="grind-cards-section">
+    <div class="instance-group-label">Instance cards</div>
+    <div class="grind-cards-grid" id="grindCards-nzdchf_pilot"></div>
+  </div>
+</div>
+
 <div class="card" id="carrySection" style="margin-bottom:16px">
   <div class="card-label">Carry (per night, pips)</div>
   <table class="teams-table" id="carryTable" style="margin-top:10px">
@@ -1131,6 +1177,12 @@
         'GRIND_AUDCAD_OPT', 'GRIND_AUDCAD_ALT',
         'GRIND_AUDCHF_OPT', 'GRIND_AUDCHF_ALT',
         'GRIND_CADCHF_OPT', 'GRIND_CADCHF_ALT',
+      ],
+    },
+    nzdchf_pilot: {
+      label: 'NZDCHF (pilot)',
+      instances: [
+        'GRIND_NZDCHF_OPT', 'GRIND_NZDCHF_ALT',
       ],
     },
   };

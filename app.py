@@ -70,6 +70,10 @@ GRIND_INSTANCES = [
     "GRIND_CADCHF_ALT",
     "GRIND_NZDCHF_OPT",
     "GRIND_NZDCHF_ALT",
+    "GRIND_NZDCAD_OPT",
+    "GRIND_NZDCAD_ALT",
+    "GRIND_AUDNZD_OPT",
+    "GRIND_AUDNZD_ALT",
 ]
 
 GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_OPT")]
@@ -92,6 +96,16 @@ GRIND_RINGS = {
     "nzdchf_pilot": {
         "label": "NZDCHF (pilot)",
         "symbols": ["NZDCHF"],
+    },
+    # NZD extension, live 2026-09-16. Completes the AUD/NZD/CAD/CHF
+    # 4-cycle predicted in HANDOFF_2026-09-13 s3 (AUDNZD -> NZDCAD ->
+    # CADCHF -> AUDCHF), but AUDCAD remains a chord across that cycle,
+    # so the fleet is NOT uniform: AUD and CAD now carry 6 instances
+    # each while CHF, EUR, GBP, NZD and USD carry 4. Ring membership is
+    # provisional pending the topology decision in fxmatrix ADR-150 s5.
+    "nzd_ext": {
+        "label": "NZD extension",
+        "symbols": ["NZDCAD", "AUDNZD"],
     },
 }
 

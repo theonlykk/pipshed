@@ -1502,7 +1502,14 @@ def telemetry_live():
 
 @app.route("/")
 def dashboard():
-    return render_template("dashboard.html")
+    rings_ctx = {
+        ring_id: {
+            "label": ring["label"],
+            "instances": _grind_instances_for_ring(ring_id),
+        }
+        for ring_id, ring in GRIND_RINGS.items()
+    }
+    return render_template("dashboard.html", rings=rings_ctx)
 
 
 @app.route("/api/telemetry/pod_closed", methods=["POST"])

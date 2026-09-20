@@ -69,4 +69,4 @@ After deploy, operator can run:
 
 `railway ssh --service archive-worker -i "$HOME\.ssh\id_ed25519" python scripts/archive_counts.py --l0churn`
 
-Line count: 73
+Line count: 72

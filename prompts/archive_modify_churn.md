@@ -8,7 +8,8 @@ This message has a line count at the bottom
 |---|---|---|
 | Purpose | Measure how often the ADR-124 flat-side recentre re-prices L0, per instance. EURGBP has run with `stranded (6) < width + deadband (7)` since deployment, so its stranded gate is permanently open and the deadband is its only brake | Derived from source, `grind_engine.mqh:1482-1524` |
 | Decides | ADR-153's open question: the bound for `stranded`, and whether EURGBP's width or deadband changes on Wednesday | `docs/architecture/ADR-153-geometry-independence.md` |
-| Baseline | pipshed `origin/main` at `4e5bef4` | read by Claude |
+| Baseline | pipshed `origin/main` at `1cb2d2f` | read by Claude |
+| Supersedes | the first attempt, which correctly STOPPED: `prompts/archive_l0churn_response.md` on `feat/archive-l0churn`. Its vocabulary check is the input to this version | done |
 | Scope | ONE new flag and ONE new SQL constant in `scripts/archive_counts.py`. Read-only | this spec |
 | Review | Read-only analytics on the shadow DB. DeepSeek not required | ARCHITECT s2 |
 
@@ -32,22 +33,46 @@ see FAILURE MODES.
 
 ## DESIGN
 
-Add, in the style of the existing `CARRY_SQL` / `ROLLOVERS_SQL` constants,
-ONE query that carries its own denominator so no eyeballing across tables
-is needed:
+**Why the first attempt stopped** (`prompts/archive_l0churn_response.md`,
+branch `feat/archive-l0churn`): all 2430 MODIFY rows carry NULL `role` and
+NULL `layer_index`. Root cause, from the EA source:
+`Grind_ArchiveSendLogFields` (`fxmatrix` `ea/grind_archive.mqh:346-365`)
+derives `slot`, `side`, `role` and `layer_index` by PARSING `req.comment`,
+and an MT5 `TRADE_ACTION_MODIFY` request carries no comment. So those
+columns cannot be populated on a modify. **This is not a pipeline defect
+and needs no EA change.**
+
+**The identity is recoverable by a join.** A modify carries the ticket of
+the order it modifies in `order_ticket`; the placement that created that
+order carries the same ticket in `result_order`, along with the role and
+layer parsed from its comment. So: modify -> placement, on the ticket.
 
     L0_CHURN_SQL = """
-    WITH modify_counts AS (
-        SELECT instance_id,
-               count(*)                                   AS modifies,
-               count(*) FILTER (WHERE NOT ok)             AS failed,
-               min(received_at)                           AS first_seen,
-               max(received_at)                           AS last_seen
+    WITH placements AS (
+        SELECT result_order AS ticket,
+               instance_id,
+               role,
+               layer_index
         FROM send_logs
-        WHERE action ILIKE '%MODIFY%'
-          AND layer_index = 0
-          AND role = 'ENT'
-        GROUP BY instance_id
+        WHERE action = 'PENDING'
+          AND ok
+          AND result_order IS NOT NULL
+          AND result_order <> 0
+    ),
+    modify_counts AS (
+        SELECT s.instance_id,
+               count(*)                       AS modifies,
+               count(*) FILTER (WHERE NOT s.ok) AS failed,
+               min(s.received_at)             AS first_seen,
+               max(s.received_at)             AS last_seen
+        FROM send_logs s
+        JOIN placements p
+          ON p.ticket = s.order_ticket
+         AND p.instance_id = s.instance_id
+        WHERE s.action ILIKE '%MODIFY%'
+          AND p.role = 'ENT'
+          AND p.layer_index = 0
+        GROUP BY s.instance_id
     ),
     total_counts AS (
         SELECT instance_id,
@@ -72,28 +97,41 @@ is needed:
     ORDER BY modifies DESC, t.instance_id
     """
 
-**`active_days` comes from the UNFILTERED CTE, deliberately.** Counting
-distinct dates inside the filtered CTE would divide by the days on which a
-modify happened, not the days the instance was running, and would inflate
-the rate for an instance that churns sporadically -- 5 modifies on one
-volatile day would read as 5.0/day rather than 0.5/day over ten. It counts
-days the instance sent ANY request, which also handles instances that
-started mid-window (the NZD pairs began 2026-09-16).
+**Three properties of that query, none of them accidental:**
 
-**The join direction matters.** It starts from `total_counts` and LEFT
-JOINs the modifies, so an instance with ZERO layer-0 modifies still
-appears with 0. That is the whole point of the query: the comparison is
-EURGBP against instances that do not churn, and an inner join would erase
-the baseline and return a single row.
+- **`active_days` comes from the UNFILTERED CTE.** Counting distinct dates
+  inside the filtered CTE would divide by the days a modify happened
+  rather than the days the instance ran, inflating the rate for an
+  instance that churns sporadically -- 5 modifies on one volatile day
+  would read 5.0/day instead of 0.5/day over ten. It counts days the
+  instance sent ANY request, which also handles instances that started
+  mid-window (the NZD pairs began 2026-09-16).
+- **The final join starts from `total_counts` and LEFT JOINs**, so an
+  instance with ZERO layer-0 modifies still appears with 0. That is the
+  point of the query: the comparison is EURGBP against instances that do
+  not churn, and an inner join would erase the baseline.
+- **The placement join is on ticket AND instance**, because tickets are
+  unique per account but the guard against a mismatched row costs nothing.
 
-**The `role = 'ENT'` filter is conditional on the vocabulary check** in
-FAILURE MODES below. Without it an exit modify at layer 0 would be counted
-as recentre churn. If `role` turns out not to carry `'ENT'`, STOP and
-report the real values rather than dropping the filter or guessing a
-replacement -- an unfiltered count answers a different question.
+**A second query, printed after the first, bounds what the join misses:**
 
-Wire `--l0churn` exactly like `--carry`: execute, print the header row and
-the rows, return 0, with an empty message of
+    SELECT count(*)                                      AS modifies_total,
+           count(*) FILTER (WHERE p.ticket IS NOT NULL)   AS matched,
+           count(*) FILTER (WHERE p.ticket IS NULL)       AS unmatched
+    FROM send_logs s
+    LEFT JOIN (
+        SELECT result_order AS ticket FROM send_logs
+        WHERE action = 'PENDING' AND ok AND result_order IS NOT NULL
+    ) p ON p.ticket = s.order_ticket
+    WHERE s.action ILIKE '%MODIFY%'
+
+Unmatched modifies are expected -- `send_logs` retains 14 days, so an
+order placed before the window has no placement row. **If unmatched is a
+large share of the total, say so in the report; the churn counts are then
+a lower bound.**
+
+Wire `--l0churn` exactly like `--carry`: execute both queries, print the
+header row and the rows of each, return 0. Empty message for the first:
 `no rows in send_logs yet.`
 
 ## NEGATIVE SPACE
@@ -108,16 +146,21 @@ the rows, return 0, with an empty message of
 
 ## FAILURE MODES -- STOP AND REPORT
 
-- **Run the vocabulary check FIRST, before writing the query:**
-  `SELECT DISTINCT action, role, count(*) FROM send_logs GROUP BY 1,2
-  ORDER BY 3 DESC`. Paste the result in the response. The query above
-  assumes `action` carries a MODIFY-like value and `role` carries `'ENT'`.
-  If either is wrong, STOP and report the real vocabulary rather than
-  guessing a filter or dropping one.
-- `layer_index` is null on modify rows: STOP, report, and include the
-  distinct-value query above.
-- `send_logs` retention (14 days) leaves under two days of data: report
-  the window alongside the numbers.
+The vocabulary was established on 2026-09-20 and is NOT to be re-guessed:
+`action` is one of `PENDING`, `MODIFY`, `REMOVE`, `CLOSE_BY`; `role` is
+`ENT` or `EXT` and is populated ONLY on `PENDING` rows.
+
+- **`PENDING` rows do not carry `result_order`**, or it is null/zero on
+  most of them: STOP. The join has no key and the query cannot be built as
+  specified. Report counts of `PENDING` rows with and without
+  `result_order`.
+- **`matched` in the second query is zero:** STOP and report. It means
+  modify `order_ticket` values do not correspond to placement
+  `result_order` values, and the whole approach is wrong.
+- **The distinct `action` / `role` values differ from the list above:**
+  STOP and report the real ones.
+- `send_logs` holds under two days of data: report the window alongside
+  the numbers.
 
 ## SELF-REVIEW
 
@@ -139,4 +182,4 @@ or a note that it is awaiting the operator. Open with
 Reply in chat with ONLY: the branch name, the commit hash on origin, and
 one line saying the report is pushed.
 
-Line count: 142
+Line count: 185

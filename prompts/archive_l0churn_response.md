@@ -11,7 +11,8 @@ Commit `400d089f5da268436af98ca800c98c5b69e543ca` (file ended with `Line count: 
 ## Branch and commit
 
 - Branch: `feat/archive-l0churn`
-- Implementation commit on origin: (see push; hash recorded after push)
+- Implementation commit on origin: `be19efc6` ( `--l0churn` in `archive_counts.py` )
+- Report commit on origin: `36eb68f`
 
 ## Diff stat (commit 1)
 
@@ -68,4 +69,4 @@ After deploy, operator can run:
 
 `railway ssh --service archive-worker -i "$HOME\.ssh\id_ed25519" python scripts/archive_counts.py --l0churn`
 
-Line count: 58
+Line count: 73

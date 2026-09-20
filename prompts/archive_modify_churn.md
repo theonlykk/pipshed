@@ -41,9 +41,6 @@ is needed:
         SELECT instance_id,
                count(*)                                   AS modifies,
                count(*) FILTER (WHERE NOT ok)             AS failed,
-               round(count(*)::numeric
-                     / NULLIF(count(DISTINCT received_at::date), 0), 1)
-                                                          AS per_day,
                min(received_at)                           AS first_seen,
                max(received_at)                           AS last_seen
         FROM send_logs
@@ -53,14 +50,18 @@ is needed:
         GROUP BY instance_id
     ),
     total_counts AS (
-        SELECT instance_id, count(*) AS all_requests
+        SELECT instance_id,
+               count(*)                          AS all_requests,
+               count(DISTINCT received_at::date) AS active_days
         FROM send_logs
         GROUP BY instance_id
     )
     SELECT t.instance_id,
            COALESCE(m.modifies, 0)                        AS modifies,
            COALESCE(m.failed, 0)                          AS failed,
-           COALESCE(m.per_day, 0)                         AS per_day,
+           round(COALESCE(m.modifies, 0)::numeric
+                 / NULLIF(t.active_days, 0), 1)           AS per_day,
+           t.active_days,
            t.all_requests,
            round((COALESCE(m.modifies, 0)::numeric
                   / NULLIF(t.all_requests, 0)) * 100, 1)  AS churn_pct,
@@ -70,6 +71,14 @@ is needed:
     LEFT JOIN modify_counts m USING (instance_id)
     ORDER BY modifies DESC, t.instance_id
     """
+
+**`active_days` comes from the UNFILTERED CTE, deliberately.** Counting
+distinct dates inside the filtered CTE would divide by the days on which a
+modify happened, not the days the instance was running, and would inflate
+the rate for an instance that churns sporadically -- 5 modifies on one
+volatile day would read as 5.0/day rather than 0.5/day over ten. It counts
+days the instance sent ANY request, which also handles instances that
+started mid-window (the NZD pairs began 2026-09-16).
 
 **The join direction matters.** It starts from `total_counts` and LEFT
 JOINs the modifies, so an instance with ZERO layer-0 modifies still
@@ -130,4 +139,4 @@ or a note that it is awaiting the operator. Open with
 Reply in chat with ONLY: the branch name, the commit hash on origin, and
 one line saying the report is pushed.
 
-Line count: 133
+Line count: 142

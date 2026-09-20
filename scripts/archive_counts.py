@@ -9,6 +9,7 @@ Options:
     --carry          latest CARRY_SNAPSHOT row per symbol (skips table counts)
     --rollovers      rollover crossings per closed layer from fill_logs (skips table counts)
     --slippage       slippage distribution and I6-breach fills from fill_logs (skips table counts)
+    --l0churn        layer-0 ENT modify churn from send_logs (skips table counts)
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -98,6 +99,68 @@ ORDER BY deal_time_broker DESC
 LIMIT 40;
 """
 
+L0_CHURN_SQL = """
+WITH placements AS (
+    SELECT result_order AS ticket,
+           instance_id,
+           role,
+           layer_index
+    FROM send_logs
+    WHERE action = 'PENDING'
+      AND ok
+      AND result_order IS NOT NULL
+      AND result_order <> 0
+),
+modify_counts AS (
+    SELECT s.instance_id,
+           count(*)                       AS modifies,
+           count(*) FILTER (WHERE NOT s.ok) AS failed,
+           min(s.received_at)             AS first_seen,
+           max(s.received_at)             AS last_seen
+    FROM send_logs s
+    JOIN placements p
+      ON p.ticket = s.order_ticket
+     AND p.instance_id = s.instance_id
+    WHERE s.action ILIKE '%MODIFY%'
+      AND p.role = 'ENT'
+      AND p.layer_index = 0
+    GROUP BY s.instance_id
+),
+total_counts AS (
+    SELECT instance_id,
+           count(*)                          AS all_requests,
+           count(DISTINCT received_at::date) AS active_days
+    FROM send_logs
+    GROUP BY instance_id
+)
+SELECT t.instance_id,
+       COALESCE(m.modifies, 0)                        AS modifies,
+       COALESCE(m.failed, 0)                          AS failed,
+       round(COALESCE(m.modifies, 0)::numeric
+             / NULLIF(t.active_days, 0), 1)           AS per_day,
+       t.active_days,
+       t.all_requests,
+       round((COALESCE(m.modifies, 0)::numeric
+              / NULLIF(t.all_requests, 0)) * 100, 1)  AS churn_pct,
+       m.first_seen,
+       m.last_seen
+FROM total_counts t
+LEFT JOIN modify_counts m USING (instance_id)
+ORDER BY modifies DESC, t.instance_id
+"""
+
+L0_CHURN_MATCH_SQL = """
+SELECT count(*)                                      AS modifies_total,
+       count(*) FILTER (WHERE p.ticket IS NOT NULL)   AS matched,
+       count(*) FILTER (WHERE p.ticket IS NULL)       AS unmatched
+FROM send_logs s
+LEFT JOIN (
+    SELECT result_order AS ticket FROM send_logs
+    WHERE action = 'PENDING' AND ok AND result_order IS NOT NULL
+) p ON p.ticket = s.order_ticket
+WHERE s.action ILIKE '%MODIFY%'
+"""
+
 
 def _print_query_rows(cur, rows, empty_message):
     if not rows:
@@ -117,6 +180,7 @@ def main(argv=None):
     parser.add_argument("--carry", action="store_true")
     parser.add_argument("--rollovers", action="store_true")
     parser.add_argument("--slippage", action="store_true")
+    parser.add_argument("--l0churn", action="store_true")
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -162,6 +226,19 @@ def main(argv=None):
                 breach_cols = [desc[0] for desc in cur.description]
                 print(" | ".join(breach_cols))
                 for row in breach_rows:
+                    print(" | ".join("" if v is None else str(v) for v in row))
+                return 0
+
+            if args.l0churn:
+                cur.execute(L0_CHURN_SQL)
+                rows = cur.fetchall()
+                _print_query_rows(cur, rows, "no rows in send_logs yet.")
+                print()
+                cur.execute(L0_CHURN_MATCH_SQL)
+                match_rows = cur.fetchall()
+                match_cols = [desc[0] for desc in cur.description]
+                print(" | ".join(match_cols))
+                for row in match_rows:
                     print(" | ".join("" if v is None else str(v) for v in row))
                 return 0
 

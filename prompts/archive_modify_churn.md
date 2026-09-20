@@ -32,33 +32,60 @@ see FAILURE MODES.
 
 ## DESIGN
 
-Add, in the style of the existing `CARRY_SQL` / `ROLLOVERS_SQL` constants:
+Add, in the style of the existing `CARRY_SQL` / `ROLLOVERS_SQL` constants,
+ONE query that carries its own denominator so no eyeballing across tables
+is needed:
 
     L0_CHURN_SQL = """
-    SELECT instance_id,
-           count(*)                                   AS modifies,
-           count(*) FILTER (WHERE NOT ok)             AS failed,
-           round(count(*)::numeric
-                 / NULLIF(count(DISTINCT received_at::date), 0), 1)
-                                                      AS per_day,
-           min(received_at)                           AS first_seen,
-           max(received_at)                           AS last_seen
-    FROM send_logs
-    WHERE action ILIKE '%MODIFY%'
-      AND layer_index = 0
-    GROUP BY instance_id
-    ORDER BY modifies DESC
+    WITH modify_counts AS (
+        SELECT instance_id,
+               count(*)                                   AS modifies,
+               count(*) FILTER (WHERE NOT ok)             AS failed,
+               round(count(*)::numeric
+                     / NULLIF(count(DISTINCT received_at::date), 0), 1)
+                                                          AS per_day,
+               min(received_at)                           AS first_seen,
+               max(received_at)                           AS last_seen
+        FROM send_logs
+        WHERE action ILIKE '%MODIFY%'
+          AND layer_index = 0
+          AND role = 'ENT'
+        GROUP BY instance_id
+    ),
+    total_counts AS (
+        SELECT instance_id, count(*) AS all_requests
+        FROM send_logs
+        GROUP BY instance_id
+    )
+    SELECT t.instance_id,
+           COALESCE(m.modifies, 0)                        AS modifies,
+           COALESCE(m.failed, 0)                          AS failed,
+           COALESCE(m.per_day, 0)                         AS per_day,
+           t.all_requests,
+           round((COALESCE(m.modifies, 0)::numeric
+                  / NULLIF(t.all_requests, 0)) * 100, 1)  AS churn_pct,
+           m.first_seen,
+           m.last_seen
+    FROM total_counts t
+    LEFT JOIN modify_counts m USING (instance_id)
+    ORDER BY modifies DESC, t.instance_id
     """
+
+**The join direction matters.** It starts from `total_counts` and LEFT
+JOINs the modifies, so an instance with ZERO layer-0 modifies still
+appears with 0. That is the whole point of the query: the comparison is
+EURGBP against instances that do not churn, and an inner join would erase
+the baseline and return a single row.
+
+**The `role = 'ENT'` filter is conditional on the vocabulary check** in
+FAILURE MODES below. Without it an exit modify at layer 0 would be counted
+as recentre churn. If `role` turns out not to carry `'ENT'`, STOP and
+report the real values rather than dropping the filter or guessing a
+replacement -- an unfiltered count answers a different question.
 
 Wire `--l0churn` exactly like `--carry`: execute, print the header row and
 the rows, return 0, with an empty message of
-`no L0 modify rows in send_logs yet.`
-
-Also print, after that table, a second query so the number has a
-denominator -- total requests per instance over the same window:
-
-    SELECT instance_id, count(*) AS all_requests
-    FROM send_logs GROUP BY instance_id ORDER BY all_requests DESC
+`no rows in send_logs yet.`
 
 ## NEGATIVE SPACE
 
@@ -72,10 +99,12 @@ denominator -- total requests per instance over the same window:
 
 ## FAILURE MODES -- STOP AND REPORT
 
-- **`action` does not contain a MODIFY-like value.** Run
+- **Run the vocabulary check FIRST, before writing the query:**
   `SELECT DISTINCT action, role, count(*) FROM send_logs GROUP BY 1,2
-  ORDER BY 3 DESC` first and paste the result. If the real vocabulary
-  differs, STOP and report it rather than guessing a filter.
+  ORDER BY 3 DESC`. Paste the result in the response. The query above
+  assumes `action` carries a MODIFY-like value and `role` carries `'ENT'`.
+  If either is wrong, STOP and report the real vocabulary rather than
+  guessing a filter or dropping one.
 - `layer_index` is null on modify rows: STOP, report, and include the
   distinct-value query above.
 - `send_logs` retention (14 days) leaves under two days of data: report
@@ -101,4 +130,4 @@ or a note that it is awaiting the operator. Open with
 Reply in chat with ONLY: the branch name, the commit hash on origin, and
 one line saying the report is pushed.
 
-Line count: 104
+Line count: 133

@@ -292,6 +292,10 @@
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }
+    .grind-layer-table tr.grind-pending-row td {
+      font-style: italic;
+      opacity: 0.7;
+    }
     .grind-pending-line {
       font-size: 10px;
       color: var(--muted);
@@ -1334,7 +1338,7 @@
     document.getElementById('pod-0-layers').textContent =
       grindLayersLine(data.open_layers_long, data.open_layers_short);
     setPnl(document.getElementById('pod-0-pnl'), data.net_mtm);
-    document.getElementById('pod-0-detail').innerHTML = renderGrindLayerTableHtml(data.layers);
+    document.getElementById('pod-0-detail').innerHTML = renderGrindLayerTableHtml(data.layers, data);
 
     document.getElementById('pod-1-label').textContent = 'Geometry';
     document.getElementById('pod-1-layers').textContent = grindGeometryLine(data);
@@ -1367,23 +1371,81 @@
       '</div>' + pendingHtml;
   }
 
-  function renderGrindLayerTableHtml(layers) {
-    if (!layers || !layers.length) return '';
-    const rows = layers.map(function(layer) {
-      const exitCovered = layer.has_exit_order === true || layer.has_exit_position === true;
-      const exitLabel = layer.has_exit_order === null && layer.has_exit_position === null
-        ? '—'
-        : (exitCovered ? 'yes' : 'no');
-      return '<tr>' +
-        '<td>' + (layer.layer_index != null ? layer.layer_index : '—') + '</td>' +
-        '<td>' + (layer.side || '—') + '</td>' +
-        '<td>' + (layer.entry_price != null ? Number(layer.entry_price).toFixed(5) : '—') + '</td>' +
-        '<td>' + (layer.exit_target != null ? Number(layer.exit_target).toFixed(5) : '—') + '</td>' +
-        '<td>' + exitLabel + '</td>' +
+  function grindLayerPipSize(price) {
+    if (price === null || price === undefined) return 0.0001;
+    return Number(price) > 20 ? 0.01 : 0.0001;
+  }
+
+  function renderGrindLayerTableHtml(layers, card) {
+    card = card || {};
+    const items = [];
+    if (layers && layers.length) {
+      layers.forEach(function(layer) {
+        const price = layer.entry_price;
+        items.push({
+          kind: 'layer',
+          price: price === null || price === undefined ? null : Number(price),
+          layer: layer,
+        });
+      });
+    }
+    function pushPending(price, side, label) {
+      if (price === null || price === undefined) return;
+      items.push({ kind: 'pending', price: Number(price), side: side, label: label });
+    }
+    pushPending(card.add_pending_long, 'L', 'add');
+    pushPending(card.add_pending_short, 'S', 'add');
+    pushPending(card.l0_pending_long, 'L', 'L0');
+    pushPending(card.l0_pending_short, 'S', 'L0');
+    if (!items.length) return '';
+
+    items.sort(function(a, b) {
+      if (a.price === null && b.price === null) return 0;
+      if (a.price === null) return 1;
+      if (b.price === null) return -1;
+      return b.price - a.price;
+    });
+
+    const rows = items.map(function(item, idx) {
+      let gapCell = '';
+      if (idx > 0) {
+        const abovePrice = items[idx - 1].price;
+        const thisPrice = item.price;
+        if (abovePrice !== null && abovePrice !== undefined &&
+            thisPrice !== null && thisPrice !== undefined) {
+          const pip = grindLayerPipSize(Math.max(abovePrice, thisPrice));
+          gapCell = ((abovePrice - thisPrice) / pip).toFixed(1);
+        }
+      }
+
+      if (item.kind === 'layer') {
+        const layer = item.layer;
+        const exitCovered = layer.has_exit_order === true || layer.has_exit_position === true;
+        const exitLabel = layer.has_exit_order === null && layer.has_exit_position === null
+          ? '—'
+          : (exitCovered ? 'yes' : 'no');
+        return '<tr>' +
+          '<td>' + (layer.layer_index != null ? layer.layer_index : '—') + '</td>' +
+          '<td>' + (layer.side || '—') + '</td>' +
+          '<td>' + (item.price != null ? item.price.toFixed(5) : '—') + '</td>' +
+          '<td>' + gapCell + '</td>' +
+          '<td>' + (layer.exit_target != null ? Number(layer.exit_target).toFixed(5) : '—') + '</td>' +
+          '<td>' + exitLabel + '</td>' +
+          '</tr>';
+      }
+
+      return '<tr class="grind-pending-row">' +
+        '<td>' + item.label + '</td>' +
+        '<td>' + item.side + '</td>' +
+        '<td>' + item.price.toFixed(5) + '</td>' +
+        '<td>' + gapCell + '</td>' +
+        '<td>--</td>' +
+        '<td>--</td>' +
         '</tr>';
     }).join('');
+
     return '<table class="grind-layer-table"><thead><tr>' +
-      '<th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th>Covered</th>' +
+      '<th>#</th><th>Side</th><th>Entry</th><th>Gap</th><th>Exit</th><th>Covered</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
@@ -2163,7 +2225,7 @@
 
       document.getElementById('btn-' + inst)?.classList.toggle('no-data', !isLive);
 
-      const layerTable = isLive ? renderGrindLayerTableHtml(card.layers) : '';
+      const layerTable = isLive ? renderGrindLayerTableHtml(card.layers, card) : '';
       const pendingHtml = isLive
         ? (renderGrindPendingLine('long', card) + renderGrindPendingLine('short', card))
         : '';

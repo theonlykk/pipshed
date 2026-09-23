@@ -300,6 +300,10 @@ def try_carry_build(conn, redis_client, force=False):
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
         raise
     except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         log.warning("carry table build failed: %s", exc)
         return None
 
@@ -439,6 +443,10 @@ def try_daily_build(conn, redis_client, force=False):
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
         raise
     except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         log.warning("daily table build failed: %s", exc)
         return None
 
@@ -490,6 +498,10 @@ def try_critical_build(conn, redis_client, force=False):
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
         raise
     except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         log.warning("critical list build failed: %s", exc)
         return None
 

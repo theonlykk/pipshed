@@ -56,12 +56,29 @@ class FakeCursor:
     def execute(self, sql, params=None):
         self._last_sql = sql
         self._last_params = params
-        self.executed.append((sql, params))
+        self._conn.executed.append((sql, params))
         if self._conn.fail_on_sql and sql and self._conn.fail_on_sql in sql:
             raise self._conn.fail_on_sql_exc
         if self._conn.fail_on_insert and "INSERT INTO" in sql:
             raise self._conn.fail_on_insert
         return self
+
+    @property
+    def description(self):
+        sql = self._last_sql or ""
+        if "daily_snapshots" in sql and "WHERE ftmo_day >=" in sql:
+            return [(name,) for name in (
+                "id", "account_login", "ftmo_day", "instance_id", "session_id",
+                "ea_time_ms", "received_at", "balance_start", "equity_start",
+                "balance_end", "equity_end", "realised", "nontrade", "inventory_pnl",
+                "total", "swap_day", "positions_long", "positions_short", "orders",
+                "guard_total", "guard_age_s", "breaker_tripped", "premidnight_seen",
+                "broker_utc_offset_s", "start_known", "balance_start_source",
+                "ejections_auto", "ejections_command", "ejected_fills",
+                "ejected_realised", "eject_filled_events", "eject_mismatch",
+                "carry_clamps", "critical_events", "derived_at",
+            )]
+        return []
 
     def fetchall(self):
         sql = self._last_sql or ""
@@ -92,6 +109,7 @@ class FakeConnection:
         self.fail_on_sql_exc = psycopg2.DataError("daily sql failed")
         self.fail_on_insert = None
         self.commit_count = 0
+        self.executed = []
 
     def cursor(self):
         return FakeCursor(self)
@@ -250,7 +268,7 @@ def check_ds8():
     raw = make_daily_queue_item(detail)
     aw.insert_batch(conn, [raw])
     assert conn.commit_count == 1
-    inserts = [e for e in conn.cursor().executed if "INSERT INTO" in e[0]]
+    inserts = [e for e in conn.executed if "INSERT INTO" in e[0]]
     assert len(inserts) == 1
     assert "ea_events" in inserts[0][0]
     return "missing account_login skips snapshot, ea_events commits"
@@ -263,7 +281,7 @@ def check_ds9():
     raw = make_daily_queue_item(full_snapshot_detail())
     aw.insert_batch(conn, [raw])
     assert conn.commit_count == 1
-    inserts = [e for e in conn.cursor().executed if "INSERT INTO" in e[0]]
+    inserts = [e for e in conn.executed if "INSERT INTO" in e[0]]
     assert len(inserts) == 2
     assert "ea_events" in inserts[0][0]
     assert "daily_snapshots" in inserts[1][0]
@@ -327,9 +345,9 @@ def check_ds11():
         ("CARRY_PASS_INCOMPLETE", "INFO", {"clamped": 1}),
         ("ANY_CODE", "CRITICAL", {}),
     ]
-    inside1 = datetime(2026, 9, 23, 10, 0, 0)
-    inside2 = datetime(2026, 9, 23, 12, 0, 0)
-    outside = datetime(2026, 9, 24, 0, 0, 0)
+    inside1 = datetime(2026, 9, 23, 12, 0, 0)
+    inside2 = datetime(2026, 9, 23, 1, 0, 0)
+    outside = datetime(2026, 9, 24, 12, 0, 0)
     offset = 10800
     scalps = [
         (inside1, offset, account, 5.0),
@@ -359,13 +377,13 @@ def check_ds12():
     fixed_now = datetime(2026, 9, 23, 15, 0, tzinfo=timezone.utc)
     expected_cutoff = fd.ftmo_day_of_utc(fixed_now) - timedelta(days=7)
 
-    class C(FakeCursor):
-        def execute(self, sql, params=None):
-            if "daily_snapshots" in sql and "WHERE ftmo_day >=" in sql:
-                assert params[0] == expected_cutoff
-            return super().execute(sql, params)
-
-    conn.cursor = lambda: C(conn)
+    aw.build_daily_derived(conn, now=fixed_now)
+    cutoffs = [
+        params[0]
+        for sql, params in conn.executed
+        if sql and "WHERE ftmo_day >=" in sql and params
+    ]
+    assert cutoffs[0] == expected_cutoff
     aw.build_daily_derived(conn, now=fixed_now)
     return "build_daily_derived selects ftmo_day >= today-7"
 
@@ -455,9 +473,10 @@ def check_ds16():
     day = date(2026, 9, 23)
     ms_base = int(datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc).timestamp() * 1000)
     fill_rows = []
-    for ticket in (101, 102, 103):
-        fill_rows.append(("GRIND_EURUSD_OPT", ticket, 1000 + ticket, ms_base))
-        fill_rows.append(("GRIND_EURUSD_OPT", ticket, 1001 + ticket, ms_base + 1))
+    opt_positions = {101: (1001, 1002), 102: (2001, 2002), 103: (3001, 3002)}
+    for ticket, (p1, p2) in opt_positions.items():
+        fill_rows.append(("GRIND_EURUSD_OPT", ticket, p1, ms_base))
+        fill_rows.append(("GRIND_EURUSD_OPT", ticket, p2, ms_base + 1))
     fill_rows.append(("GRIND_EURUSD_ALT", 201, 5001, ms_base))
     fill_rows.append(("GRIND_EURUSD_ALT", 201, 5002, ms_base))
     fill_rows.append(("GRIND_EURUSD_ALT", 202, 5003, ms_base))
@@ -466,7 +485,7 @@ def check_ds16():
     fill_rows.append(("GRIND_EURUSD_ALT", 203, 5006, ms_base))
     fill_rows.append(("GRIND_EURUSD_ALT", 204, 5007, ms_base))
     fill_rows.append(("GRIND_EURUSD_ALT", 204, 5008, ms_base))
-    eject = {1002}
+    eject = {2001}
     counts = fd.s4_counts(fill_rows, eject, day)
     assert counts[("GRIND_EURUSD_OPT", day)] == 2
     assert counts[("GRIND_EURUSD_ALT", day)] == 4

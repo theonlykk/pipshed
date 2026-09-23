@@ -379,6 +379,21 @@
 
     .positive { color: var(--green); }
     .negative { color: var(--red); }
+
+    #criticalBanner {
+      display: none;
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-family: Calibri, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    #criticalBanner.has-rows { display: block; }
+    #criticalBanner.critical-bg { background: #3d1515; color: #ffc9c9; border: 1px solid #8b2a2a; }
+    #criticalBanner.warn-bg { background: #3d2e10; color: #ffe6a8; border: 1px solid #8b6914; }
+    #criticalBanner.stale-bg { background: #2a2a2a; color: #bbb; border: 1px solid #555; }
+    #criticalBanner .crit-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .neutral  { color: var(--text); }
 
     /* ── Equity vs Balance ── */
@@ -840,6 +855,8 @@
   </div>
 </div>
 
+<div id="criticalBanner" aria-live="polite"></div>
+
 <div class="card" id="summarySection" style="margin-bottom:16px">
   <div class="teams-section-header">
     <div class="card-label">Daily summary</div>
@@ -962,6 +979,37 @@
       <tr class="empty-row"><td colspan="7">Loading...</td></tr>
     </tbody>
   </table>
+</div>
+
+<div class="card" id="dailySection" style="margin-bottom:16px">
+  <div class="card-label">FTMO daily snapshots</div>
+  <div style="overflow-x:auto">
+    <table class="teams-table" id="dailyTable" style="margin-top:10px">
+      <thead>
+        <tr>
+          <th>FTMO day</th>
+          <th>Account</th>
+          <th>Realised</th>
+          <th>Inventory</th>
+          <th>Total</th>
+          <th>Carried</th>
+          <th>Swap</th>
+          <th>L/S</th>
+          <th>Orders</th>
+          <th>Guard</th>
+          <th>Breaker</th>
+          <th>Pre-mid</th>
+          <th>Eject A/C</th>
+          <th>Ejected fills ($)</th>
+          <th>Clamps</th>
+          <th>CRIT</th>
+        </tr>
+      </thead>
+      <tbody id="dailyBody">
+        <tr class="empty-row"><td colspan="16">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <div class="card" id="carryAuditSection" style="margin-bottom:16px">
@@ -1573,6 +1621,115 @@
     }
   }
 
+  function dailyMoneyClass(val) {
+    if (val == null || val === '') return '';
+    return Number(val) >= 0 ? 'positive' : 'negative';
+  }
+
+  function dailyCell(val, decimals) {
+    if (val == null || val === '') return '--';
+    if (decimals != null) return fmt(val, decimals);
+    return String(val);
+  }
+
+  function formatCriticalLast(iso) {
+    if (!iso) return '--';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '--';
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    return hh + ':' + mm + 'Z';
+  }
+
+  function renderCriticalBanner(payload) {
+    const el = document.getElementById('criticalBanner');
+    if (!el) return;
+    el.className = '';
+    el.innerHTML = '';
+    const rows = payload && payload.rows ? payload.rows : [];
+    const generatedAt = payload && payload.generated_at ? payload.generated_at : null;
+    let stale = false;
+    if (generatedAt) {
+      const ageMs = Date.now() - new Date(generatedAt).getTime();
+      stale = ageMs > 5 * 60 * 1000;
+    } else if (rows.length) {
+      stale = true;
+    }
+    if (stale) {
+      el.className = 'stale-bg has-rows';
+      el.textContent = 'critical list stale (worker?)';
+      return;
+    }
+    if (!rows.length) {
+      el.style.display = 'none';
+      return;
+    }
+    const anyCritical = rows.some(function(r) { return r.level === 'CRITICAL'; });
+    el.className = (anyCritical ? 'critical-bg' : 'warn-bg') + ' has-rows';
+    el.innerHTML = rows.map(function(r) {
+      return '<div class="crit-line">' +
+        (r.instance_id || '--') + '  ' +
+        (r.code || '--') + '  x' + (r.count != null ? r.count : '--') + '  last ' +
+        formatCriticalLast(r.last_at) +
+        '</div>';
+    }).join('');
+  }
+
+  async function fetchCriticalBanner() {
+    try {
+      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/critical/' + Date.now());
+      if (!res.ok) throw new Error('fetch failed');
+      renderCriticalBanner(await res.json());
+    } catch (e) {
+      renderCriticalBanner(null);
+    }
+  }
+
+  function renderDailyTable(payload) {
+    const body = document.getElementById('dailyBody');
+    if (!body) return;
+    const rows = payload && payload.rows ? payload.rows : [];
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="16">No daily snapshots yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function(row) {
+      const ls = (row.positions_long != null ? row.positions_long : '--') + '/' +
+        (row.positions_short != null ? row.positions_short : '--');
+      const ejectAc = (row.ejections_auto != null ? row.ejections_auto : '--') + '/' +
+        (row.ejections_command != null ? row.ejections_command : '--');
+      const ejectedMoney = row.ejected_realised != null ? row.ejected_realised : null;
+      return '<tr>' +
+        '<td>' + dailyCell(row.ftmo_day) + '</td>' +
+        '<td>' + dailyCell(row.account_login) + '</td>' +
+        '<td class="' + dailyMoneyClass(row.realised) + '">' + dailyCell(row.realised, 2) + '</td>' +
+        '<td class="' + dailyMoneyClass(row.inventory_pnl) + '">' + dailyCell(row.inventory_pnl, 2) + '</td>' +
+        '<td class="' + dailyMoneyClass(row.total) + '">' + dailyCell(row.total, 2) + '</td>' +
+        '<td class="' + dailyMoneyClass(row.carried) + '">' + dailyCell(row.carried, 2) + '</td>' +
+        '<td class="' + dailyMoneyClass(row.swap_day) + '">' + dailyCell(row.swap_day, 2) + '</td>' +
+        '<td>' + ls + '</td>' +
+        '<td>' + dailyCell(row.orders) + '</td>' +
+        '<td>' + dailyCell(row.guard_total) + '</td>' +
+        '<td>' + dailyCell(row.breaker_tripped) + '</td>' +
+        '<td>' + dailyCell(row.premidnight_seen) + '</td>' +
+        '<td>' + ejectAc + '</td>' +
+        '<td class="' + dailyMoneyClass(ejectedMoney) + '">' + dailyCell(ejectedMoney, 2) + '</td>' +
+        '<td>' + dailyCell(row.carry_clamps) + '</td>' +
+        '<td>' + dailyCell(row.critical_events) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  async function fetchDailyTable() {
+    try {
+      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/daily/' + Date.now());
+      if (!res.ok) throw new Error('fetch failed');
+      renderDailyTable(await res.json());
+    } catch (e) {
+      renderDailyTable(null);
+    }
+  }
+
   let summarySelectedDate = null;
   let summaryBrokerToday = null;
 
@@ -1692,9 +1849,13 @@
   fetchDailySummary();
   fetchCarryTable();
   fetchCarryAudit();
+  fetchCriticalBanner();
+  fetchDailyTable();
   setInterval(fetchDailySummary, 5000);
   setInterval(fetchCarryTable, 5000);
   setInterval(fetchCarryAudit, 5000);
+  setInterval(fetchCriticalBanner, 30000);
+  setInterval(fetchDailyTable, 30000);
 
   let todayAllCache = { headers: ['Time', 'Pair', 'Direction', 'Entry', 'Exit', 'Pips'], rows: [], summary: '' };
   let openPosCache  = { headers: ['Pair', 'Direction', 'Entry', 'Layers', 'Net PnL'], rows: [] };

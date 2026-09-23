@@ -10,11 +10,13 @@ import re
 import sys
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg2
 import redis
 from psycopg2.extras import Json
+
+import ftmo_daily
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,12 +32,18 @@ ARCHIVE_WORKER_KEY = "fxmatrix:archive:worker"
 ARCHIVE_RETENTION_LAST = "fxmatrix:archive:retention_last"
 ARCHIVE_CARRY_KEY = "fxmatrix:carry:table"
 ARCHIVE_CARRY_LAST_BUILD = "fxmatrix:carry:last_build"
+ARCHIVE_DAILY_KEY = "fxmatrix:daily:table"
+ARCHIVE_DAILY_LAST_BUILD = "fxmatrix:daily:last_build"
+ARCHIVE_CRITICAL_KEY = "fxmatrix:critical:last24h"
+ARCHIVE_CRITICAL_LAST_BUILD = "fxmatrix:critical:last_build"
 
 BATCH_MAX = 500
 HEARTBEAT_INTERVAL_SECONDS = 10
 WORKER_TTL_SECONDS = 120
 RETENTION_INTERVAL = timedelta(hours=24)
 CARRY_BUILD_INTERVAL = timedelta(hours=1)
+DAILY_BUILD_INTERVAL = timedelta(hours=1)
+CRITICAL_BUILD_INTERVAL = timedelta(seconds=60)
 BACKOFF_MAX_SECONDS = 30
 
 CARRY_SQL = """
@@ -76,7 +84,72 @@ EA_EVENT_FIELDS = ("magic", "level", "code", "reason", "ticket")
 SCALP_FIELDS = (
     "instrument", "direction", "entry_price", "exit_price", "gross_pnl",
     "layer_depth", "stack_depth", "entry_deal_ticket", "exit_deal_ticket",
+    "ejected", "broker_utc_offset_s", "account_login",
 )
+
+DAILY_EVENTS_SQL = """
+SELECT e.code, e.level, e.detail
+FROM ea_events e
+JOIN session_accounts s ON e.session_id = s.session_id
+WHERE s.account_login = %s
+  AND e.ea_time_ms >= %s AND e.ea_time_ms < %s
+  AND (
+    e.code IN (
+        'EJECT_ACCEPTED', 'EJECT_FILLED',
+        'CARRY_PASS_SUMMARY', 'CARRY_PASS_INCOMPLETE'
+    )
+    OR e.level = 'CRITICAL'
+  )
+"""
+
+DAILY_SCALPS_SQL = """
+SELECT close_time_broker, broker_utc_offset_s, account_login, gross_pnl
+FROM scalp_history
+WHERE ejected IS TRUE
+  AND received_at >= %s AND received_at < %s
+"""
+
+DAILY_SNAPSHOTS_SELECT = """
+SELECT id, account_login, ftmo_day, instance_id, session_id, ea_time_ms,
+       received_at, balance_start, equity_start, balance_end, equity_end,
+       realised, nontrade, inventory_pnl, total, swap_day,
+       positions_long, positions_short, orders, guard_total, guard_age_s,
+       breaker_tripped, premidnight_seen, broker_utc_offset_s,
+       start_known, balance_start_source,
+       ejections_auto, ejections_command, ejected_fills, ejected_realised,
+       eject_filled_events, eject_mismatch, carry_clamps, critical_events,
+       derived_at
+FROM daily_snapshots
+WHERE ftmo_day >= %s
+ORDER BY ftmo_day DESC
+"""
+
+DAILY_SNAPSHOT_INSERT = """
+INSERT INTO daily_snapshots (
+    account_login, ftmo_day, instance_id, session_id, ea_time_ms, received_at,
+    balance_start, equity_start, balance_end, equity_end,
+    realised, nontrade, inventory_pnl, total, swap_day,
+    positions_long, positions_short, orders, guard_total, guard_age_s,
+    breaker_tripped, premidnight_seen, broker_utc_offset_s,
+    start_known, balance_start_source, detail
+) VALUES (
+    %(account_login)s, %(ftmo_day)s, %(instance_id)s, %(session_id)s,
+    %(ea_time_ms)s, %(received_at)s,
+    %(balance_start)s, %(equity_start)s, %(balance_end)s, %(equity_end)s,
+    %(realised)s, %(nontrade)s, %(inventory_pnl)s, %(total)s, %(swap_day)s,
+    %(positions_long)s, %(positions_short)s, %(orders)s, %(guard_total)s,
+    %(guard_age_s)s,
+    %(breaker_tripped)s, %(premidnight_seen)s, %(broker_utc_offset_s)s,
+    %(start_known)s, %(balance_start_source)s, %(detail)s
+) ON CONFLICT (account_login, ftmo_day) DO NOTHING
+"""
+
+CRITICAL_EVENTS_SQL = """
+SELECT instance_id, level, code, received_at
+FROM ea_events
+WHERE received_at > now() - interval '24 hours'
+  AND level IN ('CRITICAL', 'WARN')
+"""
 
 
 def utc_now_iso():
@@ -229,6 +302,215 @@ def try_carry_build(conn, redis_client, force=False):
     except Exception as exc:
         log.warning("carry table build failed: %s", exc)
         return None
+
+
+def batch_contains_daily_snapshot(raw_items):
+    for raw in raw_items:
+        try:
+            item = parse_queue_item(raw)
+        except ValueError:
+            continue
+        if item.get("type") != "ea_event":
+            continue
+        event = item.get("event")
+        if not isinstance(event, dict):
+            continue
+        if event.get("code") == "DAILY_SNAPSHOT":
+            return True
+    return False
+
+
+def daily_format_value(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc).isoformat()
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value
+    return value
+
+
+def daily_row_to_public(row_dict):
+    out = {}
+    for key, value in row_dict.items():
+        out[key] = daily_format_value(value)
+    bal = row_dict.get("balance_start")
+    eq = row_dict.get("equity_start")
+    if bal is None or eq is None:
+        out["carried"] = None
+    else:
+        out["carried"] = float(eq) - float(bal)
+    return out
+
+
+def build_daily_derived(conn, now=None):
+    if now is None:
+        now = datetime.now(timezone.utc)
+    cutoff = ftmo_daily.ftmo_day_of_utc(now) - timedelta(days=7)
+    updated_rows = []
+    with conn.cursor() as cur:
+        cur.execute(DAILY_SNAPSHOTS_SELECT, (cutoff,))
+        columns = [desc[0] for desc in cur.description]
+        snapshots = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        for snap in snapshots:
+            ftmo_day = snap["ftmo_day"]
+            if isinstance(ftmo_day, datetime):
+                ftmo_day = ftmo_day.date()
+            start, end = ftmo_daily.ftmo_day_bounds_utc(ftmo_day)
+            start_ms = int(start.timestamp() * 1000)
+            end_ms = int(end.timestamp() * 1000)
+            recv_start = start - timedelta(days=1)
+            recv_end = end + timedelta(days=1)
+
+            cur.execute(
+                DAILY_EVENTS_SQL,
+                (snap["account_login"], start_ms, end_ms),
+            )
+            events = cur.fetchall()
+            cur.execute(DAILY_SCALPS_SQL, (recv_start, recv_end))
+            scalps = cur.fetchall()
+            counts = ftmo_daily.derive_counts(
+                events, scalps, start, end, snap["account_login"]
+            )
+            cur.execute(
+                """
+                UPDATE daily_snapshots SET
+                    ejections_auto = %(ejections_auto)s,
+                    ejections_command = %(ejections_command)s,
+                    ejected_fills = %(ejected_fills)s,
+                    ejected_realised = %(ejected_realised)s,
+                    eject_filled_events = %(eject_filled_events)s,
+                    eject_mismatch = %(eject_mismatch)s,
+                    carry_clamps = %(carry_clamps)s,
+                    critical_events = %(critical_events)s,
+                    derived_at = now()
+                WHERE id = %(id)s
+                """,
+                {**counts, "id": snap["id"]},
+            )
+            merged = {**snap, **counts}
+            updated_rows.append(merged)
+
+    updated_rows.sort(key=lambda r: r.get("ftmo_day") or date.min, reverse=True)
+    public_rows = []
+    for row in updated_rows[:60]:
+        public = daily_row_to_public(row)
+        public.pop("detail", None)
+        public.pop("id", None)
+        public_rows.append(public)
+    return {"generated_at": utc_now_iso(), "rows": public_rows}
+
+
+def publish_daily_table(redis_client, table):
+    redis_client.set(ARCHIVE_DAILY_KEY, json.dumps(table))
+
+
+def run_daily_build_if_due(conn, redis_client, force=False):
+    if not force:
+        last_raw = redis_client.get(ARCHIVE_DAILY_LAST_BUILD)
+        now = datetime.now(timezone.utc)
+        if last_raw:
+            try:
+                last_run = datetime.fromisoformat(last_raw)
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                if now - last_run < DAILY_BUILD_INTERVAL:
+                    return None
+            except ValueError:
+                pass
+    table = build_daily_derived(conn)
+    publish_daily_table(redis_client, table)
+    redis_client.set(ARCHIVE_DAILY_LAST_BUILD, utc_now_iso())
+    return table
+
+
+def try_daily_build(conn, redis_client, force=False):
+    try:
+        return run_daily_build_if_due(conn, redis_client, force=force)
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        raise
+    except Exception as exc:
+        log.warning("daily table build failed: %s", exc)
+        return None
+
+
+def build_critical_list(conn):
+    with conn.cursor() as cur:
+        cur.execute(CRITICAL_EVENTS_SQL)
+        rows = cur.fetchall()
+    groups = ftmo_daily.critical_groups(rows, datetime.now(timezone.utc))
+    public = []
+    for g in groups:
+        public.append({
+            "instance_id": g["instance_id"],
+            "level": g["level"],
+            "code": g["code"],
+            "count": g["count"],
+            "first_at": daily_format_value(g["first_at"]),
+            "last_at": daily_format_value(g["last_at"]),
+        })
+    return {"generated_at": utc_now_iso(), "rows": public}
+
+
+def publish_critical_list(redis_client, payload):
+    redis_client.set(ARCHIVE_CRITICAL_KEY, json.dumps(payload))
+
+
+def run_critical_build_if_due(conn, redis_client, force=False):
+    if not force:
+        last_raw = redis_client.get(ARCHIVE_CRITICAL_LAST_BUILD)
+        now = datetime.now(timezone.utc)
+        if last_raw:
+            try:
+                last_run = datetime.fromisoformat(last_raw)
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                if now - last_run < CRITICAL_BUILD_INTERVAL:
+                    return None
+            except ValueError:
+                pass
+    payload = build_critical_list(conn)
+    publish_critical_list(redis_client, payload)
+    redis_client.set(ARCHIVE_CRITICAL_LAST_BUILD, utc_now_iso())
+    return payload
+
+
+def try_critical_build(conn, redis_client, force=False):
+    try:
+        return run_critical_build_if_due(conn, redis_client, force=force)
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        raise
+    except Exception as exc:
+        log.warning("critical list build failed: %s", exc)
+        return None
+
+
+def insert_daily_snapshot_if_needed(cur, item, row):
+    if row.get("code") != "DAILY_SNAPSHOT":
+        return
+    event = item.get("event") or {}
+    detail = event.get("detail")
+    snap = ftmo_daily.snapshot_row_from_detail(detail)
+    if snap is None:
+        log.warning(
+            "DAILY_SNAPSHOT skipped: missing account_login or ftmo_day"
+        )
+        return
+    snap["instance_id"] = item.get("instance_id")
+    snap["session_id"] = item.get("session_id")
+    snap["ea_time_ms"] = row.get("ea_time_ms")
+    snap["received_at"] = row.get("received_at")
+    snap["detail"] = Json(detail) if detail is not None else None
+    cur.execute(DAILY_SNAPSHOT_INSERT, snap)
 
 
 def parse_received_at(value):
@@ -392,11 +674,13 @@ INSERT_SQL = {
         INSERT INTO scalp_history (
             instance_id, instrument, direction, entry_price, exit_price,
             gross_pnl, layer_depth, stack_depth, close_time_broker,
-            entry_deal_ticket, exit_deal_ticket, source, received_at
+            entry_deal_ticket, exit_deal_ticket, source, received_at,
+            ejected, broker_utc_offset_s, account_login
         ) VALUES (
             %(instance_id)s, %(instrument)s, %(direction)s, %(entry_price)s, %(exit_price)s,
             %(gross_pnl)s, %(layer_depth)s, %(stack_depth)s, %(close_time_broker)s,
-            %(entry_deal_ticket)s, %(exit_deal_ticket)s, %(source)s, %(received_at)s
+            %(entry_deal_ticket)s, %(exit_deal_ticket)s, %(source)s, %(received_at)s,
+            %(ejected)s, %(broker_utc_offset_s)s, %(account_login)s
         ) ON CONFLICT DO NOTHING
     """,
 }
@@ -432,6 +716,8 @@ def insert_batch(conn, raw_items):
             item = parse_queue_item(raw)
             table, row = build_row(item)
             cur.execute(INSERT_SQL[table], row)
+            if table == "ea_events":
+                insert_daily_snapshot_if_needed(cur, item, row)
     conn.commit()
 
 
@@ -440,6 +726,8 @@ def insert_single(conn, raw):
         item = parse_queue_item(raw)
         table, row = build_row(item)
         cur.execute(INSERT_SQL[table], row)
+        if table == "ea_events":
+            insert_daily_snapshot_if_needed(cur, item, row)
     conn.commit()
 
 
@@ -580,6 +868,8 @@ def worker_cycle(redis_client, conn, state, sleep_fn):
             state["inserted_total"] = state.get("inserted_total", 0) + inserted
             if batch_contains_carry_snapshot(raw_items):
                 try_carry_build(conn, redis_client, force=True)
+            if batch_contains_daily_snapshot(raw_items):
+                try_daily_build(conn, redis_client, force=True)
         return False
 
     moved = move_batch_to_processing(redis_client)
@@ -593,6 +883,8 @@ def worker_cycle(redis_client, conn, state, sleep_fn):
     state["inserted_total"] = state.get("inserted_total", 0) + inserted
     if inserted and batch_contains_carry_snapshot(raw_items):
         try_carry_build(conn, redis_client, force=True)
+    if inserted and batch_contains_daily_snapshot(raw_items):
+        try_daily_build(conn, redis_client, force=True)
     return False
 
 
@@ -627,6 +919,8 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
     }
     conn = connect_with_retry(conn_factory, sleep_fn, state)
     try_carry_build(conn, redis_client, force=True)
+    try_daily_build(conn, redis_client, force=True)
+    try_critical_build(conn, redis_client, force=True)
     redis_backoff = 0
     last_heartbeat = 0.0
 
@@ -651,6 +945,8 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
                 if retention_result is not None:
                     state["retention_last"] = utc_now_iso()
                 try_carry_build(conn, redis_client, force=False)
+                try_daily_build(conn, redis_client, force=False)
+                try_critical_build(conn, redis_client, force=False)
             except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
                 state["last_error"] = str(exc)
                 try:

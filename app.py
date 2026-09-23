@@ -17,6 +17,8 @@ Routes:
   GET  /api/g/<token>/scalps       — public broker-today scalp exits
   GET  /api/g/<token>/archive      — public archive worker health
   GET  /api/g/<token>/carry        — public carry swap table (Redis only)
+  GET  /api/g/<token>/daily        — public FTMO daily snapshot table (Redis only)
+  GET  /api/g/<token>/critical     — public critical/warn last-24h groups (Redis only)
   GET  /api/g/<token>/summary      — public broker-day plain-text summary
   GET  /api/g/<token>/carry_audit  — public carry-adjusted order audit (JSON)
   GET  /                         — dashboard UI
@@ -52,6 +54,8 @@ ARCHIVE_PROCESSING_KEY = "fxmatrix:archive:processing"
 ARCHIVE_DEADLETTER_KEY = "fxmatrix:archive:deadletter"
 ARCHIVE_WORKER_KEY = "fxmatrix:archive:worker"
 ARCHIVE_CARRY_KEY = "fxmatrix:carry:table"
+ARCHIVE_DAILY_KEY = "fxmatrix:daily:table"
+ARCHIVE_CRITICAL_KEY = "fxmatrix:critical:last24h"
 ARCHIVE_ACTION_MAX_EVENTS = 500
 ARCHIVE_EVENT_TYPES = frozenset({"send_log", "fill_log", "config_event", "ea_event"})
 
@@ -1361,6 +1365,64 @@ def public_carry_table(token, _ignored):
         return _apply_no_cache_headers(response), 200
     except Exception:
         app.logger.exception("public_carry_table failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/daily",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/daily/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_daily_table(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        raw = r.get(ARCHIVE_DAILY_KEY)
+        if raw:
+            payload = json.loads(raw)
+        else:
+            payload = {"generated_at": None, "rows": []}
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_daily_table failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/critical",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/critical/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_critical_list(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        raw = r.get(ARCHIVE_CRITICAL_KEY)
+        if raw:
+            payload = json.loads(raw)
+        else:
+            payload = {"generated_at": None, "rows": []}
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_critical_list failed")
         response = jsonify({"error": "internal error"})
         return _apply_no_cache_headers(response), 500
 

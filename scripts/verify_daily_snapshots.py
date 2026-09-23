@@ -110,6 +110,7 @@ class FakeConnection:
         self.fail_on_insert = None
         self.commit_count = 0
         self.executed = []
+        self.rollback_count = 0
 
     def cursor(self):
         return FakeCursor(self)
@@ -118,7 +119,7 @@ class FakeConnection:
         self.commit_count += 1
 
     def rollback(self):
-        pass
+        self.rollback_count += 1
 
     def close(self):
         pass
@@ -349,12 +350,16 @@ def check_ds11():
     inside2 = datetime(2026, 9, 23, 1, 0, 0)
     outside = datetime(2026, 9, 24, 12, 0, 0)
     offset = 10800
+    offset_only_inside = datetime(2026, 9, 24, 0, 30, 0)
+    out_without_offset = datetime(2026, 9, 23, 0, 30, 0)
     scalps = [
         (inside1, offset, account, 5.0),
         (inside2, offset, account, 7.0),
         (outside, offset, account, 100.0),
         (inside1, None, account, 1.0),
         (inside1, offset, 99999999, 3.0),
+        (offset_only_inside, offset, account, 11.0),
+        (out_without_offset, offset, account, 13.0),
     ]
     counts = fd.derive_counts(events, scalps, start, end, account)
     assert counts["ejections_auto"] == 1
@@ -362,9 +367,9 @@ def check_ds11():
     assert counts["eject_filled_events"] == 2
     assert counts["carry_clamps"] == 3
     assert counts["critical_events"] == 1
-    assert counts["ejected_fills"] == 2
-    assert counts["ejected_realised"] == 12.0
-    assert counts["eject_mismatch"] == 0
+    assert counts["ejected_fills"] == 3
+    assert counts["ejected_realised"] == 23.0
+    assert counts["eject_mismatch"] == 1
     return "derive_counts fixture totals"
 
 
@@ -500,6 +505,26 @@ def check_ds16():
     return "s4_counts CloseBy pairs and median ratio"
 
 
+def check_ds17():
+    import archive_worker as aw
+
+    fake = FakeRedis()
+    conn = FakeConnection()
+    conn.fail_on_sql = "WHERE ftmo_day >="
+    conn.fail_on_sql_exc = psycopg2.DataError("daily derived failed")
+    result = aw.try_daily_build(conn, fake, force=True)
+    assert result is None
+    assert conn.rollback_count == 1
+
+    conn2 = FakeConnection()
+    conn2.fail_on_sql = "received_at > now()"
+    conn2.fail_on_sql_exc = psycopg2.DataError("critical list failed")
+    result2 = aw.try_critical_build(conn2, fake, force=True)
+    assert result2 is None
+    assert conn2.rollback_count == 1
+    return "swallowed build errors roll back"
+
+
 CHECKS = [
     ("DS1", check_ds1),
     ("DS2", check_ds2),
@@ -517,6 +542,7 @@ CHECKS = [
     ("DS14", check_ds14),
     ("DS15", check_ds15),
     ("DS16", check_ds16),
+    ("DS17", check_ds17),
 ]
 
 

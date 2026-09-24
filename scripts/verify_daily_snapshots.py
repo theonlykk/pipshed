@@ -683,6 +683,34 @@ def check_ds22():
     return "s4 gated_by_day query and grouping"
 
 
+def check_ds23():
+    import archive_worker as aw
+    from decimal import Decimal
+
+    conn = FakeConnection()
+    conn.daily_snapshot_rows = [
+        make_daily_snapshot_tuple(
+            id=1,
+            account_login=53066709,
+            ftmo_day=date(2026, 9, 24),
+            balance_end=Decimal("10066.86"),
+            equity_end=Decimal("10041.80"),
+            realised=Decimal("71.04"),
+            gated_seconds=0,
+            start_known=False,
+        ),
+    ]
+    fixed_now = datetime(2026, 9, 24, 23, 30, tzinfo=timezone.utc)
+    table = aw.build_daily_derived(conn, now=fixed_now)
+    text = json.dumps(table)
+    row = json.loads(text)["rows"][0]
+    if row.get("realised") != 71.04:
+        raise AssertionError(f"realised expected 71.04, got {row.get('realised')!r}")
+    if row.get("balance_end") != 10066.86:
+        raise AssertionError(f"balance_end expected 10066.86, got {row.get('balance_end')!r}")
+    return "numeric (Decimal) columns serialise to JSON floats"
+
+
 CHECKS = [
     ("DS1", check_ds1),
     ("DS2", check_ds2),
@@ -706,6 +734,7 @@ CHECKS = [
     ("DS20", check_ds20),
     ("DS21", check_ds21),
     ("DS22", check_ds22),
+    ("DS23", check_ds23),
 ]
 
 

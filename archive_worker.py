@@ -11,6 +11,7 @@ import sys
 import time
 import traceback
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import psycopg2
 import redis
@@ -339,6 +340,8 @@ def daily_format_value(value):
         return value
     if isinstance(value, float):
         return value
+    if isinstance(value, Decimal):
+        return float(value)
     return value
 
 

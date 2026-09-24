@@ -81,6 +81,14 @@ GRIND_INSTANCES = [
     "GRIND_AUDNZD_ALT",
 ]
 
+
+def _grind_slot(inst):
+    parts = inst.split("_")
+    if len(parts) < 3:
+        return ""
+    return parts[2]
+
+
 GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_OPT")]
 GRIND_ALT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_ALT")]
 

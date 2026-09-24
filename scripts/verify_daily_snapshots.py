@@ -77,11 +77,19 @@ class FakeCursor:
                 "ejections_auto", "ejections_command", "ejected_fills",
                 "ejected_realised", "eject_filled_events", "eject_mismatch",
                 "carry_clamps", "critical_events", "derived_at",
+                "gated_seconds", "history_ok",
             )]
         return []
 
     def fetchall(self):
         sql = self._last_sql or ""
+        if (
+            "daily_snapshots" in sql
+            and "gated_seconds" in sql
+            and "ftmo_day >=" in sql
+            and "ftmo_day <=" in sql
+        ):
+            return list(self._conn.daily_gated_rows)
         if "daily_snapshots" in sql and "WHERE ftmo_day >=" in sql:
             return list(self._conn.daily_snapshot_rows)
         if "ea_events e JOIN session_accounts" in sql:
@@ -102,6 +110,7 @@ class FakeCursor:
 class FakeConnection:
     def __init__(self):
         self.daily_snapshot_rows = []
+        self.daily_gated_rows = []
         self.daily_events = []
         self.daily_scalps = []
         self.critical_rows = []
@@ -525,6 +534,155 @@ def check_ds17():
     return "swallowed build errors roll back"
 
 
+DAILY_SNAPSHOT_COLUMN_NAMES = (
+    "id", "account_login", "ftmo_day", "instance_id", "session_id",
+    "ea_time_ms", "received_at", "balance_start", "equity_start",
+    "balance_end", "equity_end", "realised", "nontrade", "inventory_pnl",
+    "total", "swap_day", "positions_long", "positions_short", "orders",
+    "guard_total", "guard_age_s", "breaker_tripped", "premidnight_seen",
+    "broker_utc_offset_s", "start_known", "balance_start_source",
+    "ejections_auto", "ejections_command", "ejected_fills",
+    "ejected_realised", "eject_filled_events", "eject_mismatch",
+    "carry_clamps", "critical_events", "derived_at",
+    "gated_seconds", "history_ok",
+)
+
+
+def make_daily_snapshot_tuple(**overrides):
+    row = {name: None for name in DAILY_SNAPSHOT_COLUMN_NAMES}
+    row.update(overrides)
+    return tuple(row[name] for name in DAILY_SNAPSHOT_COLUMN_NAMES)
+
+
+def check_ds18():
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "migrations",
+        "003_adr160_gated.sql",
+    )
+    if not os.path.isfile(path):
+        raise AssertionError("migration file missing")
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise AssertionError("migration must be ASCII") from exc
+    if text.count("GENERATED ALWAYS AS") != 2:
+        raise AssertionError("expected two GENERATED ALWAYS AS clauses")
+    if text.count("STORED") != 2:
+        raise AssertionError("expected two STORED clauses")
+    if "jsonb_typeof(detail -> 'gated_seconds')" not in text:
+        raise AssertionError("missing gated_seconds jsonb_typeof")
+    if "BETWEEN 0 AND 172800" not in text:
+        raise AssertionError("missing gated range")
+    if "UPDATE" in text.upper():
+        raise AssertionError("migration must not contain UPDATE")
+    return "003_adr160_gated.sql shape"
+
+
+def check_ds19():
+    import archive_worker as aw
+
+    conn = FakeConnection()
+    conn.daily_snapshot_rows = [
+        make_daily_snapshot_tuple(
+            id=1,
+            account_login=1514731800,
+            ftmo_day=date(2026, 9, 23),
+            gated_seconds=5400,
+            history_ok=True,
+        ),
+        make_daily_snapshot_tuple(
+            id=2,
+            account_login=53066709,
+            ftmo_day=date(2026, 9, 23),
+        ),
+    ]
+    fixed_now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+    table = aw.build_daily_derived(conn, now=fixed_now)
+    rows = {r["account_login"]: r for r in table["rows"]}
+    r1 = rows[1514731800]
+    if r1.get("gated_hours") != 1.5:
+        raise AssertionError(f"gated_hours expected 1.5, got {r1.get('gated_hours')}")
+    if r1.get("gated_seconds") != 5400:
+        raise AssertionError(f"gated_seconds expected 5400, got {r1.get('gated_seconds')}")
+    if r1.get("history_ok") is not True:
+        raise AssertionError("history_ok expected True")
+    r2 = rows[53066709]
+    if r2.get("gated_hours") is not None:
+        raise AssertionError("gated_hours expected None for missing gated_seconds")
+    return "gated_hours and history_ok on daily public rows"
+
+
+def check_ds20():
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "templates",
+        "dashboard.html",
+    )
+    with open(path, encoding="utf-8") as fh:
+        html = fh.read()
+    if "<th>Gated (h)</th>" not in html:
+        raise AssertionError("missing Gated (h) header")
+    if "dailyCell(row.gated_hours, 1)" not in html:
+        raise AssertionError("missing gated_hours cell render")
+    if html.count('colspan="17"') != 2:
+        raise AssertionError('expected colspan="17" exactly twice')
+    if 'colspan="16"' in html:
+        raise AssertionError('colspan="16" must not remain in daily table')
+    return "daily card gated hours column"
+
+
+def check_ds21():
+    scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import s4_scalps
+
+    line = s4_scalps.format_gated_line({1514731800: 5400, 53066709: None})
+    expected = "  gated_hours: 53066709=-- 1514731800=1.5"
+    if line != expected:
+        raise AssertionError(f"format_gated_line got {line!r}")
+    empty = s4_scalps.format_gated_line({})
+    if empty != "  gated_hours: no snapshot":
+        raise AssertionError(f"empty format_gated_line got {empty!r}")
+    return "s4 format_gated_line"
+
+
+def check_ds22():
+    scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import s4_scalps
+
+    conn = FakeConnection()
+    conn.daily_gated_rows = [
+        (1514731800, date(2026, 9, 23), 5400),
+        (53066709, date(2026, 9, 23), None),
+        (1514731800, date(2026, 9, 22), 0),
+    ]
+    days = [date(2026, 9, 22), date(2026, 9, 23)]
+    got = s4_scalps.gated_by_day(conn, days)
+    want = {
+        date(2026, 9, 23): {1514731800: 5400, 53066709: None},
+        date(2026, 9, 22): {1514731800: 0},
+    }
+    if got != want:
+        raise AssertionError(f"gated_by_day mismatch: {got}")
+    gated_sql = [
+        (sql, params)
+        for sql, params in conn.executed
+        if sql and "FROM daily_snapshots" in sql
+    ]
+    if not gated_sql:
+        raise AssertionError("expected daily_snapshots query")
+    sql, params = gated_sql[0]
+    if params != (date(2026, 9, 22), date(2026, 9, 23)):
+        raise AssertionError(f"unexpected params {params}")
+    return "s4 gated_by_day query and grouping"
+
+
 CHECKS = [
     ("DS1", check_ds1),
     ("DS2", check_ds2),
@@ -543,6 +701,11 @@ CHECKS = [
     ("DS15", check_ds15),
     ("DS16", check_ds16),
     ("DS17", check_ds17),
+    ("DS18", check_ds18),
+    ("DS19", check_ds19),
+    ("DS20", check_ds20),
+    ("DS21", check_ds21),
+    ("DS22", check_ds22),
 ]
 
 

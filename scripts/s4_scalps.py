@@ -3,7 +3,7 @@ import argparse
 import os
 import sys
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg2
 
@@ -30,6 +30,39 @@ FROM scalp_history
 WHERE ejected IS NOT TRUE
   AND received_at >= %s AND received_at < %s
 """
+
+GATED_SQL = (
+    "SELECT account_login, ftmo_day, gated_seconds FROM "
+    "daily_snapshots WHERE ftmo_day >= %s AND ftmo_day <= %s"
+)
+
+
+def gated_by_day(conn, days):
+    if not days:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(GATED_SQL, (min(days), max(days)))
+        rows = cur.fetchall()
+    out = {}
+    for account_login, ftmo_day, gated_seconds in rows:
+        if isinstance(ftmo_day, datetime):
+            ftmo_day = ftmo_day.date()
+        out.setdefault(ftmo_day, {})[account_login] = gated_seconds
+    return out
+
+
+def format_gated_line(accounts):
+    if not accounts:
+        return "  gated_hours: no snapshot"
+    parts = []
+    for login in sorted(accounts, key=lambda x: int(x)):
+        seconds = accounts[login]
+        if seconds is None:
+            hours = "--"
+        else:
+            hours = f"{seconds / 3600:.1f}"
+        parts.append(f"{login}={hours}")
+    return "  gated_hours: " + " ".join(parts)
 
 
 def connect_readonly():
@@ -104,8 +137,15 @@ def run_main(days_count):
     finally:
         conn2.close()
 
+    conn3 = connect_readonly()
+    try:
+        gated = gated_by_day(conn3, days)
+    finally:
+        conn3.close()
+
     for day in sorted(days, reverse=True):
         print(f"FTMO day {day.isoformat()}")
+        print(format_gated_line(gated.get(day, {})))
         day_counts = ftmo_daily.s4_counts(fill_rows, eject_tickets, day)
         opt_vals = sorted(
             v for (inst, d), v in day_counts.items()

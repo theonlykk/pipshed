@@ -118,7 +118,7 @@ SELECT id, account_login, ftmo_day, instance_id, session_id, ea_time_ms,
        start_known, balance_start_source,
        ejections_auto, ejections_command, ejected_fills, ejected_realised,
        eject_filled_events, eject_mismatch, carry_clamps, critical_events,
-       derived_at
+       derived_at, gated_seconds, history_ok
 FROM daily_snapshots
 WHERE ftmo_day >= %s
 ORDER BY ftmo_day DESC
@@ -352,6 +352,8 @@ def daily_row_to_public(row_dict):
         out["carried"] = None
     else:
         out["carried"] = float(eq) - float(bal)
+    gs = row_dict.get("gated_seconds")
+    out["gated_hours"] = None if gs is None else float(gs) / 3600.0
     return out
 
 

@@ -83,6 +83,13 @@ GRIND_INSTANCES = [
 GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_OPT")]
 GRIND_ALT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_ALT")]
 
+GRIND_B_INSTANCES = []
+
+
+def _fleet_summary(cards, raws):
+    return {}
+
+
 # Ring membership — one edit here adds a ring everywhere downstream.
 GRIND_RINGS = {
     "eur_gbp_usd": {
@@ -1274,6 +1281,21 @@ def public_grind_status(token, _ignored):
         app.logger.exception("public_grind_status failed")
         response = jsonify({"error": "internal error"})
         return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/status_b",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/status_b/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_grind_status_b(token, _ignored):
+    return jsonify({"error": "not found"}), 404
 
 
 @app.route(

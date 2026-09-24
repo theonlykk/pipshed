@@ -40,6 +40,14 @@
     }
     .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
     .logo span { color: var(--green); }
+    .fleet-label {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #f59e0b;
+      margin-left: 12px;
+    }
 
     .status-badge {
       display: flex;
@@ -849,6 +857,7 @@
 
 <div class="header">
   <div class="logo">pip<span>shed</span></div>
+  {% if fleet_label %}<span class="fleet-label">{{ fleet_label }}</span>{% endif %}
   <div class="status-badge lost" id="statusBadge">
     <div class="status-dot"></div>
     <span id="statusText">Connecting...</span>

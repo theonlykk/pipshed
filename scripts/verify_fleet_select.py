@@ -99,12 +99,12 @@ def _child_probe(probe_id):
         html = client.get("/").get_data(as_text=True)
         out = {
             "has_fleet_b": "Fleet B" in html,
-            "has_fleet_label_class": "fleet-label" in html,
+            "has_fleet_label_span": '<span class="fleet-label">' in html,
         }
     elif probe_id == "fs7nolabel":
         client = pipshed.app.test_client()
         html = client.get("/").get_data(as_text=True)
-        out = {"has_fleet_label_class": "fleet-label" in html}
+        out = {"has_fleet_label_span": '<span class="fleet-label">' in html}
     else:
         raise ValueError(f"unknown probe {probe_id}")
 
@@ -227,10 +227,10 @@ def check_fs7():
     labeled = run_probe("fs7label", {"GRIND_FLEET_LABEL": "Fleet B"})
     if not labeled["has_fleet_b"]:
         raise AssertionError("dashboard must show Fleet B label text")
-    if not labeled["has_fleet_label_class"]:
-        raise AssertionError("dashboard must include fleet-label class")
+    if not labeled["has_fleet_label_span"]:
+        raise AssertionError("dashboard must include fleet-label span")
     plain = run_probe("fs7nolabel")
-    if plain["has_fleet_label_class"]:
+    if plain["has_fleet_label_span"]:
         raise AssertionError("unset label must not render fleet-label")
     return "dashboard fleet label"
 

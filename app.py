@@ -27,6 +27,7 @@ Routes:
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -60,7 +61,7 @@ ARCHIVE_CRITICAL_KEY = "fxmatrix:critical:last24h"
 ARCHIVE_ACTION_MAX_EVENTS = 500
 ARCHIVE_EVENT_TYPES = frozenset({"send_log", "fill_log", "config_event", "ea_event"})
 
-GRIND_INSTANCES = [
+GRIND_A_INSTANCES = [
     "GRIND_GBPUSD_OPT",
     "GRIND_GBPUSD_ALT",
     "GRIND_EURUSD_OPT",
@@ -81,17 +82,6 @@ GRIND_INSTANCES = [
     "GRIND_AUDNZD_ALT",
 ]
 
-
-def _grind_slot(inst):
-    parts = inst.split("_")
-    if len(parts) < 3:
-        return ""
-    return parts[2]
-
-
-GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_OPT")]
-GRIND_ALT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_ALT")]
-
 GRIND_B_INSTANCES = [
     "GRIND_GBPUSD_OPTB",
     "GRIND_EURUSD_OPTB",
@@ -105,6 +95,33 @@ GRIND_B_INSTANCES = [
     "GRIND_AUDNZD_ALTB",
     "GRIND_NZDCAD_ALTB",
 ]
+
+_grind_fleet_raw = os.environ.get("GRIND_FLEET", "A").strip().upper()
+if _grind_fleet_raw not in ("A", "B"):
+    logging.getLogger(__name__).warning(
+        "Unknown GRIND_FLEET=%r; using fleet A", os.environ.get("GRIND_FLEET", "")
+    )
+    GRIND_FLEET = "A"
+else:
+    GRIND_FLEET = _grind_fleet_raw
+
+GRIND_INSTANCES = GRIND_B_INSTANCES if GRIND_FLEET == "B" else GRIND_A_INSTANCES
+
+GRIND_FLEET_LABEL = os.environ.get("GRIND_FLEET_LABEL", "")
+
+
+def _grind_slot(inst):
+    parts = inst.split("_")
+    if len(parts) < 3:
+        return ""
+    slot = parts[2]
+    if slot in ("OPTB", "ALTB"):
+        return slot[:-1]
+    return slot
+
+
+GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if _grind_slot(inst) == "OPT"]
+GRIND_ALT_INSTANCES = [inst for inst in GRIND_INSTANCES if _grind_slot(inst) == "ALT"]
 
 
 def _fleet_summary(cards, raws):
@@ -822,8 +839,8 @@ def _build_grind_ring_summaries(grind_cards):
     rings = {}
     for ring_id, ring_meta in GRIND_RINGS.items():
         ring_instances = _grind_instances_for_ring(ring_id)
-        opt_instances = [inst for inst in ring_instances if inst.endswith("_OPT")]
-        alt_instances = [inst for inst in ring_instances if inst.endswith("_ALT")]
+        opt_instances = [inst for inst in ring_instances if _grind_slot(inst) == "OPT"]
+        alt_instances = [inst for inst in ring_instances if _grind_slot(inst) == "ALT"]
         rings[ring_id] = {
             "label": ring_meta["label"],
             "symbols": list(ring_meta["symbols"]),
@@ -1706,7 +1723,11 @@ def dashboard():
         }
         for ring_id, ring in GRIND_RINGS.items()
     }
-    return render_template("dashboard.html", rings=rings_ctx)
+    return render_template(
+        "dashboard.html",
+        rings=rings_ctx,
+        fleet_label=GRIND_FLEET_LABEL,
+    )
 
 
 @app.route("/api/telemetry/pod_closed", methods=["POST"])

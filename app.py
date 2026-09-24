@@ -14,6 +14,7 @@ Routes:
   GET  /api/telemetry/today_closed    — cross-instance broker-today pod closes
   GET  /api/telemetry/open_positions — cross-instance open pod snapshot
   GET  /api/g/<token>/status       — public grind status (unauthenticated)
+  GET  /api/g/<token>/status_b     — public Fleet B grind status (unauthenticated)
   GET  /api/g/<token>/scalps       — public broker-today scalp exits
   GET  /api/g/<token>/archive      — public archive worker health
   GET  /api/g/<token>/carry        — public carry swap table (Redis only)
@@ -83,11 +84,90 @@ GRIND_INSTANCES = [
 GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_OPT")]
 GRIND_ALT_INSTANCES = [inst for inst in GRIND_INSTANCES if inst.endswith("_ALT")]
 
-GRIND_B_INSTANCES = []
+GRIND_B_INSTANCES = [
+    "GRIND_GBPUSD_OPTB",
+    "GRIND_EURUSD_OPTB",
+    "GRIND_EURGBP_OPTB",
+    "GRIND_AUDCAD_OPTB",
+    "GRIND_AUDCHF_OPTB",
+    "GRIND_CADCHF_OPTB",
+    "GRIND_NZDCHF_OPTB",
+    "GRIND_NZDCAD_OPTB",
+    "GRIND_AUDNZD_OPTB",
+    "GRIND_AUDNZD_ALTB",
+    "GRIND_NZDCAD_ALTB",
+]
 
 
 def _fleet_summary(cards, raws):
-    return {}
+    instances_live = 0
+    halted_instances = []
+    open_layers_long = 0
+    open_layers_short = 0
+    scalps_total = 0
+    net_mtm_total = 0.0
+    realised_total = 0.0
+    api_count_max = 0
+
+    for inst in GRIND_B_INSTANCES:
+        card = cards.get(inst) or {}
+        if card.get("connection") != "live":
+            continue
+        instances_live += 1
+        open_layers_long += card.get("open_layers_long") or 0
+        open_layers_short += card.get("open_layers_short") or 0
+        scalps_total += card.get("scalps") or 0
+        net_mtm_total += _grind_pnl_contribution(card.get("net_mtm"))
+        realised_total += _grind_pnl_contribution(card.get("realised_pnl_today"))
+        api_val = card.get("api_count")
+        if isinstance(api_val, (int, float)):
+            api_count_max = max(api_count_max, int(api_val))
+        if card.get("halted"):
+            halted_instances.append(inst)
+
+    account_login = None
+    account_balance = None
+    account_equity = None
+    for inst in GRIND_B_INSTANCES:
+        raw = raws.get(inst)
+        if raw is None:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if "account_login" not in data and "account_balance" not in data and "account_equity" not in data:
+            continue
+        if "account_login" in data:
+            val = data["account_login"]
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                account_login = int(val)
+        if "account_balance" in data:
+            val = data["account_balance"]
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                account_balance = round(float(val), 2)
+        if "account_equity" in data:
+            val = data["account_equity"]
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                account_equity = round(float(val), 2)
+        break
+
+    return {
+        "instances_total": len(GRIND_B_INSTANCES),
+        "instances_live": instances_live,
+        "halted_instances": halted_instances,
+        "open_layers_long": open_layers_long,
+        "open_layers_short": open_layers_short,
+        "scalps": scalps_total,
+        "net_mtm": round(net_mtm_total, 2) if instances_live > 0 else 0,
+        "realised_pnl_today": round(realised_total, 2) if instances_live > 0 else 0,
+        "api_count": api_count_max if instances_live > 0 else None,
+        "account_login": account_login,
+        "account_balance": account_balance,
+        "account_equity": account_equity,
+    }
 
 
 # Ring membership — one edit here adds a ring everywhere downstream.
@@ -1295,7 +1375,32 @@ def public_grind_status(token, _ignored):
     strict_slashes=False,
 )
 def public_grind_status_b(token, _ignored):
-    return jsonify({"error": "not found"}), 404
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        grind_cards = {}
+        raw_by_inst = {}
+        for inst in GRIND_B_INSTANCES:
+            raw_grind = r.get(f"fxmatrix:state:{inst}")
+            raw_by_inst[inst] = raw_grind
+            grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
+
+        payload = {
+            "generated_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "fleet": "B",
+            "instances": {
+                inst: _public_grind_instance_fields(grind_cards[inst])
+                for inst in GRIND_B_INSTANCES
+            },
+            "summary": _fleet_summary(grind_cards, raw_by_inst),
+        }
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_grind_status_b failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
 
 
 @app.route(

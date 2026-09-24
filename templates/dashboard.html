@@ -1008,6 +1008,7 @@
           <th>Guard</th>
           <th>Breaker</th>
           <th>Pre-mid</th>
+          <th>Gated (h)</th>
           <th>Eject A/C</th>
           <th>Ejected fills ($)</th>
           <th>Clamps</th>
@@ -1015,7 +1016,7 @@
         </tr>
       </thead>
       <tbody id="dailyBody">
-        <tr class="empty-row"><td colspan="16">Loading...</td></tr>
+        <tr class="empty-row"><td colspan="17">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -1699,7 +1700,7 @@
     if (!body) return;
     const rows = payload && payload.rows ? payload.rows : [];
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="16">No daily snapshots yet.</td></tr>';
+      body.innerHTML = '<tr class="empty-row"><td colspan="17">No daily snapshots yet.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(function(row) {
@@ -1721,6 +1722,7 @@
         '<td>' + dailyCell(row.guard_total) + '</td>' +
         '<td>' + dailyCell(row.breaker_tripped) + '</td>' +
         '<td>' + dailyCell(row.premidnight_seen) + '</td>' +
+        '<td>' + dailyCell(row.gated_hours, 1) + '</td>' +
         '<td>' + ejectAc + '</td>' +
         '<td class="' + dailyMoneyClass(ejectedMoney) + '">' + dailyCell(ejectedMoney, 2) + '</td>' +
         '<td>' + dailyCell(row.carry_clamps) + '</td>' +

@@ -31,6 +31,19 @@ WHERE ejected IS NOT TRUE
   AND received_at >= %s AND received_at < %s
 """
 
+GATED_SQL = (
+    "SELECT account_login, ftmo_day, gated_seconds FROM "
+    "daily_snapshots WHERE ftmo_day >= %s AND ftmo_day <= %s"
+)
+
+
+def gated_by_day(conn, days):
+    return {}
+
+
+def format_gated_line(accounts):
+    return ""
+
 
 def connect_readonly():
     url = os.environ.get("DATABASE_URL")

@@ -14,6 +14,11 @@ Options:
                      CARRY_PASS_SUMMARY / _INCOMPLETE rows with their counts, and
                      quarantine / invariant / critical markers grouped by reason,
                      over the last --hours (default 30); honours --instance
+    --codes A,B,...  ea_events counts per instance and code (first/last) over the
+                     last --hours; honours --instance (e.g. EJECT_ACCEPTED,EJECT_FILLED)
+    --depth          scalp_history per instance and direction over the last --hours:
+                     scalps, max stack_depth, scalps closed at stack_depth >= --cap
+                     (default 8); honours --instance. Combines with --codes
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -104,6 +109,33 @@ WHERE (code IN ('QUARANTINE_ENTER', 'QUARANTINE_HALT', 'INVARIANT_FAIL', 'RECON_
   AND (%(instance)s::text IS NULL OR instance_id = %(instance)s::text)
 GROUP BY instance_id, code, reason
 ORDER BY i6 DESC, code, instance_id, reason
+"""
+
+CODES_SQL = """
+SELECT instance_id,
+       code,
+       count(*)          AS n,
+       min(received_at)  AS first_at,
+       max(received_at)  AS last_at
+FROM ea_events
+WHERE code = ANY(%(codes)s)
+  AND received_at >= now() - make_interval(hours => %(hours)s)
+  AND (%(instance)s::text IS NULL OR instance_id = %(instance)s::text)
+GROUP BY instance_id, code
+ORDER BY instance_id, code
+"""
+
+DEPTH_SQL = """
+SELECT instance_id,
+       direction,
+       count(*)                                         AS scalps,
+       max(stack_depth)                                 AS max_depth,
+       count(*) FILTER (WHERE stack_depth >= %(cap)s)   AS at_cap
+FROM scalp_history
+WHERE received_at >= now() - make_interval(hours => %(hours)s)
+  AND (%(instance)s::text IS NULL OR instance_id = %(instance)s::text)
+GROUP BY instance_id, direction
+ORDER BY instance_id, direction
 """
 
 ROLLOVERS_SQL = """
@@ -241,6 +273,9 @@ def main(argv=None):
     parser.add_argument("--l0churn", action="store_true")
     parser.add_argument("--carrypass", action="store_true")
     parser.add_argument("--hours", type=int, default=30)
+    parser.add_argument("--codes")
+    parser.add_argument("--depth", action="store_true")
+    parser.add_argument("--cap", type=int, default=8)
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -252,6 +287,21 @@ def main(argv=None):
     conn.set_session(readonly=True, autocommit=True)
     try:
         with conn.cursor() as cur:
+            if args.codes or args.depth:
+                if args.codes:
+                    codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+                    print(f"== EVENTS {','.join(codes)}, last {args.hours} h ==")
+                    cur.execute(CODES_SQL, {"codes": codes, "hours": args.hours,
+                                            "instance": args.instance})
+                    _print_query_rows(cur, cur.fetchall(), "none.")
+                    print()
+                if args.depth:
+                    print(f"== SCALP DEPTH, last {args.hours} h (at_cap: stack_depth >= {args.cap}) ==")
+                    cur.execute(DEPTH_SQL, {"cap": args.cap, "hours": args.hours,
+                                            "instance": args.instance})
+                    _print_query_rows(cur, cur.fetchall(), "no scalps.")
+                return 0
+
             if args.carrypass:
                 params = {"hours": args.hours, "instance": args.instance}
                 print(f"== CARRY_SNAPSHOT, last {args.hours} h "

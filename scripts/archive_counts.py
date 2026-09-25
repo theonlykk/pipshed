@@ -10,6 +10,10 @@ Options:
     --rollovers      rollover crossings per closed layer from fill_logs (skips table counts)
     --slippage       slippage distribution and I6-breach fills from fill_logs (skips table counts)
     --l0churn        layer-0 ENT modify churn from send_logs (skips table counts)
+    --carrypass      nightly carry check (skips table counts): CARRY_SNAPSHOT rows,
+                     CARRY_PASS_SUMMARY / _INCOMPLETE rows with their counts, and
+                     quarantine / invariant / critical markers grouped by reason,
+                     over the last --hours (default 30); honours --instance
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -46,6 +50,60 @@ SELECT DISTINCT ON (detail->>'symbol')
 FROM ea_events
 WHERE code = 'CARRY_SNAPSHOT'
 ORDER BY detail->>'symbol', received_at DESC
+"""
+
+CARRYPASS_SNAPSHOT_SQL = """
+SELECT received_at,
+       instance_id,
+       detail->>'symbol'             AS symbol,
+       detail->>'day_of_week'        AS dow,
+       detail->>'mult_today'         AS mult_today,
+       detail->>'mult_tomorrow'      AS mult_tomorrow,
+       detail->>'rollover3days'      AS x3_day,
+       detail->>'eligible_long'      AS elig_long,
+       detail->>'eligible_short'     AS elig_short,
+       detail->>'accrued_swap_long'  AS swap_usd_long,
+       detail->>'accrued_swap_short' AS swap_usd_short
+FROM ea_events
+WHERE code = 'CARRY_SNAPSHOT'
+  AND received_at >= now() - make_interval(hours => %(hours)s)
+  AND (%(instance)s::text IS NULL OR instance_id = %(instance)s::text)
+ORDER BY received_at, instance_id
+"""
+
+CARRYPASS_SUMMARY_SQL = """
+SELECT received_at,
+       instance_id,
+       code,
+       reason                 AS symbol,
+       detail->>'eligible'    AS eligible,
+       detail->>'shifted'     AS shifted,
+       detail->>'clamped'     AS clamped,
+       detail->>'skipped'     AS skipped,
+       detail->>'failed'      AS failed,
+       detail->>'incomplete'  AS incomplete
+FROM ea_events
+WHERE code IN ('CARRY_PASS_SUMMARY', 'CARRY_PASS_INCOMPLETE')
+  AND received_at >= now() - make_interval(hours => %(hours)s)
+  AND (%(instance)s::text IS NULL OR instance_id = %(instance)s::text)
+ORDER BY received_at, instance_id
+"""
+
+CARRYPASS_FAULTS_SQL = """
+SELECT instance_id,
+       code,
+       reason,
+       count(*)                          AS n,
+       min(received_at)                  AS first_at,
+       max(received_at)                  AS last_at,
+       bool_or(reason LIKE 'I6%%')       AS i6
+FROM ea_events
+WHERE (code IN ('QUARANTINE_ENTER', 'QUARANTINE_HALT', 'INVARIANT_FAIL', 'RECON_FAIL')
+       OR level IN ('CRITICAL', 'FATAL'))
+  AND received_at >= now() - make_interval(hours => %(hours)s)
+  AND (%(instance)s::text IS NULL OR instance_id = %(instance)s::text)
+GROUP BY instance_id, code, reason
+ORDER BY i6 DESC, code, instance_id, reason
 """
 
 ROLLOVERS_SQL = """
@@ -181,6 +239,8 @@ def main(argv=None):
     parser.add_argument("--rollovers", action="store_true")
     parser.add_argument("--slippage", action="store_true")
     parser.add_argument("--l0churn", action="store_true")
+    parser.add_argument("--carrypass", action="store_true")
+    parser.add_argument("--hours", type=int, default=30)
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -192,6 +252,22 @@ def main(argv=None):
     conn.set_session(readonly=True, autocommit=True)
     try:
         with conn.cursor() as cur:
+            if args.carrypass:
+                params = {"hours": args.hours, "instance": args.instance}
+                print(f"== CARRY_SNAPSHOT, last {args.hours} h "
+                      "(also emitted at every EA init) ==")
+                cur.execute(CARRYPASS_SNAPSHOT_SQL, params)
+                _print_query_rows(cur, cur.fetchall(), "no CARRY_SNAPSHOT rows.")
+                print()
+                print(f"== CARRY_PASS_SUMMARY / CARRY_PASS_INCOMPLETE, last {args.hours} h ==")
+                cur.execute(CARRYPASS_SUMMARY_SQL, params)
+                _print_query_rows(cur, cur.fetchall(), "no carry pass rows.")
+                print()
+                print(f"== QUARANTINE / INVARIANT / CRITICAL, last {args.hours} h ==")
+                cur.execute(CARRYPASS_FAULTS_SQL, params)
+                _print_query_rows(cur, cur.fetchall(), "none.")
+                return 0
+
             if args.carry:
                 cur.execute(CARRY_SQL)
                 rows = cur.fetchall()

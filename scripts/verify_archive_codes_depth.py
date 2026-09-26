@@ -74,14 +74,14 @@ def setup(cur):
         "INSERT INTO scalp_history (instance_id, instrument, direction, entry_price,"
         " exit_price, gross_pnl, layer_depth, stack_depth, close_time_broker,"
         " source, received_at, rolled, ejected) VALUES"
-        " ('GRIND_GBPUSD_OPT', 'X', 'LONG', 1.0, 1.1, 0.1, 0, 99, %s, 'test', %s, TRUE, NULL)",
+        " ('GRIND_GBPUSD_OPT', 'X', 'LONG', 5.0, 5.1, 0.1, 0, 99, %s, 'test', %s, TRUE, NULL)",
         (datetime(2026, 9, 25), NOW - timedelta(minutes=30)),
     )
     cur.execute(
         "INSERT INTO scalp_history (instance_id, instrument, direction, entry_price,"
         " exit_price, gross_pnl, layer_depth, stack_depth, close_time_broker,"
         " source, received_at, rolled, ejected) VALUES"
-        " ('GRIND_GBPUSD_OPT', 'X', 'SHORT', 1.0, 1.1, 0.1, 0, 99, %s, 'test', %s, NULL, TRUE)",
+        " ('GRIND_GBPUSD_OPT', 'X', 'SHORT', 6.0, 6.1, 0.1, 0, 99, %s, 'test', %s, NULL, TRUE)",
         (datetime(2026, 9, 25), NOW - timedelta(minutes=25)),
     )
 
@@ -122,6 +122,10 @@ def main():
                    "GRIND_GBPUSD_OPT | SHORT | 1 | 2 | 0" in lines))
     checks.append(("depth B short: 200 h row excluded",
                    "GRIND_EURUSD_OPTB | SHORT | 1 | 5 | 0" in lines))
+    checks.append(("depth excludes rolled row (LONG still 3 not 4)",
+                   "GRIND_GBPUSD_OPT | LONG | 3 | 8 | 2" in lines))
+    checks.append(("depth excludes ejected row (SHORT still 1 not 2)",
+                   "GRIND_GBPUSD_OPT | SHORT | 1 | 2 | 0" in lines))
 
     rc, out = run(["--depth", "--cap", "5", "--hours", "168", "--instance", "GRIND_EURUSD_OPTB"])
     lines = out.splitlines()
@@ -132,10 +136,6 @@ def main():
     checks.append(("both sections in one call", "== EVENTS" in out and "== SCALP DEPTH" in out))
     checks.append(("1 h window: only the 50 min event", "GRIND_GBPUSD_OPT | EJECT_ACCEPTED | 1 |" in out))
 
-    checks.append(("depth excludes rolled row (LONG still 3 not 4)",
-                   "GRIND_GBPUSD_OPT | LONG | 3 | 8 | 2" in lines))
-    checks.append(("depth excludes ejected row (SHORT still 1 not 2)",
-                   "GRIND_GBPUSD_OPT | SHORT | 1 | 2 | 0" in lines))
 
     failed = 0
     for name, ok in checks:

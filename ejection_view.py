@@ -1,8 +1,12 @@
-"""Passive ejection telemetry view builder (C56). Pure functions, no Flask/Redis I/O."""
+"""Passive ejection telemetry view builder (C56). Pure functions, no Flask/Postgres I/O."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import ftmo_daily as fd
+
+EJECTION_VIEW_MAX_AGE_S = 300
+WORKER_EJECTION_HOURS = 168
 
 
 def clamp_hours(raw):
@@ -391,24 +395,95 @@ def _rolled_by_events(events, side):
     return len(accepted)
 
 
+def _price_or_none(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 5)
+    return None
+
+
+def _heartbeat_timestamp_age_s(data, now_dt):
+    """Age of heartbeat payload — same timestamp field as grind status cards."""
+    ts = data.get("timestamp")
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    try:
+        payload_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if payload_ts.tzinfo is None:
+        payload_ts = payload_ts.replace(tzinfo=timezone.utc)
+    return max(0, int((now_dt - payload_ts).total_seconds()))
+
+
+def _heartbeat_market_price(data):
+    """Market price from heartbeat top-level market when present (status cards omit it)."""
+    return _price_or_none(data.get("market"))
+
+
+def _normalize_state_layers(raw_layers):
+    rows = []
+    for layer in raw_layers or []:
+        if not isinstance(layer, dict):
+            continue
+        side = layer.get("side")
+        if isinstance(side, str):
+            side = side.strip().upper()
+            if side not in ("L", "S"):
+                side = None
+        entry = layer.get("entry_price")
+        if entry is None:
+            entry = layer.get("entry")
+        idx = layer.get("layer_index")
+        rows.append({
+            "layer_index": int(idx) if isinstance(idx, (int, float)) and not isinstance(idx, bool) else None,
+            "side": side,
+            "entry": _price_or_none(entry),
+            "virtual_level": _price_or_none(layer.get("virtual_level")),
+            "exit_target": _price_or_none(layer.get("exit_target")),
+        })
+    return rows
+
+
+def _parse_live_heartbeat(raw_payload, now_dt):
+    if not raw_payload:
+        return {}
+    try:
+        data = json.loads(raw_payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "layers": _normalize_state_layers(data.get("layers")),
+        "max_layers": data.get("max_layers"),
+        "market": _heartbeat_market_price(data),
+        "state_age_s": _heartbeat_timestamp_age_s(data, now_dt),
+    }
+
+
 def _build_now(events, state_by_instance, grind_instances):
     now = {}
     for inst in grind_instances:
         now[inst] = {}
         state = state_by_instance.get(inst) or {}
         inst_events = [e for e in events if e.get("instance_id") == inst]
+        state_layers = state.get("layers") or []
         for side in ("L", "S"):
             layers = []
-            state_layers = state.get("layers") or []
             for layer in state_layers:
-                layer_side = _side_code(detail=layer)
+                layer_side = layer.get("side")
+                if layer_side is None:
+                    layer_side = _side_code(detail=layer)
                 if layer_side is not None and layer_side != side:
                     continue
                 if layer_side is None and side != "L":
                     continue
                 layers.append({
                     "layer_index": layer.get("layer_index"),
-                    "ticket": layer.get("ticket"),
+                    # EA heartbeat layers carry no position ticket.
+                    "ticket": None,
                     "entry": layer.get("entry"),
                     "virtual_level": layer.get("virtual_level"),
                     "exit_target": layer.get("exit_target"),
@@ -423,6 +498,17 @@ def _build_now(events, state_by_instance, grind_instances):
                 rolled_by_state is not None
                 and rolled_by_state != rolled_events
             )
+            effective = []
+            for layer in layers:
+                eff = layer.get("virtual_level")
+                if eff is None:
+                    eff = layer.get("entry")
+                if eff is not None:
+                    effective.append(float(eff))
+            if side == "L":
+                lowest_effective = min(effective) if effective else None
+            else:
+                lowest_effective = max(effective) if effective else None
             stranded_at = None
             for ev in inst_events:
                 if ev.get("code") != "ROLL_STRANDED":
@@ -431,13 +517,13 @@ def _build_now(events, state_by_instance, grind_instances):
                 if _side_code(detail) == side:
                     stranded_at = ea_ms_to_iso(ev.get("ea_time_ms"))
             now[inst][side] = {
-                "depth": state.get("depth"),
+                "depth": len(layers) if state_layers else None,
                 "max_layers": state.get("max_layers"),
                 "rolled": rolled_state,
-                "lowest_effective": state.get("lowest_effective"),
+                "lowest_effective": lowest_effective,
                 "market": state.get("market"),
                 "last_stranded_at": stranded_at,
-                "state_age_s": state.get("age_s"),
+                "state_age_s": state.get("state_age_s"),
                 "layers": layers,
                 "rolled_by_events": rolled_events,
                 "rolled_by_state": rolled_by_state,
@@ -567,7 +653,6 @@ def build_ejection_view(
         "fleet": fleet,
         "fleet_label": fleet_label,
         "hours": hours,
-        "now_source": "state",
         "now": now,
         "rolls": rolls,
         "ejections": ejections,
@@ -577,105 +662,40 @@ def build_ejection_view(
     }
 
 
-def _fetch_redis_state(redis_client, grind_instances):
-    state_by_instance = {}
-    now_source = "events"
-    if redis_client is None:
-        return state_by_instance, now_source
-    try:
-        import redis
-
-        for inst in grind_instances:
-            raw = redis_client.get(f"fxmatrix:state:{inst}")
-            parsed = _parse_state_payload(raw)
-            parsed["age_s"] = None
-            state_by_instance[inst] = parsed
-            if parsed.get("layers"):
-                state_by_instance[inst]["source"] = "state"
-            else:
-                state_by_instance[inst]["source"] = "events"
-        now_source = "state"
-    except redis.exceptions.ConnectionError:
-        state_by_instance = {}
-        now_source = "events"
-    return state_by_instance, now_source
+def _serialize_scalp_for_snapshot(scalp):
+    row = dict(scalp)
+    close_broker = row.get("close_time_broker")
+    if isinstance(close_broker, datetime):
+        row["close_time_broker"] = close_broker.isoformat()
+    return row
 
 
-def _apply_now_source(payload, now_source):
-    payload["now_source"] = now_source
-    if now_source == "events":
-        for inst_block in payload.get("now", {}).values():
-            for side_block in inst_block.values():
-                side_block["rolled_by_state"] = None
-                side_block["state_age_s"] = None
-    return payload
-
-
-def _parse_state_payload(raw):
-    if not raw:
-        return {}
-    try:
-        import json
-
-        data = json.loads(raw)
-    except (TypeError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    layers_raw = data.get("layers") or []
-    layers = []
-    for layer in layers_raw:
-        if not isinstance(layer, dict):
-            continue
-        layers.append({
-            "layer_index": layer.get("layer_index"),
-            "ticket": layer.get("ticket"),
-            "entry": layer.get("entry"),
-            "virtual_level": layer.get("virtual_level"),
-            "exit_target": layer.get("exit_target"),
-        })
+def build_worker_ejection_snapshot(
+    *,
+    built_at,
+    window_start_ms,
+    window_end_ms,
+    events,
+    scalps,
+    fill_logs,
+):
     return {
-        "depth": data.get("depth"),
-        "max_layers": data.get("max_layers"),
-        "lowest_effective": data.get("lowest_effective"),
-        "market": data.get("market"),
-        "layers": layers,
+        "built_at": built_at,
+        "window_start_ms": window_start_ms,
+        "window_end_ms": window_end_ms,
+        "events": events,
+        "scalps": [_serialize_scalp_for_snapshot(s) for s in scalps],
+        "fill_logs": fill_logs,
     }
 
 
-def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_client=None):
-    hours = clamp_hours(hours)
-    now_dt = datetime.now(timezone.utc)
-    window_end_ms = int(now_dt.timestamp() * 1000)
-    window_start_ms = window_end_ms - hours * 3600 * 1000
-    generated_at = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    state_by_instance, now_source = _fetch_redis_state(redis_client, grind_instances)
-
-    if conn is None:
-        payload = build_ejection_view(
-            generated_at=generated_at,
-            fleet=fleet,
-            fleet_label=fleet_label,
-            hours=hours,
-            grind_instances=list(grind_instances),
-            events=[],
-            scalps=[],
-            fill_logs=[],
-            state_by_instance=state_by_instance,
-            now_dt=now_dt,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
-        )
-        return _apply_now_source(payload, now_source)
-
+def load_ejection_rows_from_db(conn, window_start_ms, window_end_ms):
     recv_start = datetime.fromtimestamp(window_start_ms / 1000.0, tz=timezone.utc) - timedelta(
         days=1
     )
     recv_end = datetime.fromtimestamp(window_end_ms / 1000.0, tz=timezone.utc) + timedelta(
         days=1
     )
-    inst_tuple = tuple(grind_instances)
     events = []
     scalps = []
     fill_logs = []
@@ -685,10 +705,9 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
             SELECT instance_id, code, level, ea_time_ms, ticket, detail
             FROM ea_events
             WHERE ea_time_ms >= %s AND ea_time_ms < %s
-              AND instance_id = ANY(%s)
             ORDER BY ea_time_ms
             """,
-            (window_start_ms, window_end_ms, list(inst_tuple)),
+            (window_start_ms, window_end_ms),
         )
         for inst, code, level, ea_time_ms, ticket, detail in cur.fetchall():
             events.append({
@@ -707,9 +726,8 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
                    entry_deal_ticket, exit_deal_ticket, layer_depth
             FROM scalp_history
             WHERE received_at >= %s AND received_at < %s
-              AND instance_id = ANY(%s)
             """,
-            (recv_start, recv_end, list(inst_tuple)),
+            (recv_start, recv_end),
         )
         for row in cur.fetchall():
             scalps.append({
@@ -729,14 +747,13 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
         cur.execute(
             """
             SELECT instance_id, deal_ticket, order_ticket, position_id,
-                   commission, swap
+                   commission, swap, ea_time_ms
             FROM fill_logs
             WHERE ea_time_ms >= %s AND ea_time_ms < %s
-              AND instance_id = ANY(%s)
             """,
-            (window_start_ms, window_end_ms, list(inst_tuple)),
+            (window_start_ms, window_end_ms),
         )
-        for inst, deal_ticket, order_ticket, position_id, commission, swap in cur.fetchall():
+        for inst, deal_ticket, order_ticket, position_id, commission, swap, ea_ms in cur.fetchall():
             fill_logs.append({
                 "instance_id": inst,
                 "deal_ticket": deal_ticket,
@@ -744,7 +761,69 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
                 "position_id": position_id,
                 "commission": float(commission) if commission is not None else None,
                 "swap": float(swap) if swap is not None else None,
+                "ea_time_ms": ea_ms,
             })
+    return events, scalps, fill_logs
+
+
+def _ejection_unavailable(view_age_s=None):
+    return {"error": "ejection view unavailable", "view_age_s": view_age_s}
+
+
+def serve_ejection_from_redis(
+    redis_client,
+    hours,
+    fleet,
+    fleet_label,
+    grind_instances,
+    view_key="fxmatrix:ejection:view",
+):
+    import redis
+
+    hours = clamp_hours(hours)
+    now_dt = datetime.now(timezone.utc)
+    window_end_ms = int(now_dt.timestamp() * 1000)
+    window_start_ms = window_end_ms - hours * 3600 * 1000
+    generated_at = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    try:
+        raw = redis_client.get(view_key)
+    except redis.exceptions.ConnectionError:
+        return None, _ejection_unavailable(None)
+
+    if not raw:
+        return None, _ejection_unavailable(None)
+
+    try:
+        snap = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None, _ejection_unavailable(None)
+
+    built_at = snap.get("built_at")
+    view_age_s = None
+    if isinstance(built_at, str) and built_at.strip():
+        try:
+            built_dt = datetime.fromisoformat(built_at.replace("Z", "+00:00"))
+            if built_dt.tzinfo is None:
+                built_dt = built_dt.replace(tzinfo=timezone.utc)
+            view_age_s = max(0, int((now_dt - built_dt).total_seconds()))
+        except ValueError:
+            view_age_s = None
+
+    if view_age_s is None or view_age_s > EJECTION_VIEW_MAX_AGE_S:
+        return None, _ejection_unavailable(view_age_s)
+
+    events = snap.get("events") or []
+    scalps = snap.get("scalps") or []
+    fill_logs = snap.get("fill_logs") or []
+
+    state_by_instance = {}
+    try:
+        for inst in grind_instances:
+            raw_state = redis_client.get(f"fxmatrix:state:{inst}")
+            state_by_instance[inst] = _parse_live_heartbeat(raw_state, now_dt)
+    except redis.exceptions.ConnectionError:
+        return None, _ejection_unavailable(view_age_s)
 
     payload = build_ejection_view(
         generated_at=generated_at,
@@ -760,4 +839,6 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
         window_start_ms=window_start_ms,
         window_end_ms=window_end_ms,
     )
-    return _apply_now_source(payload, now_source)
+    payload["view_built_at"] = built_at
+    payload["view_age_s"] = view_age_s
+    return payload, None

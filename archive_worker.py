@@ -37,6 +37,8 @@ ARCHIVE_DAILY_KEY = "fxmatrix:daily:table"
 ARCHIVE_DAILY_LAST_BUILD = "fxmatrix:daily:last_build"
 ARCHIVE_CRITICAL_KEY = "fxmatrix:critical:last24h"
 ARCHIVE_CRITICAL_LAST_BUILD = "fxmatrix:critical:last_build"
+ARCHIVE_EJECTION_KEY = "fxmatrix:ejection:view"
+ARCHIVE_EJECTION_LAST_BUILD = "fxmatrix:ejection:last_build"
 
 BATCH_MAX = 500
 HEARTBEAT_INTERVAL_SECONDS = 10
@@ -45,6 +47,7 @@ RETENTION_INTERVAL = timedelta(hours=24)
 CARRY_BUILD_INTERVAL = timedelta(hours=1)
 DAILY_BUILD_INTERVAL = timedelta(hours=1)
 CRITICAL_BUILD_INTERVAL = timedelta(seconds=60)
+EJECTION_BUILD_INTERVAL = timedelta(seconds=60)
 BACKOFF_MAX_SECONDS = 30
 
 CARRY_SQL = """
@@ -524,6 +527,62 @@ def try_critical_build(conn, redis_client, force=False):
         return None
 
 
+def build_ejection_snapshot(conn):
+    import ejection_view as ev
+
+    now = datetime.now(timezone.utc)
+    window_end_ms = int(now.timestamp() * 1000)
+    window_start_ms = window_end_ms - ev.WORKER_EJECTION_HOURS * 3600 * 1000
+    events, scalps, fill_logs = ev.load_ejection_rows_from_db(
+        conn, window_start_ms, window_end_ms
+    )
+    return ev.build_worker_ejection_snapshot(
+        built_at=utc_now_iso(),
+        window_start_ms=window_start_ms,
+        window_end_ms=window_end_ms,
+        events=events,
+        scalps=scalps,
+        fill_logs=fill_logs,
+    )
+
+
+def publish_ejection_view(redis_client, snapshot):
+    redis_client.set(ARCHIVE_EJECTION_KEY, json.dumps(snapshot))
+
+
+def run_ejection_build_if_due(conn, redis_client, force=False):
+    if not force:
+        last_raw = redis_client.get(ARCHIVE_EJECTION_LAST_BUILD)
+        now = datetime.now(timezone.utc)
+        if last_raw:
+            try:
+                last_run = datetime.fromisoformat(last_raw)
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                if now - last_run < EJECTION_BUILD_INTERVAL:
+                    return None
+            except ValueError:
+                pass
+    snapshot = build_ejection_snapshot(conn)
+    publish_ejection_view(redis_client, snapshot)
+    redis_client.set(ARCHIVE_EJECTION_LAST_BUILD, utc_now_iso())
+    return snapshot
+
+
+def try_ejection_build(conn, redis_client, force=False):
+    try:
+        return run_ejection_build_if_due(conn, redis_client, force=force)
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log.warning("ejection view build failed: %s", exc)
+        return None
+
+
 def insert_daily_snapshot_if_needed(cur, item, row):
     if row.get("code") != "DAILY_SNAPSHOT":
         return
@@ -951,6 +1010,7 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
     try_carry_build(conn, redis_client, force=True)
     try_daily_build(conn, redis_client, force=True)
     try_critical_build(conn, redis_client, force=True)
+    try_ejection_build(conn, redis_client, force=True)
     redis_backoff = 0
     last_heartbeat = 0.0
 
@@ -977,6 +1037,7 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
                 try_carry_build(conn, redis_client, force=False)
                 try_daily_build(conn, redis_client, force=False)
                 try_critical_build(conn, redis_client, force=False)
+                try_ejection_build(conn, redis_client, force=False)
             except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
                 state["last_error"] = str(exc)
                 try:

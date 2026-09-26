@@ -37,71 +37,238 @@ def _side_code(detail=None, direction=None):
     return None
 
 
-def commission_position_ids(scalp, fill_rows):
-    """Q1 position set for commission/swap (de-duplicated position_id values)."""
-    ids = set()
-    by_deal = {}
-    by_order = {}
-    for row in fill_rows:
-        if row.get("instance_id") and scalp.get("instance_id"):
-            if row["instance_id"] != scalp["instance_id"]:
-                continue
-        dt = row.get("deal_ticket")
-        if dt is not None:
-            by_deal[dt] = row
-        ot = row.get("order_ticket")
-        if ot is not None:
-            by_order.setdefault(ot, []).append(row)
-
-    for ticket in (scalp.get("entry_deal_ticket"), scalp.get("exit_deal_ticket")):
-        if ticket is None:
-            continue
-        deal = by_deal.get(ticket)
-        if deal and deal.get("position_id") is not None:
-            ids.add(deal["position_id"])
-
-    exit_deal = scalp.get("exit_deal_ticket")
-    exit_order = None
-    if exit_deal in by_deal:
-        exit_order = by_deal[exit_deal].get("order_ticket")
-    if exit_order is not None:
-        for row in by_order.get(exit_order, []):
-            if row.get("position_id") is not None:
-                ids.add(row["position_id"])
-    return ids
+def _fill_entry_kind(row):
+    entry = (row.get("entry_type") or "").upper()
+    deal = (row.get("deal_type") or "").upper()
+    if entry == "OUT_BY" or deal == "OUT_BY":
+        return "OUT_BY"
+    if entry == "OUT" or deal == "OUT":
+        return "OUT"
+    if entry == "IN" or deal == "IN":
+        return "IN"
+    return entry or deal
 
 
-def layer_realised_from_fills(scalp, fill_rows):
-    gross_val = scalp.get("gross_pnl")
-    gross = float(gross_val) if gross_val is not None else 0.0
-    pos_ids = commission_position_ids(scalp, fill_rows)
-    if not pos_ids:
-        return None
+def _side_letter(row):
+    side = row.get("side")
+    if isinstance(side, str):
+        s = side.strip().upper()
+        if s in ("L", "S"):
+            return s
+        if s in ("BUY", "LONG"):
+            return "L"
+        if s in ("SELL", "SHORT"):
+            return "S"
+    return None
+
+
+def _sum_deals_for_positions(fill_rows, position_ids):
+    gross = 0.0
     commission = 0.0
     swap = 0.0
-    seen_deals = set()
+    seen = set()
     for row in fill_rows:
-        if scalp.get("instance_id") and row.get("instance_id"):
-            if row["instance_id"] != scalp["instance_id"]:
-                continue
-        if pos_ids and row.get("position_id") not in pos_ids:
+        if row.get("position_id") not in position_ids:
             continue
         deal_ticket = row.get("deal_ticket")
-        if deal_ticket in seen_deals:
+        if deal_ticket in seen:
             continue
         if deal_ticket is not None:
-            seen_deals.add(deal_ticket)
+            seen.add(deal_ticket)
+        if row.get("profit") is not None:
+            gross += float(row["profit"])
         if row.get("commission") is not None:
             commission += float(row["commission"])
         if row.get("swap") is not None:
             swap += float(row["swap"])
-    net = gross + commission + swap
     return (
-        gross,
+        round(gross, 2),
         round(commission, 2),
         round(swap, 2),
-        round(net, 2),
+        round(gross + commission + swap, 2),
     )
+
+
+def _layer_from_ent(fill_rows, position_ids):
+    for row in fill_rows:
+        if row.get("position_id") not in position_ids:
+            continue
+        if _fill_entry_kind(row) != "IN":
+            continue
+        if (row.get("role") or "").upper() != "ENT":
+            continue
+        return row.get("position_id"), _side_letter(row), row.get("layer_index")
+    return None, None, None
+
+
+def closed_trades_from_fills(fill_rows, roll_positions=None, eject_positions=None):
+    """Build closed-trade buckets from broker fill_logs (ADR-159 close-by grouping)."""
+    roll_positions = set(roll_positions or [])
+    eject_positions = set(eject_positions or [])
+    by_order = {}
+    single_out = []
+    for row in fill_rows:
+        kind = _fill_entry_kind(row)
+        if kind == "OUT_BY":
+            order_ticket = row.get("order_ticket")
+            if order_ticket is None:
+                continue
+            by_order.setdefault(order_ticket, []).append(row)
+        elif kind == "OUT":
+            single_out.append(row)
+
+    closes = []
+    odd_closeby = []
+    for order_ticket, out_deals in by_order.items():
+        if len(out_deals) != 2:
+            odd_closeby.append({
+                "order_ticket": order_ticket,
+                "deal_count": len(out_deals),
+                "instance_id": out_deals[0].get("instance_id") if out_deals else None,
+            })
+            continue
+        positions = {
+            d.get("position_id") for d in out_deals if d.get("position_id") is not None
+        }
+        if not positions:
+            continue
+        close_ms = max(int(d.get("ea_time_ms") or 0) for d in out_deals)
+        inst = out_deals[0].get("instance_id")
+        layer_pos, side, layer_index = _layer_from_ent(fill_rows, positions)
+        incomplete = layer_pos is None
+        if side is None:
+            for deal in out_deals:
+                side = _side_letter(deal)
+                if side:
+                    break
+        gross, commission, swap, net = _sum_deals_for_positions(fill_rows, positions)
+        if incomplete:
+            net = None
+            commission = None
+            swap = None
+        if layer_pos in roll_positions:
+            trade_class = "roll"
+        elif layer_pos in eject_positions:
+            trade_class = "eject"
+        else:
+            trade_class = "scalp"
+        closes.append({
+            "instance_id": inst,
+            "order_ticket": order_ticket,
+            "close_ms": close_ms,
+            "side": side,
+            "layer_index": layer_index,
+            "layer_position": layer_pos,
+            "positions": sorted(positions),
+            "class": trade_class,
+            "gross": gross,
+            "commission": commission,
+            "swap": swap,
+            "net": net,
+            "incomplete": incomplete,
+            "net_known": not incomplete,
+        })
+
+    for row in single_out:
+        pos = row.get("position_id")
+        if pos is None:
+            continue
+        positions = {pos}
+        close_ms = int(row.get("ea_time_ms") or 0)
+        inst = row.get("instance_id")
+        layer_pos, side, layer_index = _layer_from_ent(fill_rows, positions)
+        incomplete = layer_pos is None
+        if side is None:
+            side = _side_letter(row)
+        gross, commission, swap, net = _sum_deals_for_positions(fill_rows, positions)
+        if incomplete:
+            net = None
+            commission = None
+            swap = None
+        if layer_pos in roll_positions:
+            trade_class = "roll"
+        elif layer_pos in eject_positions:
+            trade_class = "eject"
+        else:
+            trade_class = "scalp"
+        closes.append({
+            "instance_id": inst,
+            "order_ticket": row.get("order_ticket"),
+            "close_ms": close_ms,
+            "side": side,
+            "layer_index": layer_index,
+            "layer_position": layer_pos,
+            "positions": [pos],
+            "class": trade_class,
+            "gross": gross,
+            "commission": commission,
+            "swap": swap,
+            "net": net,
+            "incomplete": incomplete,
+            "net_known": not incomplete,
+        })
+
+    return closes, odd_closeby
+
+
+def _roll_eject_tickets(events):
+    roll = {
+        e.get("ticket")
+        for e in events
+        if e.get("code") == "ROLL_FILLED" and e.get("ticket") is not None
+    }
+    eject = {
+        e.get("ticket")
+        for e in events
+        if e.get("code") == "EJECT_FILLED" and e.get("ticket") is not None
+    }
+    return roll, eject
+
+
+def _close_on_ftmo_day(close, day):
+    ms = close.get("close_ms")
+    if not ms:
+        return False
+    dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+    return fd.ftmo_day_of_utc(dt) == day
+
+
+def _realised_from_close(close):
+    if not close or close.get("incomplete"):
+        return None
+    return {
+        "gross": close.get("gross"),
+        "commission": close.get("commission"),
+        "swap": close.get("swap"),
+        "net": close.get("net"),
+    }
+
+
+def _aggregate_class_bucket(closes):
+    incomplete = sum(1 for c in closes if c.get("incomplete"))
+    gross = round(sum(float(c.get("gross") or 0) for c in closes), 2)
+    if incomplete:
+        return {
+            "count": len(closes),
+            "gross": gross,
+            "commission": None,
+            "swap": None,
+            "net": None,
+            "incomplete": incomplete,
+            "net_known": False,
+        }
+    commission = round(sum(float(c.get("commission") or 0) for c in closes), 2)
+    swap = round(sum(float(c.get("swap") or 0) for c in closes), 2)
+    net = round(sum(float(c.get("net") or 0) for c in closes), 2)
+    return {
+        "count": len(closes),
+        "gross": gross,
+        "commission": commission,
+        "swap": swap,
+        "net": net,
+        "incomplete": 0,
+        "net_known": True,
+    }
 
 
 def _filter_instance_rows(rows, grind_instances):
@@ -122,39 +289,13 @@ def _events_by_ticket(events, prefix):
     return out
 
 
-def _entry_position_id(scalp, fill_rows):
-    entry_deal = scalp.get("entry_deal_ticket")
-    if entry_deal is None:
-        return None
-    inst = scalp.get("instance_id")
-    for row in fill_rows:
-        if inst and row.get("instance_id") != inst:
-            continue
-        if row.get("deal_ticket") == entry_deal:
-            return row.get("position_id")
-    return None
-
-
-def _find_scalp_for_position(scalps, fill_rows, position_ticket, instance_id, flag):
-    for scalp in scalps:
-        if scalp.get("instance_id") != instance_id:
-            continue
-        if flag == "rolled" and not scalp.get("rolled"):
-            continue
-        if flag == "ejected" and not scalp.get("ejected"):
-            continue
-        if _entry_position_id(scalp, fill_rows) == position_ticket:
-            return scalp
-    return None
-
-
 def _minutes_between(ms_a, ms_b):
     if ms_a is None or ms_b is None:
         return None
     return int(round((ms_b - ms_a) / 60000.0))
 
 
-def _build_roll_rows(events, scalps, fill_rows):
+def _build_roll_rows(events, close_by_layer):
     accepted = _events_by_ticket(events, "ROLL_")
     rows = []
     seen = set()
@@ -178,12 +319,7 @@ def _build_roll_rows(events, scalps, fill_rows):
             status = "filled"
             filled_at = ea_ms_to_iso(filled.get("ea_time_ms"))
             minutes_to_fill = _minutes_between(accepted_ms, filled.get("ea_time_ms"))
-            scalp = _find_scalp_for_position(scalps, fill_rows, ticket, inst, "rolled")
-            if scalp:
-                realised_vals = layer_realised_from_fills(scalp, fill_rows)
-                if realised_vals is not None:
-                    gross, comm, swap, net = realised_vals
-                    realised = {"gross": gross, "commission": comm, "swap": swap, "net": net}
+            realised = _realised_from_close(close_by_layer.get(ticket))
         elif refused:
             status = "refused"
         rows.append({
@@ -207,7 +343,7 @@ def _build_roll_rows(events, scalps, fill_rows):
     return rows
 
 
-def _build_ejection_rows(events, scalps, fill_rows):
+def _build_ejection_rows(events, close_by_layer):
     by_ticket = _events_by_ticket(events, "EJECT_")
     rows = []
     for ticket, evlist in by_ticket.items():
@@ -229,14 +365,7 @@ def _build_ejection_rows(events, scalps, fill_rows):
             fdetail = filled.get("detail") or {}
             if fdetail.get("offset") is not None:
                 offset = fdetail.get("offset")
-            scalp = _find_scalp_for_position(
-                scalps, fill_rows, ticket, acc.get("instance_id"), "ejected"
-            )
-            if scalp:
-                realised_vals = layer_realised_from_fills(scalp, fill_rows)
-                if realised_vals is not None:
-                    gross, comm, swap, net = realised_vals
-                    realised = {"gross": gross, "commission": comm, "swap": swap, "net": net}
+            realised = _realised_from_close(close_by_layer.get(ticket))
         elif refused:
             status = "refused"
         rows.append({
@@ -280,99 +409,51 @@ def _days_in_window(window_start_ms, window_end_ms):
     return sorted(days)
 
 
-def _build_days(events, scalps, fill_rows, grind_instances, window_start_ms, window_end_ms):
+def _build_days(closes, grind_instances, window_start_ms, window_end_ms):
     blocks = []
     for ftmo_day in _days_in_window(window_start_ms, window_end_ms):
         day_block = {"ftmo_day": ftmo_day.isoformat(), "instances": []}
         for inst in grind_instances:
             inst_block = {"instance_id": inst, "sides": []}
             for side in ("L", "S"):
-                side_scalps = [
-                    s
-                    for s in scalps
-                    if s.get("instance_id") == inst
-                    and not s.get("rolled")
-                    and not s.get("ejected")
-                    and _side_code(direction=s.get("direction")) == side
-                    and _scalp_in_ftmo_day(s, ftmo_day)
+                day_closes = [
+                    c
+                    for c in closes
+                    if c.get("instance_id") == inst
+                    and c.get("side") == side
+                    and _close_on_ftmo_day(c, ftmo_day)
                 ]
-                gross = sum(float(s.get("gross_pnl") or 0) for s in side_scalps)
-                net = 0.0
-                comm_total = 0.0
-                swap_total = 0.0
-                for s in side_scalps:
-                    realised_vals = layer_realised_from_fills(s, fill_rows)
-                    if realised_vals is None:
-                        continue
-                    _, c, sw, n = realised_vals
-                    net += n
-                    comm_total += c
-                    swap_total += sw
-
-                roll_filled = [
-                    s
-                    for s in scalps
-                    if s.get("instance_id") == inst
-                    and s.get("rolled")
-                    and _side_code(direction=s.get("direction")) == side
-                    and _scalp_in_ftmo_day(s, ftmo_day)
-                ]
-                roll_net = 0.0
-                for s in roll_filled:
-                    realised_vals = layer_realised_from_fills(s, fill_rows)
-                    if realised_vals is None:
-                        continue
-                    _, _, _, n = realised_vals
-                    roll_net += n
-                roll_accepted = sum(
-                    1
-                    for e in events
-                    if e.get("instance_id") == inst
-                    and e.get("code") == "ROLL_ACCEPTED"
-                    and _side_code(e.get("detail")) == side
-                    and fd.ftmo_day_of_utc(
-                        datetime.fromtimestamp(
-                            e["ea_time_ms"] / 1000.0, tz=timezone.utc
-                        )
-                    )
-                    == ftmo_day
+                scalps_bucket = _aggregate_class_bucket(
+                    [c for c in day_closes if c.get("class") == "scalp"]
                 )
-
-                eject_filled = [
-                    s
-                    for s in scalps
-                    if s.get("instance_id") == inst
-                    and s.get("ejected")
-                    and _side_code(direction=s.get("direction")) == side
-                    and _scalp_in_ftmo_day(s, ftmo_day)
-                ]
-                eject_net = 0.0
-                for s in eject_filled:
-                    realised_vals = layer_realised_from_fills(s, fill_rows)
-                    if realised_vals is None:
-                        continue
-                    _, _, _, n = realised_vals
-                    eject_net += n
-
+                rolls_bucket = _aggregate_class_bucket(
+                    [c for c in day_closes if c.get("class") == "roll"]
+                )
+                eject_bucket = _aggregate_class_bucket(
+                    [c for c in day_closes if c.get("class") == "eject"]
+                )
+                incomplete = (
+                    scalps_bucket.get("incomplete", 0)
+                    + rolls_bucket.get("incomplete", 0)
+                    + eject_bucket.get("incomplete", 0)
+                )
+                if incomplete:
+                    closed_net = None
+                else:
+                    closed_net = round(
+                        float(scalps_bucket.get("net") or 0)
+                        + float(rolls_bucket.get("net") or 0)
+                        + float(eject_bucket.get("net") or 0),
+                        2,
+                    )
                 side_block = {
                     "side": side,
-                    "scalps": {
-                        "count": len(side_scalps),
-                        "gross": round(gross, 2),
-                        "net": round(net, 2),
-                    },
-                    "rolls": {
-                        "accepted": roll_accepted,
-                        "filled": len(roll_filled),
-                        "net": round(roll_net, 2),
-                    },
-                    "ejections": {
-                        "filled": len(eject_filled),
-                        "net": round(eject_net, 2),
-                    },
-                    "commission": round(comm_total, 2),
-                    "swap": round(swap_total, 2),
-                    "closed_net": round(net + roll_net + eject_net, 2),
+                    "scalps": scalps_bucket,
+                    "rolls": rolls_bucket,
+                    "ejections": eject_bucket,
+                    "closed_net": closed_net,
+                    "incomplete": incomplete,
+                    "net_known": incomplete == 0,
                 }
                 inst_block["sides"].append(side_block)
             day_block["instances"].append(inst_block)
@@ -404,8 +485,8 @@ def _price_or_none(value):
 
 
 def _heartbeat_timestamp_age_s(data, now_dt):
-    """Age of heartbeat payload — same timestamp field as grind status cards."""
-    ts = data.get("timestamp")
+    """Age of stored grind state — `_received_at` from telemetry_push, else legacy timestamp."""
+    ts = data.get("_received_at") or data.get("timestamp")
     if not isinstance(ts, str) or not ts.strip():
         return None
     try:
@@ -418,7 +499,7 @@ def _heartbeat_timestamp_age_s(data, now_dt):
 
 
 def _heartbeat_market_price(data):
-    """Market price from heartbeat top-level market when present (status cards omit it)."""
+    # Grind heartbeats carry no market price today; fxmatrix backlog may add one later.
     return _price_or_none(data.get("market"))
 
 
@@ -549,67 +630,141 @@ def _build_warnings(events):
     return rows
 
 
-def _build_reconciliation(events, rolls_rows, eject_rows, now_dt, scalps=None, fill_logs=None):
+def _build_reconciliation(
+    events,
+    closes,
+    odd_closeby,
+    scalps,
+    close_by_layer,
+    now_dt,
+    grind_instances,
+    window_start_ms,
+    window_end_ms,
+):
     blocks = []
     by_inst = {}
     for ev in events:
         by_inst.setdefault(ev.get("instance_id"), []).append(ev)
 
-    for inst, evlist in sorted(by_inst.items()):
-        roll_mismatch = None
-        eject_mismatch = None
-        accepted_unfilled = []
-        filled_unmatched = []
-        refused = {}
-
-        roll_accepted = {
-            e.get("ticket"): e
-            for e in evlist
-            if e.get("code") == "ROLL_ACCEPTED"
-        }
-        roll_filled = {e.get("ticket") for e in evlist if e.get("code") == "ROLL_FILLED"}
-        roll_refused = {e.get("ticket") for e in evlist if e.get("code") == "ROLL_REFUSED"}
-        for ticket, ev in roll_accepted.items():
-            if ticket in roll_filled or ticket in roll_refused:
-                continue
-            age_h = None
-            if ev.get("ea_time_ms") and now_dt:
-                age_h = round(
-                    (now_dt.timestamp() * 1000 - ev["ea_time_ms"]) / 3600000.0, 2
-                )
-            accepted_unfilled.append({
-                "ticket": ticket,
-                "accepted_at": ea_ms_to_iso(ev.get("ea_time_ms")),
-                "age_h": age_h,
-            })
-        for ev in evlist:
-            if ev.get("code") == "ROLL_REFUSED":
-                reason = (ev.get("detail") or {}).get("reason") or "unknown"
-                refused[reason] = refused.get(reason, 0) + 1
-            if ev.get("code") == "EJECT_REFUSED":
-                reason = (ev.get("detail") or {}).get("reason") or "unknown"
-                refused[reason] = refused.get(reason, 0) + 1
-        for ev in evlist:
-            if ev.get("code") != "ROLL_FILLED":
-                continue
-            ticket = ev.get("ticket")
-            scalp = _find_scalp_for_position(
-                scalps or [], fill_logs or [], ticket, inst, "rolled"
+    for ftmo_day in _days_in_window(window_start_ms, window_end_ms):
+        for inst in grind_instances:
+            evlist = by_inst.get(inst, [])
+            day_closes = [
+                c
+                for c in closes
+                if c.get("instance_id") == inst and _close_on_ftmo_day(c, ftmo_day)
+            ]
+            scalp_rows = [
+                s
+                for s in scalps or []
+                if s.get("instance_id") == inst and _scalp_in_ftmo_day(s, ftmo_day)
+            ]
+            ledger_gross = round(sum(float(c.get("gross") or 0) for c in day_closes), 2)
+            scalp_gross = round(
+                sum(float(s.get("gross_pnl") or 0) for s in scalp_rows), 2
             )
-            if scalp is None:
-                filled_unmatched.append({
-                    "ticket": ticket,
-                    "filled_at": ea_ms_to_iso(ev.get("ea_time_ms")),
-                })
+            day_odd = [
+                o
+                for o in odd_closeby
+                if o.get("instance_id") == inst
+            ]
+            incomplete = sum(1 for c in day_closes if c.get("incomplete"))
 
-        blocks.append({
-            "instance_id": inst,
-            "roll_mismatch": roll_mismatch,
-            "eject_mismatch": eject_mismatch,
-            "accepted_unfilled": accepted_unfilled,
-            "filled_unmatched": filled_unmatched,
-            "refused": refused,
-        })
+            accepted_unfilled = []
+            filled_unmatched = []
+            refused = {}
+            roll_accepted = {
+                e.get("ticket"): e
+                for e in evlist
+                if e.get("code") == "ROLL_ACCEPTED"
+                and fd.ftmo_day_of_utc(
+                    datetime.fromtimestamp(e["ea_time_ms"] / 1000.0, tz=timezone.utc)
+                )
+                == ftmo_day
+            }
+            roll_filled = {
+                e.get("ticket")
+                for e in evlist
+                if e.get("code") == "ROLL_FILLED"
+                and fd.ftmo_day_of_utc(
+                    datetime.fromtimestamp(e["ea_time_ms"] / 1000.0, tz=timezone.utc)
+                )
+                == ftmo_day
+            }
+            roll_refused = {
+                e.get("ticket")
+                for e in evlist
+                if e.get("code") == "ROLL_REFUSED"
+                and fd.ftmo_day_of_utc(
+                    datetime.fromtimestamp(e["ea_time_ms"] / 1000.0, tz=timezone.utc)
+                )
+                == ftmo_day
+            }
+            for ticket, ev in roll_accepted.items():
+                if ticket in roll_filled or ticket in roll_refused:
+                    continue
+                age_h = None
+                if ev.get("ea_time_ms") and now_dt:
+                    age_h = round(
+                        (now_dt.timestamp() * 1000 - ev["ea_time_ms"]) / 3600000.0, 2
+                    )
+                accepted_unfilled.append({
+                    "ticket": ticket,
+                    "accepted_at": ea_ms_to_iso(ev.get("ea_time_ms")),
+                    "age_h": age_h,
+                })
+            for ev in evlist:
+                if ev.get("code") == "ROLL_REFUSED":
+                    if fd.ftmo_day_of_utc(
+                        datetime.fromtimestamp(ev["ea_time_ms"] / 1000.0, tz=timezone.utc)
+                    ) != ftmo_day:
+                        continue
+                    reason = (ev.get("detail") or {}).get("reason") or "unknown"
+                    refused[reason] = refused.get(reason, 0) + 1
+                if ev.get("code") == "EJECT_REFUSED":
+                    if fd.ftmo_day_of_utc(
+                        datetime.fromtimestamp(ev["ea_time_ms"] / 1000.0, tz=timezone.utc)
+                    ) != ftmo_day:
+                        continue
+                    reason = (ev.get("detail") or {}).get("reason") or "unknown"
+                    refused[reason] = refused.get(reason, 0) + 1
+            for ev in evlist:
+                if ev.get("code") != "ROLL_FILLED":
+                    continue
+                if fd.ftmo_day_of_utc(
+                    datetime.fromtimestamp(ev["ea_time_ms"] / 1000.0, tz=timezone.utc)
+                ) != ftmo_day:
+                    continue
+                ticket = ev.get("ticket")
+                if close_by_layer.get(ticket) is None:
+                    filled_unmatched.append({
+                        "ticket": ticket,
+                        "filled_at": ea_ms_to_iso(ev.get("ea_time_ms")),
+                    })
+
+            if (
+                not day_closes
+                and not scalp_rows
+                and not refused
+                and not accepted_unfilled
+                and not filled_unmatched
+                and not day_odd
+            ):
+                continue
+
+            blocks.append({
+                "instance_id": inst,
+                "ftmo_day": ftmo_day.isoformat(),
+                "ledger_closes": len(day_closes),
+                "scalp_history_rows": len(scalp_rows),
+                "ledger_gross": ledger_gross,
+                "scalp_gross": scalp_gross,
+                "odd_closeby": day_odd,
+                "incomplete": incomplete,
+                "accepted_unfilled": accepted_unfilled,
+                "filled_unmatched": filled_unmatched,
+                "refused": refused,
+            })
     return blocks
 
 
@@ -637,15 +792,28 @@ def build_ejection_view(
         and window_start_ms <= e["ea_time_ms"] < window_end_ms
     ]
 
-    rolls = _build_roll_rows(events, scalps, fill_logs)
-    ejections = _build_ejection_rows(events, scalps, fill_logs)
-    days = _build_days(
-        events, scalps, fill_logs, grind_instances, window_start_ms, window_end_ms
+    roll_tickets, eject_tickets = _roll_eject_tickets(events)
+    closes, odd_closeby = closed_trades_from_fills(
+        fill_logs, roll_tickets, eject_tickets
     )
+    close_by_layer = {
+        c["layer_position"]: c for c in closes if c.get("layer_position") is not None
+    }
+    rolls = _build_roll_rows(events, close_by_layer)
+    ejections = _build_ejection_rows(events, close_by_layer)
+    days = _build_days(closes, grind_instances, window_start_ms, window_end_ms)
     warnings = _build_warnings(events)
     now = _build_now(events, state_by_instance, grind_instances)
     reconciliation = _build_reconciliation(
-        events, rolls, ejections, now_dt, scalps=scalps, fill_logs=fill_logs
+        events,
+        closes,
+        odd_closeby,
+        scalps,
+        close_by_layer,
+        now_dt,
+        grind_instances,
+        window_start_ms,
+        window_end_ms,
     )
 
     return {
@@ -747,22 +915,88 @@ def load_ejection_rows_from_db(conn, window_start_ms, window_end_ms):
         cur.execute(
             """
             SELECT instance_id, deal_ticket, order_ticket, position_id,
-                   commission, swap, ea_time_ms
+                   entry_type, deal_type, side, layer_index, role,
+                   profit, commission, swap, ea_time_ms
             FROM fill_logs
             WHERE ea_time_ms >= %s AND ea_time_ms < %s
+              AND (
+                entry_type IN ('OUT_BY', 'OUT')
+                OR deal_type IN ('OUT_BY', 'OUT')
+              )
             """,
             (window_start_ms, window_end_ms),
         )
-        for inst, deal_ticket, order_ticket, position_id, commission, swap, ea_ms in cur.fetchall():
-            fill_logs.append({
+        closing_rows = []
+        position_ids = set()
+        for row in cur.fetchall():
+            (
+                inst,
+                deal_ticket,
+                order_ticket,
+                position_id,
+                entry_type,
+                deal_type,
+                side,
+                layer_index,
+                role,
+                profit,
+                commission,
+                swap,
+                ea_ms,
+            ) = row
+            rec = {
                 "instance_id": inst,
                 "deal_ticket": deal_ticket,
                 "order_ticket": order_ticket,
                 "position_id": position_id,
+                "entry_type": entry_type,
+                "deal_type": deal_type,
+                "side": side,
+                "layer_index": layer_index,
+                "role": role,
+                "profit": float(profit) if profit is not None else None,
                 "commission": float(commission) if commission is not None else None,
                 "swap": float(swap) if swap is not None else None,
                 "ea_time_ms": ea_ms,
-            })
+            }
+            closing_rows.append(rec)
+            if position_id is not None:
+                position_ids.add(position_id)
+
+        if position_ids:
+            cur.execute(
+                """
+                SELECT instance_id, deal_ticket, order_ticket, position_id,
+                       entry_type, deal_type, side, layer_index, role,
+                       profit, commission, swap, ea_time_ms
+                FROM fill_logs
+                WHERE position_id = ANY(%s)
+                """,
+                (list(position_ids),),
+            )
+            seen_deals = set()
+            for row in cur.fetchall():
+                deal_ticket = row[1]
+                if deal_ticket in seen_deals:
+                    continue
+                seen_deals.add(deal_ticket)
+                fill_logs.append({
+                    "instance_id": row[0],
+                    "deal_ticket": deal_ticket,
+                    "order_ticket": row[2],
+                    "position_id": row[3],
+                    "entry_type": row[4],
+                    "deal_type": row[5],
+                    "side": row[6],
+                    "layer_index": row[7],
+                    "role": row[8],
+                    "profit": float(row[9]) if row[9] is not None else None,
+                    "commission": float(row[10]) if row[10] is not None else None,
+                    "swap": float(row[11]) if row[11] is not None else None,
+                    "ea_time_ms": row[12],
+                })
+        else:
+            fill_logs = closing_rows
     return events, scalps, fill_logs
 
 

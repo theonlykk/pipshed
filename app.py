@@ -1728,6 +1728,7 @@ def telemetry_push():
 
     instance_id = payload.get("instance_id", "unknown")
     redis_key = f"fxmatrix:state:{instance_id}"
+    payload["_received_at"] = _utc_now_iso()
 
     r.set(redis_key, json.dumps(payload), ex=REDIS_TTL_SECONDS)
 

@@ -71,6 +71,8 @@ def layer_realised_from_fills(scalp, fill_rows):
     gross_val = scalp.get("gross_pnl")
     gross = float(gross_val) if gross_val is not None else 0.0
     pos_ids = commission_position_ids(scalp, fill_rows)
+    if not pos_ids:
+        return None
     commission = 0.0
     swap = 0.0
     seen_deals = set()
@@ -116,7 +118,20 @@ def _events_by_ticket(events, prefix):
     return out
 
 
-def _find_scalp_for_order(scalps, fill_rows, ticket, instance_id, flag):
+def _entry_position_id(scalp, fill_rows):
+    entry_deal = scalp.get("entry_deal_ticket")
+    if entry_deal is None:
+        return None
+    inst = scalp.get("instance_id")
+    for row in fill_rows:
+        if inst and row.get("instance_id") != inst:
+            continue
+        if row.get("deal_ticket") == entry_deal:
+            return row.get("position_id")
+    return None
+
+
+def _find_scalp_for_position(scalps, fill_rows, position_ticket, instance_id, flag):
     for scalp in scalps:
         if scalp.get("instance_id") != instance_id:
             continue
@@ -124,17 +139,7 @@ def _find_scalp_for_order(scalps, fill_rows, ticket, instance_id, flag):
             continue
         if flag == "ejected" and not scalp.get("ejected"):
             continue
-        for row in fill_rows:
-            if row.get("instance_id") != instance_id:
-                continue
-            if row.get("order_ticket") == ticket:
-                return scalp
-    for scalp in scalps:
-        if scalp.get("instance_id") != instance_id:
-            continue
-        if flag == "rolled" and scalp.get("rolled"):
-            return scalp
-        if flag == "ejected" and scalp.get("ejected"):
+        if _entry_position_id(scalp, fill_rows) == position_ticket:
             return scalp
     return None
 
@@ -169,10 +174,12 @@ def _build_roll_rows(events, scalps, fill_rows):
             status = "filled"
             filled_at = ea_ms_to_iso(filled.get("ea_time_ms"))
             minutes_to_fill = _minutes_between(accepted_ms, filled.get("ea_time_ms"))
-            scalp = _find_scalp_for_order(scalps, fill_rows, ticket, inst, "rolled")
+            scalp = _find_scalp_for_position(scalps, fill_rows, ticket, inst, "rolled")
             if scalp:
-                gross, comm, swap, net = layer_realised_from_fills(scalp, fill_rows)
-                realised = {"gross": gross, "commission": comm, "swap": swap, "net": net}
+                realised_vals = layer_realised_from_fills(scalp, fill_rows)
+                if realised_vals is not None:
+                    gross, comm, swap, net = realised_vals
+                    realised = {"gross": gross, "commission": comm, "swap": swap, "net": net}
         elif refused:
             status = "refused"
         rows.append({
@@ -218,12 +225,14 @@ def _build_ejection_rows(events, scalps, fill_rows):
             fdetail = filled.get("detail") or {}
             if fdetail.get("offset") is not None:
                 offset = fdetail.get("offset")
-            scalp = _find_scalp_for_order(
+            scalp = _find_scalp_for_position(
                 scalps, fill_rows, ticket, acc.get("instance_id"), "ejected"
             )
             if scalp:
-                gross, comm, swap, net = layer_realised_from_fills(scalp, fill_rows)
-                realised = {"gross": gross, "commission": comm, "swap": swap, "net": net}
+                realised_vals = layer_realised_from_fills(scalp, fill_rows)
+                if realised_vals is not None:
+                    gross, comm, swap, net = realised_vals
+                    realised = {"gross": gross, "commission": comm, "swap": swap, "net": net}
         elif refused:
             status = "refused"
         rows.append({
@@ -288,7 +297,10 @@ def _build_days(events, scalps, fill_rows, grind_instances, window_start_ms, win
                 comm_total = 0.0
                 swap_total = 0.0
                 for s in side_scalps:
-                    _, c, sw, n = layer_realised_from_fills(s, fill_rows)
+                    realised_vals = layer_realised_from_fills(s, fill_rows)
+                    if realised_vals is None:
+                        continue
+                    _, c, sw, n = realised_vals
                     net += n
                     comm_total += c
                     swap_total += sw
@@ -303,7 +315,10 @@ def _build_days(events, scalps, fill_rows, grind_instances, window_start_ms, win
                 ]
                 roll_net = 0.0
                 for s in roll_filled:
-                    _, _, _, n = layer_realised_from_fills(s, fill_rows)
+                    realised_vals = layer_realised_from_fills(s, fill_rows)
+                    if realised_vals is None:
+                        continue
+                    _, _, _, n = realised_vals
                     roll_net += n
                 roll_accepted = sum(
                     1
@@ -329,7 +344,10 @@ def _build_days(events, scalps, fill_rows, grind_instances, window_start_ms, win
                 ]
                 eject_net = 0.0
                 for s in eject_filled:
-                    _, _, _, n = layer_realised_from_fills(s, fill_rows)
+                    realised_vals = layer_realised_from_fills(s, fill_rows)
+                    if realised_vals is None:
+                        continue
+                    _, _, _, n = realised_vals
                     eject_net += n
 
                 side_block = {
@@ -445,7 +463,7 @@ def _build_warnings(events):
     return rows
 
 
-def _build_reconciliation(events, rolls_rows, eject_rows, now_dt):
+def _build_reconciliation(events, rolls_rows, eject_rows, now_dt, scalps=None, fill_logs=None):
     blocks = []
     by_inst = {}
     for ev in events:
@@ -455,6 +473,7 @@ def _build_reconciliation(events, rolls_rows, eject_rows, now_dt):
         roll_mismatch = None
         eject_mismatch = None
         accepted_unfilled = []
+        filled_unmatched = []
         refused = {}
 
         roll_accepted = {
@@ -484,12 +503,25 @@ def _build_reconciliation(events, rolls_rows, eject_rows, now_dt):
             if ev.get("code") == "EJECT_REFUSED":
                 reason = (ev.get("detail") or {}).get("reason") or "unknown"
                 refused[reason] = refused.get(reason, 0) + 1
+        for ev in evlist:
+            if ev.get("code") != "ROLL_FILLED":
+                continue
+            ticket = ev.get("ticket")
+            scalp = _find_scalp_for_position(
+                scalps or [], fill_logs or [], ticket, inst, "rolled"
+            )
+            if scalp is None:
+                filled_unmatched.append({
+                    "ticket": ticket,
+                    "filled_at": ea_ms_to_iso(ev.get("ea_time_ms")),
+                })
 
         blocks.append({
             "instance_id": inst,
             "roll_mismatch": roll_mismatch,
             "eject_mismatch": eject_mismatch,
             "accepted_unfilled": accepted_unfilled,
+            "filled_unmatched": filled_unmatched,
             "refused": refused,
         })
     return blocks
@@ -526,13 +558,16 @@ def build_ejection_view(
     )
     warnings = _build_warnings(events)
     now = _build_now(events, state_by_instance, grind_instances)
-    reconciliation = _build_reconciliation(events, rolls, ejections, now_dt)
+    reconciliation = _build_reconciliation(
+        events, rolls, ejections, now_dt, scalps=scalps, fill_logs=fill_logs
+    )
 
     return {
         "generated_at": generated_at,
         "fleet": fleet,
         "fleet_label": fleet_label,
         "hours": hours,
+        "now_source": "state",
         "now": now,
         "rolls": rolls,
         "ejections": ejections,
@@ -540,6 +575,40 @@ def build_ejection_view(
         "warnings": warnings,
         "reconciliation": reconciliation,
     }
+
+
+def _fetch_redis_state(redis_client, grind_instances):
+    state_by_instance = {}
+    now_source = "events"
+    if redis_client is None:
+        return state_by_instance, now_source
+    try:
+        import redis
+
+        for inst in grind_instances:
+            raw = redis_client.get(f"fxmatrix:state:{inst}")
+            parsed = _parse_state_payload(raw)
+            parsed["age_s"] = None
+            state_by_instance[inst] = parsed
+            if parsed.get("layers"):
+                state_by_instance[inst]["source"] = "state"
+            else:
+                state_by_instance[inst]["source"] = "events"
+        now_source = "state"
+    except redis.exceptions.ConnectionError:
+        state_by_instance = {}
+        now_source = "events"
+    return state_by_instance, now_source
+
+
+def _apply_now_source(payload, now_source):
+    payload["now_source"] = now_source
+    if now_source == "events":
+        for inst_block in payload.get("now", {}).values():
+            for side_block in inst_block.values():
+                side_block["rolled_by_state"] = None
+                side_block["state_age_s"] = None
+    return payload
 
 
 def _parse_state_payload(raw):
@@ -581,8 +650,10 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
     window_start_ms = window_end_ms - hours * 3600 * 1000
     generated_at = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    state_by_instance, now_source = _fetch_redis_state(redis_client, grind_instances)
+
     if conn is None:
-        return build_ejection_view(
+        payload = build_ejection_view(
             generated_at=generated_at,
             fleet=fleet,
             fleet_label=fleet_label,
@@ -591,11 +662,12 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
             events=[],
             scalps=[],
             fill_logs=[],
-            state_by_instance={},
+            state_by_instance=state_by_instance,
             now_dt=now_dt,
             window_start_ms=window_start_ms,
             window_end_ms=window_end_ms,
         )
+        return _apply_now_source(payload, now_source)
 
     recv_start = datetime.fromtimestamp(window_start_ms / 1000.0, tz=timezone.utc) - timedelta(
         days=1
@@ -674,19 +746,7 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
                 "swap": float(swap) if swap is not None else None,
             })
 
-    state_by_instance = {}
-    if redis_client is not None:
-        for inst in grind_instances:
-            raw = redis_client.get(f"fxmatrix:state:{inst}")
-            parsed = _parse_state_payload(raw)
-            parsed["age_s"] = None
-            state_by_instance[inst] = parsed
-            if parsed.get("layers"):
-                state_by_instance[inst]["source"] = "state"
-            else:
-                state_by_instance[inst]["source"] = "events"
-
-    return build_ejection_view(
+    payload = build_ejection_view(
         generated_at=generated_at,
         fleet=fleet,
         fleet_label=fleet_label,
@@ -700,3 +760,4 @@ def fetch_ejection_view(conn, hours, fleet, fleet_label, grind_instances, redis_
         window_start_ms=window_start_ms,
         window_end_ms=window_end_ms,
     )
+    return _apply_now_source(payload, now_source)

@@ -1108,10 +1108,12 @@ def _build_daily_summary_text(selected_date=None):
         total_pips = 0.0
         total_usd = 0.0
         by_symbol = {}
+        roll_count = 0
+        roll_usd = 0.0
+        eject_count = 0
+        eject_usd = 0.0
 
         for record in scalps:
-            if _scalp_excluded_from_counts(record):
-                continue
             instrument = record.get("instrument") or "?"
             pips = _scalp_gross_pips(record)
             usd = record.get("gross_pnl")
@@ -1119,20 +1121,33 @@ def _build_daily_summary_text(selected_date=None):
                 total_pips += pips
             if isinstance(usd, (int, float)) and not isinstance(usd, bool):
                 total_usd += float(usd)
+            if record.get("rolled") is True:
+                roll_count += 1
+                if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+                    roll_usd += float(usd)
+            if record.get("ejected") is True:
+                eject_count += 1
+                if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+                    eject_usd += float(usd)
 
             bucket = by_symbol.setdefault(instrument, {"count": 0, "pips": 0.0, "usd": 0.0})
-            bucket["count"] += 1
+            if not _scalp_excluded_from_counts(record):
+                bucket["count"] += 1
             if pips is not None:
                 bucket["pips"] += pips
             if isinstance(usd, (int, float)) and not isinstance(usd, bool):
                 bucket["usd"] += float(usd)
 
-        commission = round(-0.05 * _count_scalp_records_for_summary(scalps), 2)
+        commission = round(-0.05 * len(scalps), 2)
         net_today = round(total_usd + commission, 2)
         scalp_count = _count_scalp_records_for_summary(scalps)
         lines.append(
             f"Scalps       {scalp_count} closed, {_fmt_signed(total_pips, 1)} pips, "
             f"{_fmt_money(total_usd)} USD gross"
+        )
+        lines.append(
+            f"Rolls {roll_count} {_fmt_money(roll_usd)} USD   "
+            f"Ejections {eject_count} {_fmt_money(eject_usd)} USD"
         )
         lines.append(
             f"             Commission {_fmt_money(commission)} USD   "
@@ -1152,14 +1167,17 @@ def _build_daily_summary_text(selected_date=None):
 
     cycle_start = CYCLE_START_DATE or DEFAULT_CYCLE_START_DATE
     day_num = _cycle_day_number(cycle_start, date, broker_today)
+    cycle_all = _collect_scalp_records_between(cycle_start, date)
     cycle_records = [
         record
-        for record in _collect_scalp_records_between(cycle_start, date)
+        for record in cycle_all
         if not _scalp_excluded_from_counts(record)
     ]
-    cycle_gross = _scalp_usd_gross(cycle_records)
-    cycle_commission = round(-0.05 * len(cycle_records), 2)
+    cycle_gross = _scalp_usd_gross(cycle_all)
+    cycle_commission = round(-0.05 * len(cycle_all), 2)
     cycle_net = round(cycle_gross + cycle_commission, 2)
+    cycle_roll_count = sum(1 for r in cycle_all if r.get("rolled") is True)
+    cycle_eject_count = sum(1 for r in cycle_all if r.get("ejected") is True)
 
     truncated = ""
     if cycle_records:
@@ -1174,6 +1192,9 @@ def _build_daily_summary_text(selected_date=None):
     lines.append(
         f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD gross, "
         f"{_fmt_money(cycle_commission)} commission, {_fmt_money(cycle_net)} net"
+    )
+    lines.append(
+        f"             rolls {cycle_roll_count}, ejections {cycle_eject_count}"
     )
 
     return "\n".join(lines) + "\n"

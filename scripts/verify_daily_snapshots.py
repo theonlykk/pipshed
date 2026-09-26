@@ -76,7 +76,11 @@ class FakeCursor:
                 "broker_utc_offset_s", "start_known", "balance_start_source",
                 "ejections_auto", "ejections_command", "ejected_fills",
                 "ejected_realised", "eject_filled_events", "eject_mismatch",
-                "carry_clamps", "critical_events", "derived_at",
+                "carry_clamps", "critical_events",
+                "rolls_accepted", "rolls_refused", "roll_filled_events",
+                "rolled_fills", "rolled_realised", "roll_mismatch",
+                "roll_stranded_warns", "roll_stuck_warns",
+                "derived_at",
                 "gated_seconds", "history_ok",
             )]
         return []
@@ -94,7 +98,7 @@ class FakeCursor:
             return list(self._conn.daily_snapshot_rows)
         if "ea_events e JOIN session_accounts" in sql:
             return list(self._conn.daily_events)
-        if "scalp_history" in sql and "ejected IS TRUE" in sql:
+        if "scalp_history" in sql and ("ejected IS TRUE" in sql or "rolled IS TRUE" in sql):
             return list(self._conn.daily_scalps)
         if "FROM ea_events WHERE" in sql and "received_at >" in sql:
             return list(self._conn.critical_rows)
@@ -543,7 +547,11 @@ DAILY_SNAPSHOT_COLUMN_NAMES = (
     "broker_utc_offset_s", "start_known", "balance_start_source",
     "ejections_auto", "ejections_command", "ejected_fills",
     "ejected_realised", "eject_filled_events", "eject_mismatch",
-    "carry_clamps", "critical_events", "derived_at",
+    "carry_clamps", "critical_events",
+    "rolls_accepted", "rolls_refused", "roll_filled_events",
+    "rolled_fills", "rolled_realised", "roll_mismatch",
+    "roll_stranded_warns", "roll_stuck_warns",
+    "derived_at",
     "gated_seconds", "history_ok",
 )
 
@@ -627,10 +635,10 @@ def check_ds20():
         raise AssertionError("missing Gated (h) header")
     if "dailyCell(row.gated_hours, 1)" not in html:
         raise AssertionError("missing gated_hours cell render")
-    if html.count('colspan="17"') != 2:
-        raise AssertionError('expected colspan="17" exactly twice')
-    if 'colspan="16"' in html:
-        raise AssertionError('colspan="16" must not remain in daily table')
+    if html.count('colspan="19"') != 2:
+        raise AssertionError('expected colspan="19" exactly twice')
+    if 'colspan="17"' in html:
+        raise AssertionError('colspan="17" must not remain in daily table')
     return "daily card gated hours column"
 
 

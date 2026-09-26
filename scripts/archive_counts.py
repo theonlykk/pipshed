@@ -133,6 +133,8 @@ SELECT instance_id,
        count(*) FILTER (WHERE stack_depth >= %(cap)s)   AS at_cap
 FROM scalp_history
 WHERE received_at >= now() - make_interval(hours => %(hours)s)
+  AND ejected IS NOT TRUE
+  AND rolled IS NOT TRUE
   AND (%(instance)s::text IS NULL OR instance_id = %(instance)s::text)
 GROUP BY instance_id, direction
 ORDER BY instance_id, direction

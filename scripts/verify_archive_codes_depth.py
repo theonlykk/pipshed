@@ -25,8 +25,13 @@ NOW = datetime.now(timezone.utc)
 def setup(cur):
     cur.execute("SELECT to_regclass('public.ea_events')")
     if cur.fetchone()[0] is None:
-        for name in ("001_archive_phase1.sql", "002_adr159_daily.sql"):
-            with open(os.path.join(ROOT, "migrations", name)) as f:
+        for name in (
+            "001_archive_phase1.sql",
+            "002_adr159_daily.sql",
+            "003_adr160_gated.sql",
+            "004_c56_rolls.sql",
+        ):
+            with open(os.path.join(ROOT, "migrations", name), encoding="ascii") as f:
                 cur.execute(f.read())
     cur.execute("DELETE FROM ea_events")
     cur.execute("DELETE FROM scalp_history")
@@ -60,11 +65,25 @@ def setup(cur):
         cur.execute(
             "INSERT INTO scalp_history (instance_id, instrument, direction, entry_price,"
             " exit_price, gross_pnl, layer_depth, stack_depth, close_time_broker,"
-            " source, received_at) VALUES (%s, 'X', %s, %s, %s, 0.1, 0, %s, %s,"
-            " 'test', %s)",
+            " source, received_at, rolled, ejected) VALUES (%s, 'X', %s, %s, %s, 0.1, 0, %s, %s,"
+            " 'test', %s, NULL, NULL)",
             (inst, direction, 1.0 + i / 1000.0, 1.1 + i / 1000.0, depth,
              datetime(2026, 9, 25) + timedelta(minutes=i), NOW - timedelta(minutes=mins)),
         )
+    cur.execute(
+        "INSERT INTO scalp_history (instance_id, instrument, direction, entry_price,"
+        " exit_price, gross_pnl, layer_depth, stack_depth, close_time_broker,"
+        " source, received_at, rolled, ejected) VALUES"
+        " ('GRIND_GBPUSD_OPT', 'X', 'LONG', 5.0, 5.1, 0.1, 0, 99, %s, 'test', %s, TRUE, NULL)",
+        (datetime(2026, 9, 25), NOW - timedelta(minutes=30)),
+    )
+    cur.execute(
+        "INSERT INTO scalp_history (instance_id, instrument, direction, entry_price,"
+        " exit_price, gross_pnl, layer_depth, stack_depth, close_time_broker,"
+        " source, received_at, rolled, ejected) VALUES"
+        " ('GRIND_GBPUSD_OPT', 'X', 'SHORT', 6.0, 6.1, 0.1, 0, 99, %s, 'test', %s, NULL, TRUE)",
+        (datetime(2026, 9, 25), NOW - timedelta(minutes=25)),
+    )
 
 
 def run(argv):
@@ -103,6 +122,10 @@ def main():
                    "GRIND_GBPUSD_OPT | SHORT | 1 | 2 | 0" in lines))
     checks.append(("depth B short: 200 h row excluded",
                    "GRIND_EURUSD_OPTB | SHORT | 1 | 5 | 0" in lines))
+    checks.append(("depth excludes rolled row (LONG still 3 not 4)",
+                   "GRIND_GBPUSD_OPT | LONG | 3 | 8 | 2" in lines))
+    checks.append(("depth excludes ejected row (SHORT still 1 not 2)",
+                   "GRIND_GBPUSD_OPT | SHORT | 1 | 2 | 0" in lines))
 
     rc, out = run(["--depth", "--cap", "5", "--hours", "168", "--instance", "GRIND_EURUSD_OPTB"])
     lines = out.splitlines()
@@ -112,6 +135,7 @@ def main():
     rc, out = run(["--codes", "EJECT_ACCEPTED", "--depth", "--hours", "1"])
     checks.append(("both sections in one call", "== EVENTS" in out and "== SCALP DEPTH" in out))
     checks.append(("1 h window: only the 50 min event", "GRIND_GBPUSD_OPT | EJECT_ACCEPTED | 1 |" in out))
+
 
     failed = 0
     for name, ok in checks:

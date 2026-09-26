@@ -22,6 +22,7 @@ Routes:
   GET  /api/g/<token>/critical     — public critical/warn last-24h groups (Redis only)
   GET  /api/g/<token>/summary      — public broker-day plain-text summary
   GET  /api/g/<token>/carry_audit  — public carry-adjusted order audit (JSON)
+  GET  /api/g/<token>/ejection     — public roll/eject telemetry (Postgres + Redis)
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
 """
@@ -863,7 +864,13 @@ _PUBLIC_SCALP_KEYS = (
     "stack_depth",
     "gross_pnl",
     "instance_id",
+    "rolled",
+    "ejected",
 )
+
+
+def _scalp_excluded_from_counts(record):
+    return record.get("ejected") is True or record.get("rolled") is True
 
 
 def _public_scalp_fields(record):
@@ -892,6 +899,10 @@ def _collect_today_scalp_records(selected_date=None):
 
     all_records.sort(key=lambda item: item.get("close_time", ""))
     return date, all_records
+
+
+def _count_scalp_records_for_summary(records):
+    return sum(1 for record in records if not _scalp_excluded_from_counts(record))
 
 
 def _collect_scalp_records_between(start_date, end_date):
@@ -1097,6 +1108,10 @@ def _build_daily_summary_text(selected_date=None):
         total_pips = 0.0
         total_usd = 0.0
         by_symbol = {}
+        roll_count = 0
+        roll_usd = 0.0
+        eject_count = 0
+        eject_usd = 0.0
 
         for record in scalps:
             instrument = record.get("instrument") or "?"
@@ -1106,9 +1121,18 @@ def _build_daily_summary_text(selected_date=None):
                 total_pips += pips
             if isinstance(usd, (int, float)) and not isinstance(usd, bool):
                 total_usd += float(usd)
+            if record.get("rolled") is True:
+                roll_count += 1
+                if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+                    roll_usd += float(usd)
+            if record.get("ejected") is True:
+                eject_count += 1
+                if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+                    eject_usd += float(usd)
 
             bucket = by_symbol.setdefault(instrument, {"count": 0, "pips": 0.0, "usd": 0.0})
-            bucket["count"] += 1
+            if not _scalp_excluded_from_counts(record):
+                bucket["count"] += 1
             if pips is not None:
                 bucket["pips"] += pips
             if isinstance(usd, (int, float)) and not isinstance(usd, bool):
@@ -1116,9 +1140,14 @@ def _build_daily_summary_text(selected_date=None):
 
         commission = round(-0.05 * len(scalps), 2)
         net_today = round(total_usd + commission, 2)
+        scalp_count = _count_scalp_records_for_summary(scalps)
         lines.append(
-            f"Scalps       {len(scalps)} closed, {_fmt_signed(total_pips, 1)} pips, "
+            f"Scalps       {scalp_count} closed, {_fmt_signed(total_pips, 1)} pips, "
             f"{_fmt_money(total_usd)} USD gross"
+        )
+        lines.append(
+            f"Rolls {roll_count} {_fmt_money(roll_usd)} USD   "
+            f"Ejections {eject_count} {_fmt_money(eject_usd)} USD"
         )
         lines.append(
             f"             Commission {_fmt_money(commission)} USD   "
@@ -1138,10 +1167,17 @@ def _build_daily_summary_text(selected_date=None):
 
     cycle_start = CYCLE_START_DATE or DEFAULT_CYCLE_START_DATE
     day_num = _cycle_day_number(cycle_start, date, broker_today)
-    cycle_records = _collect_scalp_records_between(cycle_start, date)
-    cycle_gross = _scalp_usd_gross(cycle_records)
-    cycle_commission = round(-0.05 * len(cycle_records), 2)
+    cycle_all = _collect_scalp_records_between(cycle_start, date)
+    cycle_records = [
+        record
+        for record in cycle_all
+        if not _scalp_excluded_from_counts(record)
+    ]
+    cycle_gross = _scalp_usd_gross(cycle_all)
+    cycle_commission = round(-0.05 * len(cycle_all), 2)
     cycle_net = round(cycle_gross + cycle_commission, 2)
+    cycle_roll_count = sum(1 for r in cycle_all if r.get("rolled") is True)
+    cycle_eject_count = sum(1 for r in cycle_all if r.get("ejected") is True)
 
     truncated = ""
     if cycle_records:
@@ -1156,6 +1192,9 @@ def _build_daily_summary_text(selected_date=None):
     lines.append(
         f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD gross, "
         f"{_fmt_money(cycle_commission)} commission, {_fmt_money(cycle_net)} net"
+    )
+    lines.append(
+        f"             rolls {cycle_roll_count}, ejections {cycle_eject_count}"
     )
 
     return "\n".join(lines) + "\n"
@@ -1448,7 +1487,7 @@ def public_grind_scalps(token, _ignored):
         selected_date, all_records = _collect_today_scalp_records(date_filter)
         payload = {
             "date": selected_date,
-            "total": len(all_records),
+            "total": _count_scalp_records_for_summary(all_records),
             "records": [_public_scalp_fields(record) for record in all_records],
         }
         response = jsonify(payload)
@@ -1636,6 +1675,51 @@ def public_carry_audit(token, _ignored):
         return _apply_no_cache_headers(response), 200
     except Exception:
         app.logger.exception("public_carry_audit failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/ejection",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/ejection/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_ejection_telemetry(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        import psycopg2
+
+        import ejection_view as ev
+
+        hours = request.args.get("hours", 48)
+        conn = None
+        database_url = os.environ.get("DATABASE_URL")
+        if database_url:
+            conn = psycopg2.connect(database_url)
+        try:
+            payload = ev.fetch_ejection_view(
+                conn,
+                hours,
+                GRIND_FLEET,
+                GRIND_FLEET_LABEL,
+                GRIND_INSTANCES,
+                r,
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_ejection_telemetry failed")
         response = jsonify({"error": "internal error"})
         return _apply_no_cache_headers(response), 500
 
@@ -2052,7 +2136,7 @@ def telemetry_today_scalps():
         "earliest_date": earliest_date,
         "retention_by_instance": retention,
         "records": all_records,
-        "total": len(all_records),
+        "total": _count_scalp_records_for_summary(all_records),
     }), 200
 
 

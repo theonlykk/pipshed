@@ -6,6 +6,8 @@ WARN_CRITICAL_ALLOW = frozenset({
     "STARTUP_EXIT_SHORTFALL",
     "QUARANTINE_ENTER",
     "WARN_API_ENTRY_STOP",
+    "ROLL_STRANDED",
+    "ROLL_CLOSING_STUCK",
 })
 
 
@@ -182,6 +184,11 @@ def derive_counts(events, scalps, start, end, account_login):
     ejections_auto = 0
     ejections_command = 0
     eject_filled_events = 0
+    rolls_accepted = 0
+    rolls_refused = 0
+    roll_filled_events = 0
+    roll_stranded_warns = 0
+    roll_stuck_warns = 0
     carry_clamps = 0
     critical_events = 0
 
@@ -196,6 +203,16 @@ def derive_counts(events, scalps, start, end, account_login):
                 ejections_command += 1
         elif code == "EJECT_FILLED":
             eject_filled_events += 1
+        elif code == "ROLL_ACCEPTED":
+            rolls_accepted += 1
+        elif code == "ROLL_REFUSED":
+            rolls_refused += 1
+        elif code == "ROLL_FILLED":
+            roll_filled_events += 1
+        elif code == "ROLL_STRANDED":
+            roll_stranded_warns += 1
+        elif code == "ROLL_CLOSING_STUCK":
+            roll_stuck_warns += 1
         elif code in ("CARRY_PASS_SUMMARY", "CARRY_PASS_INCOMPLETE") and isinstance(
             detail, dict
         ):
@@ -208,8 +225,23 @@ def derive_counts(events, scalps, start, end, account_login):
 
     ejected_fills = 0
     ejected_realised = 0.0
-    realised_has = False
-    for close_time_broker, broker_utc_offset_s, scalp_account, gross_pnl in scalps:
+    ejected_realised_has = False
+    rolled_fills = 0
+    rolled_realised = 0.0
+    rolled_realised_has = False
+    for row in scalps:
+        if len(row) >= 6:
+            (
+                close_time_broker,
+                broker_utc_offset_s,
+                scalp_account,
+                gross_pnl,
+                ejected,
+                rolled,
+            ) = row[:6]
+        else:
+            close_time_broker, broker_utc_offset_s, scalp_account, gross_pnl = row
+            ejected, rolled = True, False
         if broker_utc_offset_s is None:
             continue
         if scalp_account is not None and scalp_account != account_login:
@@ -217,10 +249,16 @@ def derive_counts(events, scalps, start, end, account_login):
         utc_close = _scalp_utc_close(close_time_broker, broker_utc_offset_s)
         if utc_close is None or not (start <= utc_close < end):
             continue
-        ejected_fills += 1
-        if gross_pnl is not None:
-            ejected_realised += float(gross_pnl)
-            realised_has = True
+        if rolled:
+            rolled_fills += 1
+            if gross_pnl is not None:
+                rolled_realised += float(gross_pnl)
+                rolled_realised_has = True
+        elif ejected:
+            ejected_fills += 1
+            if gross_pnl is not None:
+                ejected_realised += float(gross_pnl)
+                ejected_realised_has = True
 
     return {
         "ejections_auto": ejections_auto,
@@ -229,8 +267,16 @@ def derive_counts(events, scalps, start, end, account_login):
         "carry_clamps": carry_clamps,
         "critical_events": critical_events,
         "ejected_fills": ejected_fills,
-        "ejected_realised": ejected_realised if realised_has else None,
+        "ejected_realised": ejected_realised if ejected_realised_has else None,
         "eject_mismatch": ejected_fills - eject_filled_events,
+        "rolls_accepted": rolls_accepted,
+        "rolls_refused": rolls_refused,
+        "roll_filled_events": roll_filled_events,
+        "rolled_fills": rolled_fills,
+        "rolled_realised": rolled_realised if rolled_realised_has else None,
+        "roll_mismatch": rolled_fills - roll_filled_events,
+        "roll_stranded_warns": roll_stranded_warns,
+        "roll_stuck_warns": roll_stuck_warns,
     }
 
 

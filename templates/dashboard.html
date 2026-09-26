@@ -1011,12 +1011,37 @@
           <th>Gated (h)</th>
           <th>Eject A/C</th>
           <th>Ejected fills ($)</th>
+          <th>Rolls</th>
+          <th>Roll $</th>
           <th>Clamps</th>
           <th>CRIT</th>
         </tr>
       </thead>
       <tbody id="dailyBody">
-        <tr class="empty-row"><td colspan="17">Loading...</td></tr>
+        <tr class="empty-row"><td colspan="19">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" id="ejectionSection" style="margin-bottom:16px">
+  <div class="card-label">Passive ejection (rolls and ejects)</div>
+  <div id="ejectionNowLines" style="margin-top:8px;font-size:12px;color:#aaa">Loading...</div>
+  <div style="overflow-x:auto;margin-top:10px">
+    <table class="teams-table" id="ejectionTable">
+      <thead>
+        <tr>
+          <th>Time (UTC)</th>
+          <th>Instance</th>
+          <th>Side</th>
+          <th>Layer</th>
+          <th>Cost pips</th>
+          <th>Status</th>
+          <th>Net $</th>
+        </tr>
+      </thead>
+      <tbody id="ejectionBody">
+        <tr class="empty-row"><td colspan="7">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -1700,7 +1725,7 @@
     if (!body) return;
     const rows = payload && payload.rows ? payload.rows : [];
     if (!rows.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="17">No daily snapshots yet.</td></tr>';
+      body.innerHTML = '<tr class="empty-row"><td colspan="19">No daily snapshots yet.</td></tr>';
       return;
     }
     body.innerHTML = rows.map(function(row) {
@@ -1709,6 +1734,9 @@
       const ejectAc = (row.ejections_auto != null ? row.ejections_auto : '--') + '/' +
         (row.ejections_command != null ? row.ejections_command : '--');
       const ejectedMoney = row.ejected_realised != null ? row.ejected_realised : null;
+      const rollAc = (row.rolls_accepted != null ? row.rolls_accepted : '--') + '/' +
+        (row.roll_filled_events != null ? row.roll_filled_events : '--');
+      const rolledMoney = row.rolled_realised != null ? row.rolled_realised : null;
       return '<tr>' +
         '<td>' + dailyCell(row.ftmo_day) + '</td>' +
         '<td>' + dailyCell(row.account_login) + '</td>' +
@@ -1725,6 +1753,8 @@
         '<td>' + dailyCell(row.gated_hours, 1) + '</td>' +
         '<td>' + ejectAc + '</td>' +
         '<td class="' + dailyMoneyClass(ejectedMoney) + '">' + dailyCell(ejectedMoney, 2) + '</td>' +
+        '<td>' + rollAc + '</td>' +
+        '<td class="' + dailyMoneyClass(rolledMoney) + '">' + dailyCell(rolledMoney, 2) + '</td>' +
         '<td>' + dailyCell(row.carry_clamps) + '</td>' +
         '<td>' + dailyCell(row.critical_events) + '</td>' +
         '</tr>';
@@ -1738,6 +1768,67 @@
       renderDailyTable(await res.json());
     } catch (e) {
       renderDailyTable(null);
+    }
+  }
+
+  function renderEjectionPanel(payload) {
+    const nowEl = document.getElementById('ejectionNowLines');
+    const body = document.getElementById('ejectionBody');
+    if (!nowEl || !body) return;
+    if (!payload || !payload.now) {
+      nowEl.textContent = 'No ejection telemetry';
+      body.innerHTML = '<tr class="empty-row"><td colspan="7">No data</td></tr>';
+      return;
+    }
+    const lines = [];
+    Object.keys(payload.now || {}).sort().forEach(function(inst) {
+      const sides = payload.now[inst] || {};
+      ['L', 'S'].forEach(function(side) {
+        const s = sides[side];
+        if (!s) return;
+        const rolled = s.rolled != null ? s.rolled : '--';
+        const depth = (s.depth != null ? s.depth : '--') + '/' + (s.max_layers != null ? s.max_layers : '--');
+        const stranded = s.last_stranded_at ? ' stranded ' + s.last_stranded_at : '';
+        lines.push(inst + ' ' + side + ': depth ' + depth + ', rolled ' + rolled + stranded);
+      });
+    });
+    nowEl.textContent = lines.length ? lines.join(' | ') : 'No instance state';
+    const rows = (payload.rolls || []).concat(payload.ejections || []);
+    rows.sort(function(a, b) {
+      return (b.accepted_at || '').localeCompare(a.accepted_at || '');
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    const todayRows = rows.filter(function(r) {
+      return r.accepted_at && r.accepted_at.slice(0, 10) === today;
+    });
+    if (!todayRows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="7">No rolls/ejects today (UTC)</td></tr>';
+      return;
+    }
+    body.innerHTML = todayRows.map(function(r) {
+      const net = r.realised && r.realised.net != null ? r.realised.net : null;
+      const netStr = net != null ? net.toFixed(2) : '--';
+      const kind = r.offset != null ? 'eject' : 'roll';
+      const costPips = r.cost_pips != null ? r.cost_pips : (r.offset != null ? r.offset : '--');
+      return '<tr>' +
+        '<td>' + (r.accepted_at || '--') + '</td>' +
+        '<td>' + (r.instance_id || '--') + '</td>' +
+        '<td>' + (r.side || '--') + '</td>' +
+        '<td>' + (r.layer_index != null ? r.layer_index : '--') + '</td>' +
+        '<td>' + costPips + (kind === 'roll' ? '' : '') + '</td>' +
+        '<td>' + (r.status || '--') + '</td>' +
+        '<td>' + netStr + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  async function fetchEjectionPanel() {
+    try {
+      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/ejection/' + Date.now());
+      if (!res.ok) throw new Error('fetch failed');
+      renderEjectionPanel(await res.json());
+    } catch (e) {
+      renderEjectionPanel(null);
     }
   }
 
@@ -1862,11 +1953,13 @@
   fetchCarryAudit();
   fetchCriticalBanner();
   fetchDailyTable();
+  fetchEjectionPanel();
   setInterval(fetchDailySummary, 5000);
   setInterval(fetchCarryTable, 5000);
   setInterval(fetchCarryAudit, 5000);
   setInterval(fetchCriticalBanner, 30000);
   setInterval(fetchDailyTable, 30000);
+  setInterval(fetchEjectionPanel, 30000);
 
   let todayAllCache = { headers: ['Time', 'Pair', 'Direction', 'Entry', 'Exit', 'Pips'], rows: [], summary: '' };
   let openPosCache  = { headers: ['Pair', 'Direction', 'Entry', 'Layers', 'Net PnL'], rows: [] };
@@ -2820,6 +2913,8 @@ function renderScalps(records) {
       : '—';
     const pnlCls  = pnlVal !== null ? (pnlVal >= 0 ? 'win' : 'loss') : '';
     const result  = isWin ? '<span class="win">WIN</span>' : '<span class="loss">LOSS</span>';
+    const rolledTag = r.rolled ? ' <span class="loss">[R]</span>' : '';
+    const ejectTag = r.ejected ? ' <span class="loss">[E]</span>' : '';
     const dirCls  = r.direction === 'LONG' ? 'dir-long' : 'dir-short';
     const timeStr = r.close_time ? r.close_time.slice(0, 16).replace('T', ' ') : '—';
     const entry   = entryNum !== null ? entryNum.toFixed(5) : '—';
@@ -2835,7 +2930,7 @@ function renderScalps(records) {
       '<td>' + (r.stack_depth != null ? r.stack_depth : '—') + '</td>' +
       '<td class="' + (isWin ? 'win' : 'loss') + '">' + pipsStr + '</td>' +
       '<td class="' + pnlCls + '">' + pnlStr + '</td>' +
-      '<td>' + result + '</td>' +
+      '<td>' + result + rolledTag + ejectTag + '</td>' +
       '</tr>';
   }).join('');
 }

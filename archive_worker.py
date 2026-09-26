@@ -85,7 +85,7 @@ EA_EVENT_FIELDS = ("magic", "level", "code", "reason", "ticket")
 SCALP_FIELDS = (
     "instrument", "direction", "entry_price", "exit_price", "gross_pnl",
     "layer_depth", "stack_depth", "entry_deal_ticket", "exit_deal_ticket",
-    "ejected", "broker_utc_offset_s", "account_login",
+    "ejected", "broker_utc_offset_s", "account_login", "rolled",
 )
 
 DAILY_EVENTS_SQL = """
@@ -97,6 +97,8 @@ WHERE s.account_login = %s
   AND (
     e.code IN (
         'EJECT_ACCEPTED', 'EJECT_FILLED',
+        'ROLL_ACCEPTED', 'ROLL_REFUSED', 'ROLL_FILLED',
+        'ROLL_STRANDED', 'ROLL_CLOSING_STUCK',
         'CARRY_PASS_SUMMARY', 'CARRY_PASS_INCOMPLETE'
     )
     OR e.level = 'CRITICAL'
@@ -104,9 +106,10 @@ WHERE s.account_login = %s
 """
 
 DAILY_SCALPS_SQL = """
-SELECT close_time_broker, broker_utc_offset_s, account_login, gross_pnl
+SELECT close_time_broker, broker_utc_offset_s, account_login, gross_pnl,
+       ejected, rolled
 FROM scalp_history
-WHERE ejected IS TRUE
+WHERE (ejected IS TRUE OR rolled IS TRUE)
   AND received_at >= %s AND received_at < %s
 """
 
@@ -119,6 +122,8 @@ SELECT id, account_login, ftmo_day, instance_id, session_id, ea_time_ms,
        start_known, balance_start_source,
        ejections_auto, ejections_command, ejected_fills, ejected_realised,
        eject_filled_events, eject_mismatch, carry_clamps, critical_events,
+       rolls_accepted, rolls_refused, roll_filled_events, rolled_fills,
+       rolled_realised, roll_mismatch, roll_stranded_warns, roll_stuck_warns,
        derived_at, gated_seconds, history_ok
 FROM daily_snapshots
 WHERE ftmo_day >= %s
@@ -401,6 +406,14 @@ def build_daily_derived(conn, now=None):
                     eject_mismatch = %(eject_mismatch)s,
                     carry_clamps = %(carry_clamps)s,
                     critical_events = %(critical_events)s,
+                    rolls_accepted = %(rolls_accepted)s,
+                    rolls_refused = %(rolls_refused)s,
+                    roll_filled_events = %(roll_filled_events)s,
+                    rolled_fills = %(rolled_fills)s,
+                    rolled_realised = %(rolled_realised)s,
+                    roll_mismatch = %(roll_mismatch)s,
+                    roll_stranded_warns = %(roll_stranded_warns)s,
+                    roll_stuck_warns = %(roll_stuck_warns)s,
                     derived_at = now()
                 WHERE id = %(id)s
                 """,
@@ -692,12 +705,12 @@ INSERT_SQL = {
             instance_id, instrument, direction, entry_price, exit_price,
             gross_pnl, layer_depth, stack_depth, close_time_broker,
             entry_deal_ticket, exit_deal_ticket, source, received_at,
-            ejected, broker_utc_offset_s, account_login
+            ejected, broker_utc_offset_s, account_login, rolled
         ) VALUES (
             %(instance_id)s, %(instrument)s, %(direction)s, %(entry_price)s, %(exit_price)s,
             %(gross_pnl)s, %(layer_depth)s, %(stack_depth)s, %(close_time_broker)s,
             %(entry_deal_ticket)s, %(exit_deal_ticket)s, %(source)s, %(received_at)s,
-            %(ejected)s, %(broker_utc_offset_s)s, %(account_login)s
+            %(ejected)s, %(broker_utc_offset_s)s, %(account_login)s, %(rolled)s
         ) ON CONFLICT DO NOTHING
     """,
 }

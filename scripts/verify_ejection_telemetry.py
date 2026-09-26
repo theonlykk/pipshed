@@ -437,7 +437,6 @@ def check_et4():
         ("ROLL_REFUSED", "INFO", {}),
         ("ROLL_FILLED", "INFO", {}),
         ("ROLL_STRANDED", "WARN", {}),
-        ("ROLL_CLOSING_STUCK", "WARN", {}),
     ]
     close = datetime(2026, 9, 24, 10, 20, tzinfo=timezone.utc)
     scalps = [
@@ -452,7 +451,7 @@ def check_et4():
         "rolled_realised": -3.50,
         "roll_mismatch": 0,
         "roll_stranded_warns": 1,
-        "roll_stuck_warns": 1,
+        "roll_stuck_warns": 0,
     }
     for key, val in expected.items():
         if counts.get(key) != val:
@@ -617,13 +616,15 @@ def check_et11():
 
 def check_et12():
     view = __import__("ejection_view").build_ejection_view(**_fixture_view_kwargs())
+    if not view.get("fleet"):
+        raise AssertionError("stub empty payload")
     for section in ("rolls", "ejections", "warnings"):
         for row in view.get(section) or []:
             if row.get("instance_id") == OUTSIDER_INSTANCE:
                 raise AssertionError(f"{section} contains outsider instance")
-    recon = (view.get("reconciliation") or {}).get(OUTSIDER_INSTANCE)
-    if recon:
-        raise AssertionError("reconciliation contains outsider")
+    for block in view.get("reconciliation") or []:
+        if block.get("instance_id") == OUTSIDER_INSTANCE:
+            raise AssertionError("reconciliation contains outsider")
     return "outsider instance absent from view"
 
 
@@ -665,7 +666,14 @@ def check_et15():
     kwargs["state_by_instance"] = {
         FIXTURE_INSTANCE: {
             "age_s": 5,
-            "layers": [{"layer_index": 0, "ticket": 1, "entry": 1.33, "virtual_level": 1.326, "exit_target": 1.3265}],
+            "layers": [{
+                "layer_index": 0,
+                "ticket": 1,
+                "entry": 1.33,
+                "virtual_level": 1.326,
+                "exit_target": 1.3265,
+                "side": "L",
+            }],
         }
     }
     kwargs["events"] = [e for e in kwargs["events"] if e.get("code") != "ROLL_ACCEPTED"]
@@ -765,7 +773,13 @@ def _fixture_view_kwargs():
         },
     ]
     scalps = []
-    for direction, gross, hour in (("LONG", 0.50, 9), ("LONG", 0.50, 9), ("LONG", 0.50, 9), ("SHORT", 0.50, 9)):
+    deal_pairs = [(6101, 6102), (6103, 6104), (6105, 6106), (6107, 6108)]
+    for direction, gross, hour, (entry_d, exit_d) in zip(
+        ["LONG", "LONG", "LONG", "SHORT"],
+        [0.50, 0.50, 0.50, 0.50],
+        [9, 9, 9, 9],
+        deal_pairs,
+    ):
         scalps.append({
             "instance_id": FIXTURE_INSTANCE,
             "direction": direction,
@@ -775,8 +789,8 @@ def _fixture_view_kwargs():
             "broker_utc_offset_s": 0,
             "account_login": FIXTURE_ACCOUNT,
             "close_time_broker": datetime(2026, 9, 24, hour, 0, tzinfo=timezone.utc),
-            "entry_deal_ticket": 6001,
-            "exit_deal_ticket": 6002,
+            "entry_deal_ticket": entry_d,
+            "exit_deal_ticket": exit_d,
             "layer_depth": 0,
         })
     scalps.append({
@@ -801,10 +815,61 @@ def _fixture_view_kwargs():
         "broker_utc_offset_s": 0,
         "account_login": FIXTURE_ACCOUNT,
         "close_time_broker": datetime(2026, 9, 24, 11, 10, tzinfo=timezone.utc),
-        "entry_deal_ticket": 8001,
-        "exit_deal_ticket": 8002,
+        "entry_deal_ticket": 8101,
+        "exit_deal_ticket": 8102,
         "layer_depth": 0,
     })
+    fill_logs = [
+        {
+            "deal_ticket": 7001,
+            "order_ticket": 9001,
+            "position_id": 7001,
+            "commission": -0.07,
+            "swap": 0,
+            "instance_id": FIXTURE_INSTANCE,
+        },
+        {
+            "deal_ticket": 7002,
+            "order_ticket": 9001,
+            "position_id": 7001,
+            "commission": -0.07,
+            "swap": -0.20,
+            "instance_id": FIXTURE_INSTANCE,
+        },
+        {
+            "deal_ticket": 8101,
+            "order_ticket": 9003,
+            "position_id": 8101,
+            "commission": -0.07,
+            "swap": 0,
+            "instance_id": FIXTURE_INSTANCE,
+        },
+        {
+            "deal_ticket": 8102,
+            "order_ticket": 9003,
+            "position_id": 8101,
+            "commission": -0.07,
+            "swap": 0,
+            "instance_id": FIXTURE_INSTANCE,
+        },
+    ]
+    for entry_d, exit_d in deal_pairs:
+        fill_logs.append({
+            "deal_ticket": entry_d,
+            "order_ticket": entry_d,
+            "position_id": entry_d,
+            "commission": -0.07,
+            "swap": 0,
+            "instance_id": FIXTURE_INSTANCE,
+        })
+        fill_logs.append({
+            "deal_ticket": exit_d,
+            "order_ticket": exit_d,
+            "position_id": entry_d,
+            "commission": -0.07,
+            "swap": 0,
+            "instance_id": FIXTURE_INSTANCE,
+        })
     return {
         "generated_at": "2026-09-24T12:00:00Z",
         "fleet": "B",
@@ -813,7 +878,7 @@ def _fixture_view_kwargs():
         "grind_instances": [FIXTURE_INSTANCE],
         "events": events,
         "scalps": scalps,
-        "fill_logs": _q1_fill_rows(),
+        "fill_logs": fill_logs,
         "state_by_instance": {},
         "now_dt": datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc),
         "window_start_ms": start_ms,

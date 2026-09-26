@@ -1,0 +1,9 @@
+ALTER TABLE scalp_history ADD COLUMN rolled boolean;
+ALTER TABLE daily_snapshots ADD COLUMN rolls_accepted int;
+ALTER TABLE daily_snapshots ADD COLUMN rolls_refused int;
+ALTER TABLE daily_snapshots ADD COLUMN roll_filled_events int;
+ALTER TABLE daily_snapshots ADD COLUMN rolled_fills int;
+ALTER TABLE daily_snapshots ADD COLUMN rolled_realised numeric(14,2);
+ALTER TABLE daily_snapshots ADD COLUMN roll_mismatch int;
+ALTER TABLE daily_snapshots ADD COLUMN roll_stranded_warns int;
+ALTER TABLE daily_snapshots ADD COLUMN roll_stuck_warns int;

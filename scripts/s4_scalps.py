@@ -17,10 +17,11 @@ WHERE entry_type = 'OUT_BY'
   AND ea_time_ms >= %s AND ea_time_ms < %s
 """
 
+# EJECT_FILLED and ROLL_FILLED tickets exclude CloseBy pairs from s4 scalp counts.
 EJECT_SQL = """
 SELECT ticket
 FROM ea_events
-WHERE code = 'EJECT_FILLED'
+WHERE code IN ('EJECT_FILLED', 'ROLL_FILLED')
   AND ea_time_ms >= %s AND ea_time_ms < %s
 """
 
@@ -28,6 +29,7 @@ SCALP_HISTORY_SQL = """
 SELECT instance_id, close_time_broker, broker_utc_offset_s, account_login
 FROM scalp_history
 WHERE ejected IS NOT TRUE
+  AND rolled IS NOT TRUE
   AND received_at >= %s AND received_at < %s
 """
 

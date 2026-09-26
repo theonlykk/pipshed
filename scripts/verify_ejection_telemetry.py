@@ -122,8 +122,6 @@ def _insert_scalp(
     *,
     rolled=False,
     ejected=False,
-    entry_deal=100,
-    exit_deal=101,
     layer=0,
 ):
     offset_s = 0
@@ -133,14 +131,12 @@ def _insert_scalp(
         " gross_pnl, layer_depth, stack_depth, entry_deal_ticket, exit_deal_ticket,"
         " close_time_broker, source, received_at, broker_utc_offset_s, account_login,"
         " ejected, rolled) VALUES (%s, 'GBPUSD', %s, 1.33, 1.3305, %s, %s, 1,"
-        " %s, %s, %s, 'test', %s, %s, %s, %s, %s)",
+        " NULL, NULL, %s, 'test', %s, %s, %s, %s, %s)",
         (
             FIXTURE_INSTANCE,
             direction,
             gross,
             layer,
-            entry_deal,
-            exit_deal,
             broker_close,
             close_utc,
             offset_s,
@@ -151,14 +147,179 @@ def _insert_scalp(
     )
 
 
-def _insert_out_by(cur, seq, order_ticket, position_id, ea_time_ms):
+def _insert_fill(
+    cur,
+    seq,
+    ea_time_ms,
+    deal_ticket,
+    order_ticket,
+    position_id,
+    *,
+    entry_type,
+    deal_type,
+    side,
+    role=None,
+    layer_index=None,
+    profit=0.0,
+    swap=0.0,
+    commission=None,
+):
+    # Production shape (C56 fix 3, E3): commission is charged on IN deals
+    # only (-0.04 each at 0.01 lots); OUT_BY / OUT deals carry 0.0.
+    if commission is None:
+        commission = -0.04 if entry_type == "IN" else 0.0
     cur.execute(
         "INSERT INTO fill_logs (instance_id, magic, session_id, seq, ea_time_ms, received_at,"
-        " deal_ticket, order_ticket, position_id, entry_type, deal_type, side,"
+        " deal_ticket, order_ticket, position_id, entry_type, deal_type, side, layer_index, role,"
         " profit, swap, commission) VALUES (%s, 1, %s, %s, %s, now(), %s, %s, %s,"
-        " 'OUT_BY', 'sell', 'buy', 0, 0, -0.07)",
-        (FIXTURE_INSTANCE, FIXTURE_SESSION, seq, ea_time_ms, 5000 + seq, order_ticket, position_id),
+        " %s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            FIXTURE_INSTANCE,
+            FIXTURE_SESSION,
+            seq,
+            ea_time_ms,
+            deal_ticket,
+            order_ticket,
+            position_id,
+            entry_type,
+            deal_type,
+            side,
+            layer_index,
+            role,
+            profit,
+            swap,
+            commission,
+        ),
     )
+
+
+def _insert_close_by_layer(
+    cur,
+    seq,
+    ea_time_ms,
+    order_ticket,
+    layer_pos,
+    exit_pos,
+    side,
+    layer_index,
+    layer_profit,
+    *,
+    layer_swap=0.0,
+    exit_profit=0.0,
+    deal_base=900000,
+):
+    """One close-by: ENT+EXT IN deals, two OUT_BY legs (production ledger shape)."""
+    ent_dt = "buy" if side == "L" else "sell"
+    ext_dt = "sell" if side == "L" else "buy"
+    out_dt = "sell" if side == "L" else "buy"
+    out_other = "buy" if side == "L" else "sell"
+    _insert_fill(
+        cur, seq, ea_time_ms, deal_base, order_ticket, layer_pos,
+        entry_type="IN", deal_type=ent_dt, side=side, role="ENT",
+        layer_index=layer_index, profit=0.0,
+    )
+    seq += 1
+    _insert_fill(
+        cur, seq, ea_time_ms, deal_base + 1, order_ticket, exit_pos,
+        entry_type="IN", deal_type=ext_dt, side=side, role="EXT",
+        layer_index=layer_index, profit=0.0,
+    )
+    seq += 1
+    _insert_fill(
+        cur, seq, ea_time_ms, deal_base + 2, order_ticket, layer_pos,
+        entry_type="OUT_BY", deal_type=out_dt, side=side, role=None,
+        layer_index=None, profit=layer_profit, swap=layer_swap,
+    )
+    seq += 1
+    _insert_fill(
+        cur, seq, ea_time_ms, deal_base + 3, order_ticket, exit_pos,
+        entry_type="OUT_BY", deal_type=out_other, side=side, role=None,
+        layer_index=None, profit=exit_profit, swap=0.0,
+    )
+    return seq + 1
+
+
+def _ledger_close_rows(
+    ea_time_ms,
+    order_ticket,
+    layer_pos,
+    exit_pos,
+    side,
+    layer_index,
+    layer_profit,
+    *,
+    layer_swap=0.0,
+    exit_profit=0.0,
+    deal_base=900000,
+    instance_id=FIXTURE_INSTANCE,
+):
+    ent_dt = "buy" if side == "L" else "sell"
+    ext_dt = "sell" if side == "L" else "buy"
+    out_dt = "sell" if side == "L" else "buy"
+    out_other = "buy" if side == "L" else "sell"
+    rows = [
+        {
+            "instance_id": instance_id,
+            "deal_ticket": deal_base,
+            "order_ticket": order_ticket,
+            "position_id": layer_pos,
+            "entry_type": "IN",
+            "deal_type": ent_dt,
+            "side": side,
+            "layer_index": layer_index,
+            "role": "ENT",
+            "profit": 0.0,
+            "swap": 0.0,
+            "commission": -0.04,
+            "ea_time_ms": ea_time_ms,
+        },
+        {
+            "instance_id": instance_id,
+            "deal_ticket": deal_base + 1,
+            "order_ticket": order_ticket,
+            "position_id": exit_pos,
+            "entry_type": "IN",
+            "deal_type": ext_dt,
+            "side": side,
+            "layer_index": layer_index,
+            "role": "EXT",
+            "profit": 0.0,
+            "swap": 0.0,
+            "commission": -0.04,
+            "ea_time_ms": ea_time_ms,
+        },
+        {
+            "instance_id": instance_id,
+            "deal_ticket": deal_base + 2,
+            "order_ticket": order_ticket,
+            "position_id": layer_pos,
+            "entry_type": "OUT_BY",
+            "deal_type": out_dt,
+            "side": side,
+            "role": None,
+            "layer_index": None,
+            "profit": layer_profit,
+            "swap": layer_swap,
+            "commission": 0.0,
+            "ea_time_ms": ea_time_ms,
+        },
+        {
+            "instance_id": instance_id,
+            "deal_ticket": deal_base + 3,
+            "order_ticket": order_ticket,
+            "position_id": exit_pos,
+            "entry_type": "OUT_BY",
+            "deal_type": out_other,
+            "side": side,
+            "role": None,
+            "layer_index": None,
+            "profit": exit_profit,
+            "swap": 0.0,
+            "commission": 0.0,
+            "ea_time_ms": ea_time_ms,
+        },
+    ]
+    return rows
 
 
 def seed_full_fixture(cur):
@@ -173,19 +334,21 @@ def seed_full_fixture(cur):
 
     seq = 0
     scalp_specs = [
-        ("LONG", 0.50, 6001, 6002),
-        ("LONG", 0.50, 6003, 6004),
-        ("LONG", 0.50, 6005, 6006),
-        ("SHORT", 0.50, 6007, 6008),
+        ("LONG", 0.50, 5001, 6001, 6002, 0, 610000),
+        ("LONG", 0.50, 5002, 6003, 6004, 0, 610010),
+        ("LONG", 0.50, 5003, 6005, 6006, 0, 610020),
+        ("SHORT", 0.50, 5004, 6007, 6008, 0, 610030),
     ]
-    for i, (direction, gross, entry_d, exit_d) in enumerate(scalp_specs):
-        order_t = 5001 + i
+    for direction, gross, order_t, layer_pos, exit_pos, layer_index, deal_base in scalp_specs:
+        close_ms = t_scalp + order_t
+        side = "L" if direction == "LONG" else "S"
+        seq = _insert_close_by_layer(
+            cur, seq, close_ms, order_t, layer_pos, exit_pos, side, layer_index,
+            gross, deal_base=deal_base,
+        )
+        close_utc = datetime.fromtimestamp(close_ms / 1000.0, tz=timezone.utc)
+        _insert_scalp(cur, seq, direction, gross, close_utc, layer=layer_index)
         seq += 1
-        _insert_out_by(cur, seq, order_t, entry_d, t_scalp + seq)
-        seq += 1
-        _insert_out_by(cur, seq, order_t, exit_d, t_scalp + seq + 1)
-        close_utc = datetime.fromtimestamp(t_scalp / 1000.0, tz=timezone.utc) + timedelta(minutes=seq)
-        _insert_scalp(cur, seq, direction, gross, close_utc, entry_deal=entry_d, exit_deal=exit_d)
 
     roll_accept_ms = _ms("2026-09-24T10:00:00Z")
     roll_fill_ms = _ms("2026-09-24T10:17:00Z")
@@ -210,46 +373,22 @@ def seed_full_fixture(cur):
     )
     seq += 1
     _insert_ea(cur, seq, "ROLL_FILLED", "INFO", roll_fill_ms, 7001, {"level": 1.326})
-    seq += 1
-    _insert_out_by(cur, seq, 9001, 7001, roll_fill_ms)
-    seq += 1
-    _insert_out_by(cur, seq, 9001, 7002, roll_fill_ms + 1)
-    roll_close = datetime(2026, 9, 24, 10, 20, tzinfo=timezone.utc)
-    _insert_scalp(
+    seq = _insert_close_by_layer(
         cur,
         seq,
-        "LONG",
+        roll_fill_ms,
+        9101,
+        7001,
+        7002,
+        "L",
+        0,
         -3.50,
-        roll_close,
-        rolled=True,
-        entry_deal=7001,
-        exit_deal=7002,
-        layer=0,
+        layer_swap=-0.20,
+        deal_base=620000,
     )
-    for deal_ticket, pos, comm, swap in (
-        (7001, 7001, -0.07, 0),
-        (7002, 7001, -0.07, -0.20),
-        (7003, 7002, -0.07, 0),
-        (7004, 7002, -0.07, 0),
-    ):
-        seq += 1
-        cur.execute(
-            "INSERT INTO fill_logs (instance_id, magic, session_id, seq, ea_time_ms, received_at,"
-            " deal_ticket, order_ticket, position_id, entry_type, deal_type, side,"
-            " profit, swap, commission) VALUES (%s, 1, %s, %s, %s, now(), %s, %s, %s,"
-            " 'IN', 'buy', 'buy', 0, %s, %s)",
-            (
-                FIXTURE_INSTANCE,
-                FIXTURE_SESSION,
-                seq,
-                roll_fill_ms,
-                deal_ticket,
-                9001,
-                pos,
-                swap,
-                comm,
-            ),
-        )
+    roll_close = datetime(2026, 9, 24, 10, 20, tzinfo=timezone.utc)
+    _insert_scalp(cur, seq, "LONG", -3.50, roll_close, rolled=True, layer=0)
+    seq += 1
 
     seq += 1
     _insert_ea(
@@ -278,21 +417,12 @@ def seed_full_fixture(cur):
     _insert_ea(cur, seq, "EJECT_ACCEPTED", "INFO", eject_accept_ms, 8001, {"source": "auto"})
     seq += 1
     _insert_ea(cur, seq, "EJECT_FILLED", "INFO", eject_fill_ms, 8001, {"offset": 0})
-    seq += 1
-    _insert_out_by(cur, seq, 9003, 8001, eject_fill_ms)
-    seq += 1
-    _insert_out_by(cur, seq, 9003, 8002, eject_fill_ms + 1)
-    eject_close = datetime(2026, 9, 24, 11, 10, tzinfo=timezone.utc)
-    _insert_scalp(
-        cur,
-        seq,
-        "LONG",
-        -1.00,
-        eject_close,
-        ejected=True,
-        entry_deal=8001,
-        exit_deal=8002,
+    seq = _insert_close_by_layer(
+        cur, seq, eject_fill_ms, 9103, 8001, 8002, "L", 0, -1.00, deal_base=630000,
     )
+    eject_close = datetime(2026, 9, 24, 11, 10, tzinfo=timezone.utc)
+    _insert_scalp(cur, seq, "LONG", -1.00, eject_close, ejected=True)
+    seq += 1
 
     seq += 1
     cur.execute(
@@ -609,13 +739,13 @@ def check_et8():
     realised = row.get("realised") or {}
     if realised.get("gross") != -3.50:
         raise AssertionError("gross")
-    if realised.get("commission") != -0.14:
+    if realised.get("commission") != -0.08:
         raise AssertionError("commission")
     if realised.get("swap") != -0.20:
         raise AssertionError("swap")
-    if realised.get("net") != -3.84:
+    if realised.get("net") != -3.78:
         raise AssertionError("net")
-    return "rolls row 9001 filled with Q1 realised"
+    return "roll 7001 ledger realised net -3.78"
 
 
 def check_et9():
@@ -643,26 +773,28 @@ def check_et9():
         raise AssertionError(f"L scalps count {scalps.get('count')}")
     if abs(float(scalps.get("gross", 0)) - 1.50) > 0.001:
         raise AssertionError("L scalps gross")
-    if abs(float(scalps.get("net", 0)) - 1.08) > 0.001:
+    if abs(float(scalps.get("commission", 0)) - (-0.24)) > 0.001:
+        raise AssertionError("L scalps commission")
+    if abs(float(scalps.get("net", 0)) - 1.26) > 0.001:
         raise AssertionError("L scalps net")
     rolls = side_l.get("rolls") or {}
-    if rolls.get("filled") != 1:
-        raise AssertionError("rolls filled")
-    if abs(float(rolls.get("net", 0)) - (-3.84)) > 0.001:
+    if rolls.get("count") != 1:
+        raise AssertionError("rolls count")
+    if abs(float(rolls.get("net", 0)) - (-3.78)) > 0.001:
         raise AssertionError("rolls net")
     eject = side_l.get("ejections") or {}
-    if eject.get("filled") != 1:
-        raise AssertionError("ejections filled")
-    if abs(float(eject.get("net", 0)) - (-1.14)) > 0.001:
+    if eject.get("count") != 1:
+        raise AssertionError("ejections count")
+    if abs(float(eject.get("net", 0)) - (-1.08)) > 0.001:
         raise AssertionError("ejections net")
-    if abs(float(side_l.get("closed_net", 0)) - (-3.90)) > 0.001:
+    if abs(float(side_l.get("closed_net", 0)) - (-3.60)) > 0.001:
         raise AssertionError("closed_net")
     if side_s is None:
         raise AssertionError("side S missing")
     ss = side_s.get("scalps") or {}
     if ss.get("count") != 1:
         raise AssertionError("S scalps count")
-    if abs(float(ss.get("net", 0)) - 0.36) > 0.001:
+    if abs(float(ss.get("net", 0)) - 0.42) > 0.001:
         raise AssertionError("S scalps net")
     return "days side L and S totals"
 
@@ -724,8 +856,11 @@ def check_et13():
     view = __import__("ejection_view").build_ejection_view(**_fixture_view_kwargs())
     recon = None
     for block in view.get("reconciliation") or []:
-        if block.get("instance_id") == FIXTURE_INSTANCE:
+        if block.get("instance_id") != FIXTURE_INSTANCE:
+            continue
+        if block.get("ftmo_day") == FTMO_D.isoformat():
             recon = block
+            break
     if recon is None:
         raise AssertionError("reconciliation block missing")
     refused = recon.get("refused") or {}
@@ -825,8 +960,8 @@ def _two_roll_view_kwargs():
             "broker_utc_offset_s": 0,
             "account_login": FIXTURE_ACCOUNT,
             "close_time_broker": datetime(2026, 9, 24, 10, 20, tzinfo=timezone.utc),
-            "entry_deal_ticket": 7101,
-            "exit_deal_ticket": 7102,
+            "entry_deal_ticket": None,
+            "exit_deal_ticket": None,
             "layer_depth": 0,
         },
         {
@@ -838,31 +973,19 @@ def _two_roll_view_kwargs():
             "broker_utc_offset_s": 0,
             "account_login": FIXTURE_ACCOUNT,
             "close_time_broker": datetime(2026, 9, 24, 10, 21, tzinfo=timezone.utc),
-            "entry_deal_ticket": 7201,
-            "exit_deal_ticket": 7202,
+            "entry_deal_ticket": None,
+            "exit_deal_ticket": None,
             "layer_depth": 1,
         },
     ])
     fill_logs = list(kwargs["fill_logs"])
-    for pos, entry_d, exit_d in ((7101, 7101, 7102), (7201, 7201, 7202)):
-        fill_logs.extend([
-            {
-                "deal_ticket": entry_d,
-                "order_ticket": 9100 + pos,
-                "position_id": pos,
-                "commission": -0.07,
-                "swap": 0,
-                "instance_id": FIXTURE_INSTANCE,
-            },
-            {
-                "deal_ticket": exit_d,
-                "order_ticket": 9100 + pos,
-                "position_id": pos,
-                "commission": -0.07,
-                "swap": 0,
-                "instance_id": FIXTURE_INSTANCE,
-            },
-        ])
+    fill_ms = base_ms + 17 * 60 * 1000
+    fill_logs.extend(
+        _ledger_close_rows(fill_ms, 9110, 7101, 7102, "L", 0, -3.50, deal_base=640000)
+    )
+    fill_logs.extend(
+        _ledger_close_rows(fill_ms + 1000, 9111, 7201, 7202, "L", 1, -2.00, deal_base=640010)
+    )
     kwargs["events"] = events
     kwargs["scalps"] = scalps
     kwargs["fill_logs"] = fill_logs
@@ -876,10 +999,10 @@ def check_et16():
     rolls = {r["ticket"]: r for r in view.get("rolls", [])}
     r7101 = rolls.get(7101)
     r7201 = rolls.get(7201)
-    if not r7101 or r7101.get("realised", {}).get("net") != -3.64:
-        raise AssertionError(f"7101 net expected -3.64 got {r7101}")
-    if not r7201 or r7201.get("realised", {}).get("net") != -2.14:
-        raise AssertionError(f"7201 net expected -2.14 got {r7201}")
+    if not r7101 or r7101.get("realised", {}).get("net") != -3.58:
+        raise AssertionError(f"7101 net expected -3.58 got {r7101}")
+    if not r7201 or r7201.get("realised", {}).get("net") != -2.08:
+        raise AssertionError(f"7201 net expected -2.08 got {r7201}")
     return "two rolls same day distinct P&L by position ticket"
 
 
@@ -897,7 +1020,12 @@ def check_et17():
     })
     view = ev.build_ejection_view(**kwargs)
     recon = next(
-        (b for b in view.get("reconciliation") or [] if b.get("instance_id") == FIXTURE_INSTANCE),
+        (
+            b
+            for b in view.get("reconciliation") or []
+            if b.get("instance_id") == FIXTURE_INSTANCE
+            and b.get("ftmo_day") == FTMO_D.isoformat()
+        ),
         None,
     )
     if recon is None:
@@ -1055,8 +1183,8 @@ def check_et24():
     # 5012, 7001, 7002, 7003, 7004: commission 6 x -0.07 = -0.42, swap -0.20;
     # net = -3.50 - 0.42 - 0.20 = -4.12. (-3.84 belongs to the in-memory
     # fixture of ET8, which has two deals.)
-    if not row or (row.get("realised") or {}).get("net") != -4.12:
-        raise AssertionError(f"roll 7001 net expected -4.12 got {row}")
+    if not row or (row.get("realised") or {}).get("net") != -3.78:
+        raise AssertionError(f"roll 7001 net expected -3.78 got {row}")
     days = body.get("days") or []
     side_l = None
     for block in days:
@@ -1266,23 +1394,353 @@ def check_et20():
     return "summary counts exclude roll/eject; money includes all"
 
 
-def _q1_fill_rows():
-    rows = []
-    for deal_ticket, order_ticket, position_id, comm, swap in (
-        (7001, 9001, 7001, -0.07, 0),
-        (7002, 9001, 7001, -0.07, -0.20),
-        (7003, 9001, 7002, -0.07, 0),
-        (7004, 9001, 7002, -0.07, 0),
-    ):
-        rows.append({
-            "deal_ticket": deal_ticket,
-            "order_ticket": order_ticket,
-            "position_id": position_id,
-            "commission": comm,
-            "swap": swap,
+def _e3_production_sample_fills():
+    """Production GBPUSD_OPTB close-by sample (audit E3), verbatim shape."""
+    close_ms = _ms("2026-09-24T12:00:00Z")
+    inst = FIXTURE_INSTANCE
+    order_close = 1965879160
+    layer_pos = 1965741165
+    exit_pos = 1965769843
+    return [
+        {
+            "instance_id": inst,
+            "deal_ticket": 1580409849,
+            "order_ticket": 1965741165,
+            "position_id": layer_pos,
+            "entry_type": "IN",
+            "deal_type": "SELL",
+            "side": "S",
+            "layer_index": 4,
+            "role": "ENT",
+            "profit": 0.0,
+            "swap": 0.0,
+            "commission": -0.04,
+            "ea_time_ms": close_ms - 3600000,
+        },
+        {
+            "instance_id": inst,
+            "deal_ticket": 1580502086,
+            "order_ticket": 1965769843,
+            "position_id": exit_pos,
+            "entry_type": "IN",
+            "deal_type": "BUY",
+            "side": "S",
+            "layer_index": 4,
+            "role": "EXT",
+            "profit": 0.0,
+            "swap": 0.0,
+            "commission": -0.04,
+            "ea_time_ms": close_ms - 3600000,
+        },
+        {
+            "instance_id": inst,
+            "deal_ticket": 1580502400,
+            "order_ticket": order_close,
+            "position_id": layer_pos,
+            "entry_type": "OUT_BY",
+            "deal_type": "BUY",
+            "side": "S",
+            "layer_index": None,
+            "role": None,
+            "profit": 1.32,
+            "swap": 0.0,
+            "commission": 0.0,
+            "ea_time_ms": close_ms,
+        },
+        {
+            "instance_id": inst,
+            "deal_ticket": 1580502401,
+            "order_ticket": order_close,
+            "position_id": exit_pos,
+            "entry_type": "OUT_BY",
+            "deal_type": "SELL",
+            "side": "S",
+            "layer_index": None,
+            "role": None,
+            "profit": 0.0,
+            "swap": 0.0,
+            "commission": 0.0,
+            "ea_time_ms": close_ms,
+        },
+    ]
+
+
+def check_et27():
+    import ejection_view as ev
+
+    fills = _e3_production_sample_fills()
+    closes, odd = ev.closed_trades_from_fills(fills, set(), set())
+    if odd:
+        raise AssertionError(f"unexpected odd_closeby {odd}")
+    if len(closes) != 1:
+        raise AssertionError(f"expected one close, got {closes}")
+    c = closes[0]
+    if c.get("side") != "S" or c.get("layer_index") != 4:
+        raise AssertionError("side/layer_index")
+    if c.get("class") != "scalp":
+        raise AssertionError("class scalp")
+    if c.get("gross") != 1.32 or c.get("commission") != -0.08:
+        raise AssertionError("gross/commission")
+    if c.get("net") != 1.24:
+        raise AssertionError(f"net expected 1.24 got {c.get('net')}")
+    return "E3 production close-by net 1.24"
+
+
+def check_et28():
+    import ejection_view as ev
+
+    kwargs = _fixture_view_kwargs()
+    view = ev.build_ejection_view(**kwargs)
+    rolls = {r["ticket"]: r for r in view.get("rolls", [])}
+    row = rolls.get(7001)
+    if not row or (row.get("realised") or {}).get("net") != -3.78:
+        raise AssertionError("roll row net")
+    days = view.get("days") or []
+    side_l = None
+    for block in days:
+        if block.get("ftmo_day") != FTMO_D.isoformat():
+            continue
+        for inst in block.get("instances") or []:
+            if inst.get("instance_id") == FIXTURE_INSTANCE:
+                for side in inst.get("sides") or []:
+                    if side.get("side") == "L":
+                        side_l = side
+    scalps = (side_l or {}).get("scalps") or {}
+    if scalps.get("count") != 3:
+        raise AssertionError("roll close must not count as scalp")
+    return "roll class excluded from scalp bucket"
+
+
+def check_et29():
+    if not URL:
+        raise AssertionError("VERIFY_DATABASE_URL not set")
+    import archive_worker as aw
+
+    conn = psycopg2.connect(URL)
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            _apply_base_migrations(cur)
+            _apply_004(cur)
+            for tbl in ("fill_logs", "scalp_history", "ea_events", "config_events"):
+                cur.execute(f"DELETE FROM {tbl}")
+            _seed_session(cur)
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            out_ms = now_ms - 2 * 3600 * 1000
+            ent_ms = now_ms - 200 * 3600 * 1000
+            seq = 1
+            _insert_fill(
+                cur, seq, ent_ms, 880001, 880100, 880001,
+                entry_type="IN", deal_type="buy", side="L", role="ENT", layer_index=0,
+            )
+            seq += 1
+            _insert_fill(
+                cur, seq, ent_ms, 880002, 880100, 880002,
+                entry_type="IN", deal_type="sell", side="L", role="EXT", layer_index=0,
+            )
+            seq += 1
+            _insert_fill(
+                cur, seq, out_ms, 880003, 880200, 880001,
+                entry_type="OUT_BY", deal_type="sell", side="L", profit=0.50,
+            )
+            seq += 1
+            _insert_fill(
+                cur, seq, out_ms, 880004, 880200, 880002,
+                entry_type="OUT_BY", deal_type="buy", side="L", profit=0.0,
+            )
+            conn.commit()
+        redis = FakeRedis()
+        aw.try_ejection_build(conn, redis, force=True)
+    finally:
+        conn.close()
+    body = _reload_app_fleet_b(redis).app.test_client().get(
+        f"/api/g/{_reload_app_fleet_b(redis).PUBLIC_GRIND_STATUS_TOKEN}/ejection?hours=168"
+    ).get_json()
+    found = False
+    for block in body.get("days") or []:
+        for inst in block.get("instances") or []:
+            if inst.get("instance_id") != FIXTURE_INSTANCE:
+                continue
+            for side in inst.get("sides") or []:
+                scalps = side.get("scalps") or {}
+                if scalps.get("count") == 1 and scalps.get("net") == 0.42:
+                    found = True
+    if not found:
+        raise AssertionError("expected complete close with old ENT deal")
+    return "position-wide ledger load includes aged ENT deals"
+
+
+def check_et30():
+    import ejection_view as ev
+
+    close_ms = _ms("2026-09-24T14:00:00Z")
+    fills = [
+        {
             "instance_id": FIXTURE_INSTANCE,
-        })
-    return rows
+            "deal_ticket": 990001,
+            "order_ticket": 990100,
+            "position_id": 990001,
+            "entry_type": "OUT_BY",
+            "deal_type": "sell",
+            "side": "L",
+            "profit": 1.0,
+            "commission": 0.0,
+            "swap": 0.0,
+            "ea_time_ms": close_ms,
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "deal_ticket": 990002,
+            "order_ticket": 990100,
+            "position_id": 990002,
+            "entry_type": "OUT_BY",
+            "deal_type": "buy",
+            "side": "L",
+            "profit": 0.0,
+            "commission": 0.0,
+            "swap": 0.0,
+            "ea_time_ms": close_ms,
+        },
+    ]
+    kwargs = _fixture_view_kwargs()
+    kwargs["fill_logs"] = kwargs["fill_logs"] + fills
+    view = ev.build_ejection_view(**kwargs)
+    side_l = None
+    for block in view.get("days") or []:
+        if block.get("ftmo_day") != FTMO_D.isoformat():
+            continue
+        for inst in block.get("instances") or []:
+            if inst.get("instance_id") == FIXTURE_INSTANCE:
+                for side in inst.get("sides") or []:
+                    if side.get("side") == "L":
+                        side_l = side
+    if side_l is None:
+        raise AssertionError("side L missing")
+    if side_l.get("incomplete", 0) < 1:
+        raise AssertionError("incomplete count")
+    if side_l.get("closed_net") is not None:
+        raise AssertionError("closed_net must be null")
+    if side_l.get("scalps", {}).get("net") is not None:
+        raise AssertionError("bucket net must be null not zero")
+    if side_l.get("net_known") is not False:
+        raise AssertionError("net_known false")
+    return "incomplete close nulls bucket money fields"
+
+
+def check_et31():
+    import ejection_view as ev
+
+    close_ms = _ms("2026-09-24T15:00:00Z")
+    fills = [
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "deal_ticket": 991001,
+            "order_ticket": 991100,
+            "position_id": 991001,
+            "entry_type": "OUT_BY",
+            "deal_type": "sell",
+            "side": "L",
+            "profit": 0.5,
+            "commission": 0.0,
+            "swap": 0.0,
+            "ea_time_ms": close_ms,
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "deal_ticket": 991002,
+            "order_ticket": 991100,
+            "position_id": 991002,
+            "entry_type": "OUT_BY",
+            "deal_type": "buy",
+            "side": "L",
+            "profit": 0.0,
+            "commission": 0.0,
+            "swap": 0.0,
+            "ea_time_ms": close_ms,
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "deal_ticket": 991003,
+            "order_ticket": 991100,
+            "position_id": 991003,
+            "entry_type": "OUT_BY",
+            "deal_type": "buy",
+            "side": "L",
+            "profit": 0.0,
+            "commission": 0.0,
+            "swap": 0.0,
+            "ea_time_ms": close_ms,
+        },
+    ]
+    _, odd = ev.closed_trades_from_fills(fills, set(), set())
+    if not odd or odd[0].get("order_ticket") != 991100:
+        raise AssertionError("odd_closeby missing")
+    kwargs = _fixture_view_kwargs()
+    kwargs["fill_logs"] = kwargs["fill_logs"] + fills
+    view = ev.build_ejection_view(**kwargs)
+    recon = [
+        b for b in view.get("reconciliation") or []
+        if b.get("instance_id") == FIXTURE_INSTANCE and b.get("ftmo_day") == FTMO_D.isoformat()
+    ]
+    if not recon or not recon[0].get("odd_closeby"):
+        raise AssertionError("reconciliation odd_closeby")
+    return "three-leg close-by listed not counted"
+
+
+def check_et32():
+    import ejection_view as ev
+
+    full = ev.build_ejection_view(**_fixture_view_kwargs())
+    kwargs = _fixture_view_kwargs()
+    kwargs["scalps"] = []
+    empty = ev.build_ejection_view(**kwargs)
+    if full.get("days") != empty.get("days"):
+        raise AssertionError("days must not depend on scalp_history rows")
+    return "days from ledger only"
+
+
+def check_et33():
+    os.environ["TELEMETRY_API_KEY"] = "et33-test-key"
+    pipshed = _reload_app_fleet_b(FakeRedis())
+    client = pipshed.app.test_client()
+    payload = {"instance_id": FIXTURE_INSTANCE, "open_layers_long": 1}
+    resp = client.post(
+        "/api/telemetry/push",
+        json=payload,
+        headers={"Authorization": f"Bearer {pipshed.TELEMETRY_API_KEY}"},
+    )
+    if resp.status_code != 200:
+        raise AssertionError(f"push failed {resp.status_code}")
+    raw = pipshed.r.get(f"fxmatrix:state:{FIXTURE_INSTANCE}")
+    stored = json.loads(raw)
+    if not stored.get("_received_at"):
+        raise AssertionError("_received_at missing from stored state")
+    stored["_received_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=30)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    redis = FakeRedis()
+    _seed_fresh_ejection_view(redis)
+    redis.set(f"fxmatrix:state:{FIXTURE_INSTANCE}", json.dumps(stored))
+    body = _reload_app_fleet_b(redis).app.test_client().get(
+        f"/api/g/{pipshed.PUBLIC_GRIND_STATUS_TOKEN}/ejection"
+    ).get_json()
+    age = body.get("now", {}).get(FIXTURE_INSTANCE, {}).get("L", {}).get("state_age_s")
+    if age is None or abs(int(age) - 30) > 2:
+        raise AssertionError(f"state_age_s expected ~30 got {age}")
+    return "telemetry push _received_at drives state_age_s"
+
+
+def check_et34():
+    import ejection_view as ev
+
+    fills = _e3_production_sample_fills()
+    for row in fills:
+        if row.get("deal_ticket") == 1580502400:
+            row["swap"] = -0.30
+    closes, _ = ev.closed_trades_from_fills(fills, set(), set())
+    if closes[0].get("net") != 0.94:
+        raise AssertionError(f"net expected 0.94 got {closes[0].get('net')}")
+    return "E3 sample with swap -0.30 net 0.94"
 
 
 def _fixture_view_kwargs():
@@ -1355,13 +1813,21 @@ def _fixture_view_kwargs():
         },
     ]
     scalps = []
-    deal_pairs = [(6101, 6102), (6103, 6104), (6105, 6106), (6107, 6108)]
-    for direction, gross, hour, (entry_d, exit_d) in zip(
-        ["LONG", "LONG", "LONG", "SHORT"],
-        [0.50, 0.50, 0.50, 0.50],
-        [9, 9, 9, 9],
-        deal_pairs,
-    ):
+    fill_logs = []
+    scalp_specs = [
+        ("LONG", 0.50, 5001, 6001, 6002, 9, 610000),
+        ("LONG", 0.50, 5002, 6003, 6004, 9, 610010),
+        ("LONG", 0.50, 5003, 6005, 6006, 9, 610020),
+        ("SHORT", 0.50, 5004, 6007, 6008, 9, 610030),
+    ]
+    for direction, gross, order_t, layer_pos, exit_pos, hour, deal_base in scalp_specs:
+        close_ms = _ms(f"2026-09-24T{hour:02d}:05:00Z")
+        side = "L" if direction == "LONG" else "S"
+        fill_logs.extend(
+            _ledger_close_rows(
+                close_ms, order_t, layer_pos, exit_pos, side, 0, gross, deal_base=deal_base,
+            )
+        )
         scalps.append({
             "instance_id": FIXTURE_INSTANCE,
             "direction": direction,
@@ -1370,11 +1836,21 @@ def _fixture_view_kwargs():
             "rolled": False,
             "broker_utc_offset_s": 0,
             "account_login": FIXTURE_ACCOUNT,
-            "close_time_broker": datetime(2026, 9, 24, hour, 0, tzinfo=timezone.utc),
-            "entry_deal_ticket": entry_d,
-            "exit_deal_ticket": exit_d,
+            "close_time_broker": datetime(2026, 9, 24, hour, 5, tzinfo=timezone.utc),
+            "entry_deal_ticket": None,
+            "exit_deal_ticket": None,
             "layer_depth": 0,
         })
+    roll_ms = _ms("2026-09-24T10:17:00Z")
+    fill_logs.extend(
+        _ledger_close_rows(
+            roll_ms, 9101, 7001, 7002, "L", 0, -3.50, layer_swap=-0.20, deal_base=620000,
+        )
+    )
+    eject_ms = _ms("2026-09-24T11:05:00Z")
+    fill_logs.extend(
+        _ledger_close_rows(eject_ms, 9103, 8001, 8002, "L", 0, -1.00, deal_base=630000)
+    )
     scalps.append({
         "instance_id": FIXTURE_INSTANCE,
         "direction": "LONG",
@@ -1384,8 +1860,8 @@ def _fixture_view_kwargs():
         "broker_utc_offset_s": 0,
         "account_login": FIXTURE_ACCOUNT,
         "close_time_broker": datetime(2026, 9, 24, 10, 20, tzinfo=timezone.utc),
-        "entry_deal_ticket": 7001,
-        "exit_deal_ticket": 7002,
+        "entry_deal_ticket": None,
+        "exit_deal_ticket": None,
         "layer_depth": 0,
     })
     scalps.append({
@@ -1397,62 +1873,10 @@ def _fixture_view_kwargs():
         "broker_utc_offset_s": 0,
         "account_login": FIXTURE_ACCOUNT,
         "close_time_broker": datetime(2026, 9, 24, 11, 10, tzinfo=timezone.utc),
-        "entry_deal_ticket": 8001,
-        "exit_deal_ticket": 8002,
+        "entry_deal_ticket": None,
+        "exit_deal_ticket": None,
         "layer_depth": 0,
     })
-    fill_logs = [
-        {
-            "deal_ticket": 7001,
-            "order_ticket": 9001,
-            "position_id": 7001,
-            "commission": -0.07,
-            "swap": 0,
-            "instance_id": FIXTURE_INSTANCE,
-        },
-        {
-            "deal_ticket": 7002,
-            "order_ticket": 9001,
-            "position_id": 7001,
-            "commission": -0.07,
-            "swap": -0.20,
-            "instance_id": FIXTURE_INSTANCE,
-        },
-        {
-            "deal_ticket": 8001,
-            "order_ticket": 9003,
-            "position_id": 8001,
-            "commission": -0.07,
-            "swap": 0,
-            "instance_id": FIXTURE_INSTANCE,
-        },
-        {
-            "deal_ticket": 8002,
-            "order_ticket": 9003,
-            "position_id": 8001,
-            "commission": -0.07,
-            "swap": 0,
-            "instance_id": FIXTURE_INSTANCE,
-        },
-    ]
-    for i, (entry_d, exit_d) in enumerate(deal_pairs):
-        order_t = 5101 + i
-        fill_logs.append({
-            "deal_ticket": entry_d,
-            "order_ticket": order_t,
-            "position_id": entry_d,
-            "commission": -0.07,
-            "swap": 0,
-            "instance_id": FIXTURE_INSTANCE,
-        })
-        fill_logs.append({
-            "deal_ticket": exit_d,
-            "order_ticket": order_t,
-            "position_id": entry_d,
-            "commission": -0.07,
-            "swap": 0,
-            "instance_id": FIXTURE_INSTANCE,
-        })
     return {
         "generated_at": "2026-09-24T12:00:00Z",
         "fleet": "B",
@@ -1483,11 +1907,9 @@ CHECKS = [
     ("ET11", check_et11),
     ("ET12", check_et12),
     ("ET13", check_et13),
-    ("ET14", check_et14),
     ("ET15", check_et15),
     ("ET16", check_et16),
     ("ET17", check_et17),
-    ("ET18", check_et18),
     ("ET19", check_et19),
     ("ET20", check_et20),
     ("ET21", check_et21),
@@ -1496,6 +1918,14 @@ CHECKS = [
     ("ET24", check_et24),
     ("ET25", check_et25),
     ("ET26", check_et26),
+    ("ET27", check_et27),
+    ("ET28", check_et28),
+    ("ET29", check_et29),
+    ("ET30", check_et30),
+    ("ET31", check_et31),
+    ("ET32", check_et32),
+    ("ET33", check_et33),
+    ("ET34", check_et34),
 ]
 
 

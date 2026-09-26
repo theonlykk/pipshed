@@ -173,11 +173,12 @@ def seed_full_fixture(cur):
         ("LONG", 0.50, 6005, 6006),
         ("SHORT", 0.50, 6007, 6008),
     ]
-    for direction, gross, entry_d, exit_d in scalp_specs:
+    for i, (direction, gross, entry_d, exit_d) in enumerate(scalp_specs):
+        order_t = 5001 + i
         seq += 1
-        _insert_out_by(cur, seq, 1000 + seq, entry_d, t_scalp + seq)
+        _insert_out_by(cur, seq, order_t, entry_d, t_scalp + seq)
         seq += 1
-        _insert_out_by(cur, seq, 1000 + seq, exit_d, t_scalp + seq + 1)
+        _insert_out_by(cur, seq, order_t, exit_d, t_scalp + seq + 1)
         close_utc = datetime.fromtimestamp(t_scalp / 1000.0, tz=timezone.utc) + timedelta(minutes=seq)
         _insert_scalp(cur, seq, direction, gross, close_utc, entry_deal=entry_d, exit_deal=exit_d)
 
@@ -190,7 +191,7 @@ def seed_full_fixture(cur):
         "ROLL_ACCEPTED",
         "INFO",
         roll_accept_ms,
-        9001,
+        7001,
         {
             "side": "L",
             "layer_index": 0,
@@ -203,7 +204,7 @@ def seed_full_fixture(cur):
         },
     )
     seq += 1
-    _insert_ea(cur, seq, "ROLL_FILLED", "INFO", roll_fill_ms, 9001, {"level": 1.326})
+    _insert_ea(cur, seq, "ROLL_FILLED", "INFO", roll_fill_ms, 7001, {"level": 1.326})
     seq += 1
     _insert_out_by(cur, seq, 9001, 7001, roll_fill_ms)
     seq += 1
@@ -269,9 +270,9 @@ def seed_full_fixture(cur):
     eject_accept_ms = _ms("2026-09-24T11:00:00Z")
     eject_fill_ms = _ms("2026-09-24T11:05:00Z")
     seq += 1
-    _insert_ea(cur, seq, "EJECT_ACCEPTED", "INFO", eject_accept_ms, 9003, {"source": "auto"})
+    _insert_ea(cur, seq, "EJECT_ACCEPTED", "INFO", eject_accept_ms, 8001, {"source": "auto"})
     seq += 1
-    _insert_ea(cur, seq, "EJECT_FILLED", "INFO", eject_fill_ms, 9003, {"offset": 0})
+    _insert_ea(cur, seq, "EJECT_FILLED", "INFO", eject_fill_ms, 8001, {"offset": 0})
     seq += 1
     _insert_out_by(cur, seq, 9003, 8001, eject_fill_ms)
     seq += 1
@@ -485,12 +486,45 @@ def check_et6():
     return "WARN allow-list contains ROLL_* codes"
 
 
-def _reload_app_fleet_b():
+class FakeRedis:
+    def __init__(self):
+        self._kv = {}
+        self._lists = {}
+
+    def get(self, key):
+        return self._kv.get(key)
+
+    def set(self, key, value, ex=None):
+        self._kv[key] = value
+
+    def lrange(self, key, start, end):
+        items = self._lists.get(key, [])
+        if end == -1:
+            end = len(items) - 1
+        if not items or start > end:
+            return []
+        return items[start : end + 1]
+
+
+class BrokenRedis:
+    def get(self, *args, **kwargs):
+        import redis
+
+        raise redis.exceptions.ConnectionError("redis unavailable")
+
+    def lrange(self, *args, **kwargs):
+        import redis
+
+        raise redis.exceptions.ConnectionError("redis unavailable")
+
+
+def _reload_app_fleet_b(redis_client=None):
     os.environ["GRIND_FLEET"] = "B"
     import importlib
     import app as pipshed
 
     importlib.reload(pipshed)
+    pipshed.r = redis_client if redis_client is not None else FakeRedis()
     return pipshed
 
 
@@ -515,7 +549,7 @@ def check_et8():
 
     view = ev.build_ejection_view(**_fixture_view_kwargs())
     rolls = {r["ticket"]: r for r in view.get("rolls", [])}
-    row = rolls.get(9001)
+    row = rolls.get(7001)
     if not row:
         raise AssertionError("roll 9001 missing")
     if row.get("status") != "filled":
@@ -587,8 +621,12 @@ def check_et10():
     pipshed = _reload_app_fleet_b()
     client = pipshed.app.test_client()
     tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
-    a = client.get(f"/api/g/{tok}/ejection").get_json()
-    b = client.get(f"/api/g/{tok}/ejection/abc123").get_json()
+    resp_a = client.get(f"/api/g/{tok}/ejection")
+    resp_b = client.get(f"/api/g/{tok}/ejection/abc123")
+    if resp_a.status_code != 200 or resp_b.status_code != 200:
+        raise AssertionError("cache-buster routes must return 200")
+    a = resp_a.get_json()
+    b = resp_b.get_json()
     a.pop("generated_at", None)
     b.pop("generated_at", None)
     if a != b:
@@ -684,6 +722,245 @@ def check_et15():
     return "Q4 disagree when state rolled and events empty"
 
 
+def _two_roll_view_kwargs():
+    kwargs = _fixture_view_kwargs()
+    base_ms = _ms("2026-09-24T10:00:00Z")
+    events = [e for e in kwargs["events"] if e.get("code") not in ("ROLL_ACCEPTED", "ROLL_FILLED")]
+    events.extend([
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "code": "ROLL_ACCEPTED",
+            "level": "INFO",
+            "ea_time_ms": base_ms,
+            "ticket": 7101,
+            "detail": {"side": "L", "layer_index": 0, "source": "live"},
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "code": "ROLL_FILLED",
+            "level": "INFO",
+            "ea_time_ms": base_ms + 17 * 60 * 1000,
+            "ticket": 7101,
+            "detail": {},
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "code": "ROLL_ACCEPTED",
+            "level": "INFO",
+            "ea_time_ms": base_ms + 1000,
+            "ticket": 7201,
+            "detail": {"side": "L", "layer_index": 1, "source": "live"},
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "code": "ROLL_FILLED",
+            "level": "INFO",
+            "ea_time_ms": base_ms + 18 * 60 * 1000,
+            "ticket": 7201,
+            "detail": {},
+        },
+    ])
+    scalps = [s for s in kwargs["scalps"] if not s.get("rolled")]
+    scalps.extend([
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "direction": "LONG",
+            "gross_pnl": -3.50,
+            "rolled": True,
+            "ejected": False,
+            "broker_utc_offset_s": 0,
+            "account_login": FIXTURE_ACCOUNT,
+            "close_time_broker": datetime(2026, 9, 24, 10, 20, tzinfo=timezone.utc),
+            "entry_deal_ticket": 7101,
+            "exit_deal_ticket": 7102,
+            "layer_depth": 0,
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "direction": "LONG",
+            "gross_pnl": -2.00,
+            "rolled": True,
+            "ejected": False,
+            "broker_utc_offset_s": 0,
+            "account_login": FIXTURE_ACCOUNT,
+            "close_time_broker": datetime(2026, 9, 24, 10, 21, tzinfo=timezone.utc),
+            "entry_deal_ticket": 7201,
+            "exit_deal_ticket": 7202,
+            "layer_depth": 1,
+        },
+    ])
+    fill_logs = list(kwargs["fill_logs"])
+    for pos, entry_d, exit_d in ((7101, 7101, 7102), (7201, 7201, 7202)):
+        fill_logs.extend([
+            {
+                "deal_ticket": entry_d,
+                "order_ticket": 9100 + pos,
+                "position_id": pos,
+                "commission": -0.07,
+                "swap": 0,
+                "instance_id": FIXTURE_INSTANCE,
+            },
+            {
+                "deal_ticket": exit_d,
+                "order_ticket": 9100 + pos,
+                "position_id": pos,
+                "commission": -0.07,
+                "swap": 0,
+                "instance_id": FIXTURE_INSTANCE,
+            },
+        ])
+    kwargs["events"] = events
+    kwargs["scalps"] = scalps
+    kwargs["fill_logs"] = fill_logs
+    return kwargs
+
+
+def check_et16():
+    import ejection_view as ev
+
+    view = ev.build_ejection_view(**_two_roll_view_kwargs())
+    rolls = {r["ticket"]: r for r in view.get("rolls", [])}
+    r7101 = rolls.get(7101)
+    r7201 = rolls.get(7201)
+    if not r7101 or r7101.get("realised", {}).get("net") != -3.64:
+        raise AssertionError(f"7101 net expected -3.64 got {r7101}")
+    if not r7201 or r7201.get("realised", {}).get("net") != -2.14:
+        raise AssertionError(f"7201 net expected -2.14 got {r7201}")
+    return "two rolls same day distinct P&L by position ticket"
+
+
+def check_et17():
+    import ejection_view as ev
+
+    kwargs = _fixture_view_kwargs()
+    kwargs["events"].append({
+        "instance_id": FIXTURE_INSTANCE,
+        "code": "ROLL_FILLED",
+        "level": "INFO",
+        "ea_time_ms": _ms("2026-09-24T12:00:00Z"),
+        "ticket": 7301,
+        "detail": {},
+    })
+    view = ev.build_ejection_view(**kwargs)
+    recon = next(
+        (b for b in view.get("reconciliation") or [] if b.get("instance_id") == FIXTURE_INSTANCE),
+        None,
+    )
+    if recon is None:
+        raise AssertionError("reconciliation missing")
+    unmatched = recon.get("filled_unmatched") or []
+    tickets = {u.get("ticket") for u in unmatched}
+    if 7301 not in tickets:
+        raise AssertionError("7301 not in filled_unmatched")
+    roll7301 = next((r for r in view.get("rolls") or [] if r.get("ticket") == 7301), None)
+    if roll7301 and roll7301.get("realised") is not None:
+        raise AssertionError("7301 realised should be null")
+    return "ROLL_FILLED without scalp -> filled_unmatched"
+
+
+def check_et18():
+    import ejection_view as ev
+
+    result = ev.layer_realised_from_fills(
+        {
+            "gross_pnl": -1.0,
+            "entry_deal_ticket": 99991,
+            "exit_deal_ticket": 99992,
+            "instance_id": FIXTURE_INSTANCE,
+        },
+        [],
+    )
+    if result is not None:
+        raise AssertionError("empty position set must return None")
+    return "layer_realised_from_fills fail-closed on missing fills"
+
+
+def check_et19():
+    pipshed = _reload_app_fleet_b(BrokenRedis())
+    client = pipshed.app.test_client()
+    tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
+    resp = client.get(f"/api/g/{tok}/ejection")
+    if resp.status_code != 200:
+        raise AssertionError(f"expected 200 with redis down, got {resp.status_code}")
+    body = resp.get_json()
+    if body.get("now_source") != "events":
+        raise AssertionError("now_source must be events when redis down")
+    for key in ("rolls", "days", "reconciliation"):
+        if key not in body:
+            raise AssertionError(f"missing {key} with redis down")
+    return "redis down serves DB sections with now_source events"
+
+
+def _summary_base_records():
+    records = []
+    for gross in (0.50, 0.50, 0.50, 0.50):
+        records.append({
+            "instrument": "GBPUSD",
+            "entry_price": 1.33,
+            "exit_price": 1.3305,
+            "gross_pnl": gross,
+            "rolled": False,
+            "ejected": False,
+            "close_time": "2026-09-24 10:00:00",
+        })
+    records.append({
+        "instrument": "GBPUSD",
+        "entry_price": 1.33,
+        "exit_price": 1.3265,
+        "gross_pnl": -3.50,
+        "rolled": True,
+        "ejected": False,
+        "close_time": "2026-09-24 10:20:00",
+    })
+    records.append({
+        "instrument": "GBPUSD",
+        "entry_price": 1.33,
+        "exit_price": 1.329,
+        "gross_pnl": -1.00,
+        "rolled": False,
+        "ejected": True,
+        "close_time": "2026-09-24 11:10:00",
+    })
+    return records
+
+
+def check_et20():
+    pipshed = _reload_app_fleet_b(FakeRedis())
+
+    records = _summary_base_records()
+    original_collect = pipshed._collect_today_scalp_records
+    original_between = pipshed._collect_scalp_records_between
+    original_metrics = pipshed._read_global_account_metrics
+    original_book = pipshed._collect_open_book_stats
+    pipshed._collect_today_scalp_records = lambda selected_date=None: ("2026-09-24", records)
+    pipshed._collect_scalp_records_between = lambda start, end: records
+    pipshed._read_global_account_metrics = lambda: None
+    pipshed._collect_open_book_stats = lambda: {
+        "position_count": 0,
+        "pair_count": 0,
+        "deepest_stack": 0,
+        "open_mtm": 0.0,
+    }
+    try:
+        text = pipshed._build_daily_summary_text("2026-09-24")
+    finally:
+        pipshed._collect_today_scalp_records = original_collect
+        pipshed._collect_scalp_records_between = original_between
+        pipshed._read_global_account_metrics = original_metrics
+        pipshed._collect_open_book_stats = original_book
+    if "Scalps       4 closed" not in text:
+        raise AssertionError("expected Scalps 4 closed")
+    if "Rolls 1 -3.50 USD   Ejections 1 -1.00 USD" not in text:
+        raise AssertionError("missing Rolls/Ejections line")
+    if "-2.50 USD gross" not in text:
+        raise AssertionError("expected gross -2.50")
+    if "Commission -0.30 USD" not in text:
+        raise AssertionError("expected commission -0.30")
+    if "Net -2.80 USD" not in text:
+        raise AssertionError("expected net -2.80")
+    return "summary counts exclude roll/eject; money includes all"
+
+
 def _q1_fill_rows():
     rows = []
     for deal_ticket, order_ticket, position_id, comm, swap in (
@@ -711,7 +988,7 @@ def _fixture_view_kwargs():
             "code": "ROLL_ACCEPTED",
             "level": "INFO",
             "ea_time_ms": _ms("2026-09-24T10:00:00Z"),
-            "ticket": 9001,
+            "ticket": 7001,
             "detail": {
                 "side": "L",
                 "layer_index": 0,
@@ -728,7 +1005,7 @@ def _fixture_view_kwargs():
             "code": "ROLL_FILLED",
             "level": "INFO",
             "ea_time_ms": _ms("2026-09-24T10:17:00Z"),
-            "ticket": 9001,
+            "ticket": 7001,
             "detail": {"level": 1.326},
         },
         {
@@ -752,7 +1029,7 @@ def _fixture_view_kwargs():
             "code": "EJECT_ACCEPTED",
             "level": "INFO",
             "ea_time_ms": _ms("2026-09-24T11:00:00Z"),
-            "ticket": 9003,
+            "ticket": 8001,
             "detail": {"source": "auto"},
         },
         {
@@ -760,7 +1037,7 @@ def _fixture_view_kwargs():
             "code": "EJECT_FILLED",
             "level": "INFO",
             "ea_time_ms": _ms("2026-09-24T11:05:00Z"),
-            "ticket": 9003,
+            "ticket": 8001,
             "detail": {"offset": 0},
         },
         {
@@ -815,8 +1092,8 @@ def _fixture_view_kwargs():
         "broker_utc_offset_s": 0,
         "account_login": FIXTURE_ACCOUNT,
         "close_time_broker": datetime(2026, 9, 24, 11, 10, tzinfo=timezone.utc),
-        "entry_deal_ticket": 8101,
-        "exit_deal_ticket": 8102,
+        "entry_deal_ticket": 8001,
+        "exit_deal_ticket": 8002,
         "layer_depth": 0,
     })
     fill_logs = [
@@ -837,26 +1114,27 @@ def _fixture_view_kwargs():
             "instance_id": FIXTURE_INSTANCE,
         },
         {
-            "deal_ticket": 8101,
+            "deal_ticket": 8001,
             "order_ticket": 9003,
-            "position_id": 8101,
+            "position_id": 8001,
             "commission": -0.07,
             "swap": 0,
             "instance_id": FIXTURE_INSTANCE,
         },
         {
-            "deal_ticket": 8102,
+            "deal_ticket": 8002,
             "order_ticket": 9003,
-            "position_id": 8101,
+            "position_id": 8001,
             "commission": -0.07,
             "swap": 0,
             "instance_id": FIXTURE_INSTANCE,
         },
     ]
-    for entry_d, exit_d in deal_pairs:
+    for i, (entry_d, exit_d) in enumerate(deal_pairs):
+        order_t = 5101 + i
         fill_logs.append({
             "deal_ticket": entry_d,
-            "order_ticket": entry_d,
+            "order_ticket": order_t,
             "position_id": entry_d,
             "commission": -0.07,
             "swap": 0,
@@ -864,7 +1142,7 @@ def _fixture_view_kwargs():
         })
         fill_logs.append({
             "deal_ticket": exit_d,
-            "order_ticket": exit_d,
+            "order_ticket": order_t,
             "position_id": entry_d,
             "commission": -0.07,
             "swap": 0,
@@ -902,6 +1180,11 @@ CHECKS = [
     ("ET13", check_et13),
     ("ET14", check_et14),
     ("ET15", check_et15),
+    ("ET16", check_et16),
+    ("ET17", check_et17),
+    ("ET18", check_et18),
+    ("ET19", check_et19),
+    ("ET20", check_et20),
 ]
 
 

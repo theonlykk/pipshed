@@ -162,8 +162,12 @@ def _insert_fill(
     layer_index=None,
     profit=0.0,
     swap=0.0,
-    commission=-0.04,
+    commission=None,
 ):
+    # Production shape (C56 fix 3, E3): commission is charged on IN deals
+    # only (-0.04 each at 0.01 lots); OUT_BY / OUT deals carry 0.0.
+    if commission is None:
+        commission = -0.04 if entry_type == "IN" else 0.0
     cur.execute(
         "INSERT INTO fill_logs (instance_id, magic, session_id, seq, ea_time_ms, received_at,"
         " deal_ticket, order_ticket, position_id, entry_type, deal_type, side, layer_index, role,"

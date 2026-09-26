@@ -1015,9 +1015,29 @@ def check_et24():
         cur = conn.cursor()
         seed_full_fixture(cur)
         conn.commit()
+        # The worker builds 168 h back from NOW and the web trims to 48 h, so a
+        # fixed-date fixture expires. Shift it forward by WHOLE days (keeps each
+        # row's time of day, hence its FTMO day relative to the 22:00Z boundary)
+        # so the roll (D 10:17Z) lands within the last 24 h.
+        roll_filled = datetime(2026, 9, 24, 10, 17, tzinfo=timezone.utc)
+        shift_days = (datetime.now(timezone.utc) - roll_filled).days
+        if shift_days > 0:
+            shift_ms = shift_days * 86400 * 1000
+            cur.execute("UPDATE ea_events SET ea_time_ms = ea_time_ms + %s,"
+                        " received_at = received_at + make_interval(days => %s)",
+                        (shift_ms, shift_days))
+            cur.execute("UPDATE fill_logs SET ea_time_ms = ea_time_ms + %s,"
+                        " received_at = received_at + make_interval(days => %s)",
+                        (shift_ms, shift_days))
+            cur.execute("UPDATE scalp_history SET"
+                        " close_time_broker = close_time_broker + make_interval(days => %s),"
+                        " received_at = received_at + make_interval(days => %s)",
+                        (shift_days, shift_days))
+            conn.commit()
         aw.try_ejection_build(conn, redis, force=True)
     finally:
         conn.close()
+    shifted_day = FTMO_D + timedelta(days=max(shift_days, 0))
     raw = redis.get(ARCHIVE_EJECTION_KEY)
     if not raw:
         raise AssertionError("worker did not publish ejection view")
@@ -1030,12 +1050,17 @@ def check_et24():
     ).get_json()
     rolls = {r["ticket"]: r for r in body.get("rolls") or []}
     row = rolls.get(7001)
-    if not row or row.get("realised", {}).get("net") != -3.84:
-        raise AssertionError(f"roll 7001 net expected -3.84 got {row}")
+    # By hand for the DB fixture (seed_full_fixture), Q1 rule: the roll's
+    # position set is {7001, 7002} via its exit order 9001, i.e. deals 5011,
+    # 5012, 7001, 7002, 7003, 7004: commission 6 x -0.07 = -0.42, swap -0.20;
+    # net = -3.50 - 0.42 - 0.20 = -4.12. (-3.84 belongs to the in-memory
+    # fixture of ET8, which has two deals.)
+    if not row or (row.get("realised") or {}).get("net") != -4.12:
+        raise AssertionError(f"roll 7001 net expected -4.12 got {row}")
     days = body.get("days") or []
     side_l = None
     for block in days:
-        if block.get("ftmo_day") != FTMO_D.isoformat():
+        if block.get("ftmo_day") != shifted_day.isoformat():
             continue
         for inst in block.get("instances") or []:
             if inst.get("instance_id") != FIXTURE_INSTANCE:

@@ -1695,27 +1695,19 @@ def public_ejection_telemetry(token, _ignored):
         return jsonify({"error": "not found"}), 404
 
     try:
-        import psycopg2
-
         import ejection_view as ev
 
         hours = request.args.get("hours", 48)
-        conn = None
-        database_url = os.environ.get("DATABASE_URL")
-        if database_url:
-            conn = psycopg2.connect(database_url)
-        try:
-            payload = ev.fetch_ejection_view(
-                conn,
-                hours,
-                GRIND_FLEET,
-                GRIND_FLEET_LABEL,
-                GRIND_INSTANCES,
-                r,
-            )
-        finally:
-            if conn is not None:
-                conn.close()
+        payload, err = ev.serve_ejection_from_redis(
+            r,
+            hours,
+            GRIND_FLEET,
+            GRIND_FLEET_LABEL,
+            GRIND_INSTANCES,
+        )
+        if err is not None:
+            response = jsonify(err)
+            return _apply_no_cache_headers(response), 503
         response = jsonify(payload)
         return _apply_no_cache_headers(response), 200
     except Exception:

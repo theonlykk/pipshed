@@ -39,6 +39,8 @@ EJECTION_TOP_KEYS = (
     "fleet",
     "fleet_label",
     "hours",
+    "view_built_at",
+    "view_age_s",
     "now",
     "rolls",
     "ejections",
@@ -46,6 +48,9 @@ EJECTION_TOP_KEYS = (
     "warnings",
     "reconciliation",
 )
+
+ARCHIVE_EJECTION_KEY = "fxmatrix:ejection:view"
+EJECTION_VIEW_MAX_AGE_S = 300
 
 
 def _ms(iso_z):
@@ -517,6 +522,49 @@ class BrokenRedis:
 
         raise redis.exceptions.ConnectionError("redis unavailable")
 
+    def set(self, *args, **kwargs):
+        import redis
+
+        raise redis.exceptions.ConnectionError("redis unavailable")
+
+
+def _publish_ejection_snapshot(redis_client, snapshot):
+    import archive_worker as aw
+
+    aw.publish_ejection_view(redis_client, snapshot)
+
+
+def _worker_snapshot_from_fixture_kwargs(now=None):
+    """Same payload shape the archive worker publishes (168 h window)."""
+    import ejection_view as ev
+
+    now = now or datetime.now(timezone.utc)
+    end_ms = int(now.timestamp() * 1000)
+    start_ms = end_ms - 168 * 3600 * 1000
+    kwargs = _fixture_view_kwargs()
+    kwargs["window_end_ms"] = end_ms
+    kwargs["window_start_ms"] = start_ms
+    kwargs["now_dt"] = now
+    kwargs["grind_instances"] = sorted(
+        {row.get("instance_id") for row in kwargs["events"] if row.get("instance_id")}
+        | {row.get("instance_id") for row in kwargs["scalps"] if row.get("instance_id")}
+        | {OUTSIDER_INSTANCE}
+    )
+    return ev.build_worker_ejection_snapshot(
+        built_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        window_start_ms=start_ms,
+        window_end_ms=end_ms,
+        events=kwargs["events"],
+        scalps=kwargs["scalps"],
+        fill_logs=kwargs["fill_logs"],
+    )
+
+
+def _seed_fresh_ejection_view(redis_client, snapshot=None):
+    snap = snapshot or _worker_snapshot_from_fixture_kwargs()
+    _publish_ejection_snapshot(redis_client, snap)
+    return snap
+
 
 def _reload_app_fleet_b(redis_client=None):
     os.environ["GRIND_FLEET"] = "B"
@@ -529,7 +577,9 @@ def _reload_app_fleet_b(redis_client=None):
 
 
 def check_et7():
-    pipshed = _reload_app_fleet_b()
+    redis = FakeRedis()
+    _seed_fresh_ejection_view(redis)
+    pipshed = _reload_app_fleet_b(redis)
     client = pipshed.app.test_client()
     bad = client.get("/api/g/wrong-token/ejection")
     if bad.status_code != 404:
@@ -618,7 +668,9 @@ def check_et9():
 
 
 def check_et10():
-    pipshed = _reload_app_fleet_b()
+    redis = FakeRedis()
+    _seed_fresh_ejection_view(redis)
+    pipshed = _reload_app_fleet_b(redis)
     client = pipshed.app.test_client()
     tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
     resp_a = client.get(f"/api/g/{tok}/ejection")
@@ -640,7 +692,9 @@ def check_et11():
     assert ev.clamp_hours(0) == 1
     assert ev.clamp_hours(999) == 168
     assert ev.clamp_hours(48) == 48
-    pipshed = _reload_app_fleet_b()
+    redis = FakeRedis()
+    _seed_fresh_ejection_view(redis)
+    pipshed = _reload_app_fleet_b(redis)
     client = pipshed.app.test_client()
     tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
     r0 = client.get(f"/api/g/{tok}/ejection?hours=0").get_json()
@@ -880,15 +934,266 @@ def check_et19():
     client = pipshed.app.test_client()
     tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
     resp = client.get(f"/api/g/{tok}/ejection")
-    if resp.status_code != 200:
-        raise AssertionError(f"expected 200 with redis down, got {resp.status_code}")
+    if resp.status_code != 503:
+        raise AssertionError(f"expected 503 with redis down, got {resp.status_code}")
     body = resp.get_json()
-    if body.get("now_source") != "events":
-        raise AssertionError("now_source must be events when redis down")
-    for key in ("rolls", "days", "reconciliation"):
-        if key not in body:
-            raise AssertionError(f"missing {key} with redis down")
-    return "redis down serves DB sections with now_source events"
+    if body.get("error") != "ejection view unavailable":
+        raise AssertionError("expected ejection view unavailable error")
+    if "days" in body:
+        raise AssertionError("503 must not include days")
+    return "redis down returns 503 without fabricated view"
+
+
+def check_et21():
+    app_path = os.path.join(ROOT, "app.py")
+    ev_path = os.path.join(ROOT, "ejection_view.py")
+    with open(app_path, encoding="utf-8") as f:
+        app_src = f.read()
+    with open(ev_path, encoding="utf-8") as f:
+        ev_src = f.read()
+    start = app_src.index("def public_ejection_telemetry")
+    end = app_src.index("\ndef ", start + 1)
+    route_block = app_src[start:end]
+    forbidden = ("psycopg2", "DATABASE_URL")
+    for token in forbidden:
+        if token in route_block:
+            raise AssertionError(f"public_ejection_telemetry must not reference {token}")
+    if "psycopg2" in ev_src:
+        raise AssertionError("ejection_view.py must not import or use psycopg2")
+    if "DATABASE_URL" in ev_src:
+        raise AssertionError("ejection_view.py must not reference DATABASE_URL")
+    if "fetch_ejection_view" in ev_src:
+        raise AssertionError("fetch_ejection_view must not remain on the web path")
+    return "route and ejection_view web path have no postgres"
+
+
+def check_et22():
+    if os.environ.get("DATABASE_URL"):
+        raise AssertionError("DATABASE_URL must not be set for this check")
+    redis = FakeRedis()
+    pipshed = _reload_app_fleet_b(redis)
+    client = pipshed.app.test_client()
+    tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
+    resp = client.get(f"/api/g/{tok}/ejection")
+    if resp.status_code != 503:
+        raise AssertionError(f"expected 503 without view key, got {resp.status_code}")
+    body = resp.get_json()
+    if body.get("error") != "ejection view unavailable":
+        raise AssertionError("missing error key")
+    if "days" in body:
+        raise AssertionError("503 body must not expose days")
+    return "missing view key returns 503"
+
+
+def check_et23():
+    redis = FakeRedis()
+    now = datetime.now(timezone.utc)
+    stale_at = now - timedelta(seconds=600)
+    snap = _worker_snapshot_from_fixture_kwargs(now=stale_at)
+    _publish_ejection_snapshot(redis, snap)
+    pipshed = _reload_app_fleet_b(redis)
+    client = pipshed.app.test_client()
+    tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
+    resp = client.get(f"/api/g/{tok}/ejection")
+    if resp.status_code != 503:
+        raise AssertionError(f"expected 503 for stale view, got {resp.status_code}")
+    body = resp.get_json()
+    age = body.get("view_age_s")
+    if age is None or abs(int(age) - 600) > 2:
+        raise AssertionError(f"view_age_s expected ~600, got {age}")
+    return "stale built_at returns 503 with view_age_s"
+
+
+def check_et24():
+    if not URL:
+        raise AssertionError("VERIFY_DATABASE_URL not set")
+    import archive_worker as aw
+
+    redis = FakeRedis()
+    conn = psycopg2.connect(URL)
+    try:
+        cur = conn.cursor()
+        seed_full_fixture(cur)
+        conn.commit()
+        # The worker builds 168 h back from NOW and the web trims to 48 h, so a
+        # fixed-date fixture expires. Shift it forward by WHOLE days (keeps each
+        # row's time of day, hence its FTMO day relative to the 22:00Z boundary)
+        # so the roll (D 10:17Z) lands within the last 24 h.
+        roll_filled = datetime(2026, 9, 24, 10, 17, tzinfo=timezone.utc)
+        shift_days = (datetime.now(timezone.utc) - roll_filled).days
+        if shift_days > 0:
+            shift_ms = shift_days * 86400 * 1000
+            cur.execute("UPDATE ea_events SET ea_time_ms = ea_time_ms + %s,"
+                        " received_at = received_at + make_interval(days => %s)",
+                        (shift_ms, shift_days))
+            cur.execute("UPDATE fill_logs SET ea_time_ms = ea_time_ms + %s,"
+                        " received_at = received_at + make_interval(days => %s)",
+                        (shift_ms, shift_days))
+            cur.execute("UPDATE scalp_history SET"
+                        " close_time_broker = close_time_broker + make_interval(days => %s),"
+                        " received_at = received_at + make_interval(days => %s)",
+                        (shift_days, shift_days))
+            conn.commit()
+        aw.try_ejection_build(conn, redis, force=True)
+    finally:
+        conn.close()
+    shifted_day = FTMO_D + timedelta(days=max(shift_days, 0))
+    raw = redis.get(ARCHIVE_EJECTION_KEY)
+    if not raw:
+        raise AssertionError("worker did not publish ejection view")
+    snap = json.loads(raw)
+    if not snap.get("built_at"):
+        raise AssertionError("built_at missing")
+    pipshed = _reload_app_fleet_b(redis)
+    body = pipshed.app.test_client().get(
+        f"/api/g/{pipshed.PUBLIC_GRIND_STATUS_TOKEN}/ejection"
+    ).get_json()
+    rolls = {r["ticket"]: r for r in body.get("rolls") or []}
+    row = rolls.get(7001)
+    # By hand for the DB fixture (seed_full_fixture), Q1 rule: the roll's
+    # position set is {7001, 7002} via its exit order 9001, i.e. deals 5011,
+    # 5012, 7001, 7002, 7003, 7004: commission 6 x -0.07 = -0.42, swap -0.20;
+    # net = -3.50 - 0.42 - 0.20 = -4.12. (-3.84 belongs to the in-memory
+    # fixture of ET8, which has two deals.)
+    if not row or (row.get("realised") or {}).get("net") != -4.12:
+        raise AssertionError(f"roll 7001 net expected -4.12 got {row}")
+    days = body.get("days") or []
+    side_l = None
+    for block in days:
+        if block.get("ftmo_day") != shifted_day.isoformat():
+            continue
+        for inst in block.get("instances") or []:
+            if inst.get("instance_id") != FIXTURE_INSTANCE:
+                continue
+            for side in inst.get("sides") or []:
+                if side.get("side") == "L":
+                    side_l = side
+    scalps = (side_l or {}).get("scalps") or {}
+    if scalps.get("count") != 3:
+        raise AssertionError(f"L scalps count expected 3 got {scalps.get('count')}")
+    return "worker builder publishes fixture roll and day scalps"
+
+
+def check_et25():
+    now = datetime.now(timezone.utc)
+    end_ms = int(now.timestamp() * 1000)
+    start_ms = end_ms - 168 * 3600 * 1000
+    roll_ms = end_ms - 60 * 3600 * 1000
+    kwargs = _fixture_view_kwargs()
+    kwargs["events"] = [
+        e
+        for e in kwargs["events"]
+        if e.get("code") not in ("ROLL_ACCEPTED", "ROLL_FILLED")
+    ]
+    kwargs["events"].extend([
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "code": "ROLL_ACCEPTED",
+            "level": "INFO",
+            "ea_time_ms": roll_ms - 60000,
+            "ticket": 7501,
+            "detail": {"side": "L", "layer_index": 0},
+        },
+        {
+            "instance_id": FIXTURE_INSTANCE,
+            "code": "ROLL_FILLED",
+            "level": "INFO",
+            "ea_time_ms": roll_ms,
+            "ticket": 7501,
+            "detail": {},
+        },
+        {
+            "instance_id": OUTSIDER_INSTANCE,
+            "code": "ROLL_ACCEPTED",
+            "level": "INFO",
+            "ea_time_ms": roll_ms,
+            "ticket": 7601,
+            "detail": {"side": "L"},
+        },
+    ])
+    snap = __import__("ejection_view").build_worker_ejection_snapshot(
+        built_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        window_start_ms=start_ms,
+        window_end_ms=end_ms,
+        events=kwargs["events"],
+        scalps=kwargs["scalps"],
+        fill_logs=kwargs["fill_logs"],
+    )
+    redis = FakeRedis()
+    _publish_ejection_snapshot(redis, snap)
+    pipshed = _reload_app_fleet_b(redis)
+    client = pipshed.app.test_client()
+    tok = pipshed.PUBLIC_GRIND_STATUS_TOKEN
+    body48 = client.get(f"/api/g/{tok}/ejection?hours=48").get_json()
+    tickets48 = {r.get("ticket") for r in body48.get("rolls") or []}
+    if 7501 in tickets48:
+        raise AssertionError("60h-old roll must be absent at hours=48")
+    body72 = client.get(f"/api/g/{tok}/ejection?hours=72").get_json()
+    tickets72 = {r.get("ticket") for r in body72.get("rolls") or []}
+    if 7501 not in tickets72:
+        raise AssertionError("60h-old roll must appear at hours=72")
+    outsider = {r.get("instance_id") for r in body72.get("rolls") or []}
+    if OUTSIDER_INSTANCE in outsider:
+        raise AssertionError("outsider instance must be filtered on web")
+    return "hours trim and fleet instance filter on web"
+
+
+def check_et26():
+    import ejection_view as ev
+
+    redis = FakeRedis()
+    _seed_fresh_ejection_view(redis)
+    ea_state = {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "layers": [
+            {
+                "layer_index": 0,
+                "side": "L",
+                "entry_price": 1.33000,
+                "exit_target": 1.33050,
+            },
+            {
+                "layer_index": 1,
+                "side": "L",
+                "entry_price": 1.32500,
+                "exit_target": 1.32550,
+                "virtual_level": 1.32100,
+            },
+            {
+                "layer_index": 0,
+                "side": "S",
+                "entry_price": 1.34000,
+                "exit_target": 1.33950,
+            },
+        ],
+    }
+    redis.set(f"fxmatrix:state:{FIXTURE_INSTANCE}", json.dumps(ea_state))
+    pipshed = _reload_app_fleet_b(redis)
+    body = pipshed.app.test_client().get(
+        f"/api/g/{pipshed.PUBLIC_GRIND_STATUS_TOKEN}/ejection"
+    ).get_json()
+    now_l = body.get("now", {}).get(FIXTURE_INSTANCE, {}).get("L", {})
+    now_s = body.get("now", {}).get(FIXTURE_INSTANCE, {}).get("S", {})
+    if now_l.get("depth") != 2:
+        raise AssertionError(f"L depth expected 2 got {now_l.get('depth')}")
+    if now_l.get("rolled_by_state") != 1:
+        raise AssertionError("L rolled_by_state expected 1")
+    entries = [layer.get("entry") for layer in now_l.get("layers") or []]
+    if entries != [1.33, 1.325]:
+        raise AssertionError(f"L entries expected [1.33, 1.325] got {entries}")
+    if now_l.get("lowest_effective") != 1.321:
+        raise AssertionError("L lowest_effective")
+    if now_s.get("depth") != 1:
+        raise AssertionError("S depth")
+    if now_s.get("rolled_by_state") != 0:
+        raise AssertionError("S rolled_by_state")
+    if now_s.get("lowest_effective") != 1.34:
+        raise AssertionError("S lowest_effective")
+    for side_block in (now_l, now_s):
+        for layer in side_block.get("layers") or []:
+            if layer.get("ticket") is not None:
+                raise AssertionError("EA heartbeat has no position ticket on layers")
+    return "now block uses EA-shaped heartbeat layers"
 
 
 def _summary_base_records():
@@ -1185,6 +1490,12 @@ CHECKS = [
     ("ET18", check_et18),
     ("ET19", check_et19),
     ("ET20", check_et20),
+    ("ET21", check_et21),
+    ("ET22", check_et22),
+    ("ET23", check_et23),
+    ("ET24", check_et24),
+    ("ET25", check_et25),
+    ("ET26", check_et26),
 ]
 
 

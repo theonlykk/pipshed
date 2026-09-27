@@ -445,6 +445,32 @@ def check_fs13():
     return "_fleet_strip_closed_today edge cases"
 
 
+def check_fs19():
+    import app as pipshed
+
+    payload = {
+        "days": [
+            {
+                "ftmo_day": today.isoformat(),
+                "instances": [
+                    {
+                        "instance_id": "Z",
+                        "sides": [_side(2, None), _side(3, 1.0)],
+                    },
+                    {
+                        "instance_id": "Y",
+                        "sides": [_side(1, 0.5), _side(0, 0.0)],
+                    },
+                ],
+            }
+        ]
+    }
+    got = pipshed._fleet_strip_closed_today(payload, today.isoformat())
+    if got != (6, None, "incomplete"):
+        raise AssertionError(f"incomplete FIRST expected (6, None, incomplete), got {got}")
+    return "incomplete side first: every count still summed"
+
+
 def check_fs14():
     import app as pipshed
 
@@ -549,6 +575,7 @@ CHECKS = [
     ("FS12", check_fs12),
     ("FS13", check_fs13),
     ("FS14", check_fs14),
+    ("FS19", check_fs19),
     ("FS15", check_fs15),
     ("FS16", check_fs16),
     ("FS17", check_fs17),

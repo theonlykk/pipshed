@@ -296,6 +296,7 @@ def _fleet_strip_closed_today(view_payload, ftmo_day_iso):
         return None, None, "no_day"
     scalps_today = 0
     closed_total = 0.0
+    incomplete = False
     for inst in day_block.get("instances") or []:
         if not isinstance(inst, dict):
             continue
@@ -308,9 +309,12 @@ def _fleet_strip_closed_today(view_payload, ftmo_day_iso):
                 scalps_today += int(count)
             closed_net = side.get("closed_net")
             if closed_net is None:
-                return scalps_today, None, "incomplete"
+                incomplete = True
+                continue
             if isinstance(closed_net, (int, float)) and not isinstance(closed_net, bool):
                 closed_total += float(closed_net)
+    if incomplete:
+        return scalps_today, None, "incomplete"
     return scalps_today, round(closed_total, 2), None
 
 

@@ -891,6 +891,26 @@ def check_fs28():
     return "v2 template markers"
 
 
+def check_fs29():
+    import app as pipshed
+
+    html = pipshed.app.test_client().get("/").get_data(as_text=True)
+    for marker in ("fleet-legend", "How to read the fleet alerts", "QUARANTINE_ENTER",
+                   "STARTUP_EXIT_SHORTFALL_SIDE", "EVENTS_UNAVAILABLE", "red means act"):
+        if marker not in html:
+            raise AssertionError(f"legend missing {marker!r}")
+    return "alert legend on the page"
+
+
+def check_fs30():
+    import app as pipshed
+
+    html = pipshed.app.test_client().get("/").get_data(as_text=True)
+    if "alert.kind === 'EVENT' && alert.code" not in html:
+        raise AssertionError("EVENT alert lines must lead with the event code")
+    return "EVENT lines print the code"
+
+
 CHECKS = [
     ("FS1", check_fs1),
     ("FS2", check_fs2),
@@ -920,6 +940,8 @@ CHECKS = [
     ("FS26", check_fs26),
     ("FS27", check_fs27),
     ("FS28", check_fs28),
+    ("FS29", check_fs29),
+    ("FS30", check_fs30),
 ]
 
 

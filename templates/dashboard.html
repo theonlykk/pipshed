@@ -391,6 +391,15 @@
       gap: 16px;
       margin-bottom: 16px;
     }
+    @media (max-width: 1599px) {
+      .fleet-strip { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 699px) {
+      .fleet-strip { grid-template-columns: 1fr; }
+    }
+    @media (min-width: 1600px) {
+      .fleet-strip { grid-template-columns: repeat(4, 1fr); }
+    }
     .fleet-strip-card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -427,11 +436,80 @@
       color: var(--muted);
       font-size: 12px;
     }
-    @media (max-width: 1100px) {
-      .fleet-strip { grid-template-columns: repeat(2, 1fr); }
+    .fleet-strip-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 8px;
     }
-    @media (max-width: 600px) {
-      .fleet-strip { grid-template-columns: 1fr; }
+    .fleet-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 3px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      font-family: var(--font-sans, system-ui, sans-serif);
+    }
+    .fleet-badge-live { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+    .fleet-badge-partial { background: rgba(212, 160, 23, 0.15); color: #d4a017; }
+    .fleet-badge-noconn { background: var(--surface); color: var(--red); border: 1px solid var(--border); }
+    .fleet-badge-notbuilt { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+    .fleet-alerts {
+      display: none;
+      margin-bottom: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .fleet-alerts.has-alerts { display: block; }
+    .fleet-alerts.sev-red { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+    .fleet-alerts.sev-amber { background: rgba(212, 160, 23, 0.12); color: #b8860b; }
+    .fleet-alerts-line { margin-bottom: 2px; }
+    .fleet-equity-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 24px;
+      margin-bottom: 8px;
+    }
+    .fleet-equity-block .fleet-equity-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .fleet-equity {
+      font-size: 1.6em;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+    }
+    .fleet-day-bar-wrap {
+      margin: 6px 0 8px;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .fleet-day-bar {
+      height: 100%;
+      border-radius: 3px;
+      width: 0;
+    }
+    .fleet-day-bar.amber { background: #d4a017; }
+    .fleet-day-bar.red { background: var(--red); }
+    .fleet-strip-section {
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .fleet-strip-updated {
+      margin-top: 8px;
+      font-size: 10px;
+      color: var(--muted);
     }
 
     .positive { color: var(--green); }
@@ -2031,6 +2109,55 @@
     return 'status-neutral';
   }
 
+  function fleetStripNumFormat(v, signed) {
+    if (v === null || v === undefined) return '--';
+    var n = Number(v);
+    if (isNaN(n)) return '--';
+    var abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (signed && n > 0) return '+' + abs;
+    if (signed && n < 0) return '-' + abs;
+    return (n < 0 ? '-' : '') + abs;
+  }
+
+  function fleetStripAlertLabel(alert) {
+    var inst = alert.instance_id || '';
+    var pair = fleetStripPair(inst);
+    var slot = '';
+    if (inst.indexOf('_OPTB') >= 0) slot = 'OPTB';
+    else if (inst.indexOf('_ALTB') >= 0) slot = 'ALTB';
+    else if (inst.indexOf('_OPTC') >= 0) slot = 'OPTC';
+    else if (inst.indexOf('_ALTC') >= 0) slot = 'ALTC';
+    else if (inst.indexOf('_OPT') >= 0) slot = 'OPT';
+    else if (inst.indexOf('_ALT') >= 0) slot = 'ALT';
+    var who = pair + (slot ? ' ' + slot : '');
+    if (!who.trim()) who = '--';
+    return (alert.kind || 'ALERT') + ' ' + who + ': ' + (alert.detail || '');
+  }
+
+  function fleetStripBadgeClass(badge) {
+    if (badge === 'LIVE') return 'fleet-badge-live';
+    if (badge === 'PARTIAL') return 'fleet-badge-partial';
+    if (badge === 'NO CONNECTION') return 'fleet-badge-noconn';
+    return 'fleet-badge-notbuilt';
+  }
+
+  function fleetStripFtmoLabel(iso) {
+    if (!iso) return '--';
+    var parts = String(iso).split('-');
+    if (parts.length !== 3) return iso;
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var m = parseInt(parts[1], 10);
+    return parts[2] + ' ' + (months[m - 1] || parts[1]);
+  }
+
+  function fleetStripCycleStartLabel(iso) {
+    if (!iso) return '--';
+    var d = new Date(iso + 'T12:00:00Z');
+    var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return days[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + months[d.getUTCMonth()];
+  }
+
   function renderFleetStrip(payload) {
     var el = document.getElementById('fleetStrip');
     if (!el) return;
@@ -2039,12 +2166,20 @@
       el.innerHTML = '<div class="fleet-strip-unavail">fleet strip unavailable</div>';
       return;
     }
+    var genAge = '';
+    if (payload.generated_at) {
+      var genMs = Date.parse(payload.generated_at);
+      if (!isNaN(genMs)) {
+        genAge = Math.max(0, Math.round((Date.now() - genMs) / 1000));
+      }
+    }
     el.className = 'fleet-strip';
     el.innerHTML = payload.fleets.map(function(card) {
       if (card.placeholder) {
         return '<div class="fleet-strip-card status-neutral">' +
+          '<div class="fleet-strip-head">' +
           '<div class="fleet-strip-title">Fleet D -- not built yet</div>' +
-          '</div>';
+          '<span class="fleet-badge fleet-badge-notbuilt">NOT BUILT</span></div></div>';
       }
       var title = card.name || card.letter;
       if (card.url) {
@@ -2053,28 +2188,23 @@
       if (card.is_self) {
         title += ' (this page)';
       }
+      var badge = card.badge || '--';
       var health = card.health || {};
-      var halted = health.halted || [];
-      var haltedTip = halted.map(function(h) {
-        return (h.instance_id || '') + ': ' + (h.halt_reason || '');
-      }).join('; ');
-      var line1 = fleetStripDash(health.instances_live) + '/' + fleetStripDash(health.instances_total) +
-        ' reporting';
-      if (halted.length) {
-        line1 += ', halted ' + halted.length;
+      var alerts = card.alerts || [];
+      var alertSev = alerts.some(function(a) { return a.level === 'red'; }) ? 'red' : 'amber';
+      var alertsHtml = '';
+      if (alerts.length) {
+        alertsHtml = '<div class="fleet-alerts has-alerts sev-' + alertSev + '">' +
+          alerts.map(function(a) {
+            return '<div class="fleet-alerts-line">' + fleetStripAlertLabel(a) + '</div>';
+          }).join('') + '</div>';
+      } else {
+        alertsHtml = '<div class="fleet-alerts"></div>';
       }
-      line1 += ', oldest ' + fleetStripDash(health.oldest_heartbeat_age_s) + ' s';
       var acct = card.account || {};
-      var line2 = 'acct ' + fleetStripDash(acct.login) + ', eq ' + fleetStripMoney(acct.equity, 2);
-      var money = card.money || {};
-      var closedPart = fleetStripMoney(money.closed_net_today, 2);
-      if (money.closed_reason) {
-        closedPart = fleetStripClosedLabel(money.closed_reason);
-      }
-      var line3 = 'open ' + fleetStripMoney(money.open_mtm, 2) +
-        ', closed ' + closedPart +
-        ' (' + fleetStripDash(money.scalps_today) + ' scalps)';
       var risk = card.risk || {};
+      var book = card.book || {};
+      var money = card.money || {};
       var deepest = risk.deepest;
       var deepTxt = '--';
       if (deepest && deepest.layers != null) {
@@ -2082,18 +2212,80 @@
       }
       var dayPnl = risk.day_pnl;
       var dayLine = '--';
+      var barHtml = '';
       if (dayPnl !== null && dayPnl !== undefined) {
         var pct = risk.loss_share != null ? (Number(risk.loss_share) * 100).toFixed(1) : '--';
         var lim = risk.daily_loss_limit_usd != null ? risk.daily_loss_limit_usd : 500;
-        dayLine = '$' + fleetStripMoney(dayPnl, 2) + ' (' + pct + '% of $' + lim + ')';
+        dayLine = fleetStripNumFormat(dayPnl, true) + ' (' + pct + '% of $' + lim + ')';
+        if (Number(dayPnl) < 0 && risk.loss_share != null) {
+          var share = Math.min(1, Math.max(0, Number(risk.loss_share)));
+          var barClass = share >= 0.8 ? 'red' : (share >= 0.5 ? 'amber' : 'amber');
+          barHtml = '<div class="fleet-day-bar-wrap"><div class="fleet-day-bar ' + barClass +
+            '" style="width:' + (share * 100).toFixed(1) + '%"></div></div>';
+        }
+      }
+      var today = card.today;
+      var todayHtml = '';
+      if (today) {
+        var sc = today.scalps || {};
+        todayHtml = '<div class="fleet-strip-section">Today (FTMO ' + fleetStripFtmoLabel(today.ftmo_day || payload.ftmo_day) + ', ledger)</div>' +
+          '<div class="fleet-strip-line">Scalps ' + fleetStripDash(sc.count) +
+          ' gross ' + fleetStripNumFormat(sc.gross, true) +
+          ' comm ' + fleetStripNumFormat(sc.commission, true) +
+          ' net ' + fleetStripNumFormat(sc.net, true) + '</div>' +
+          '<div class="fleet-strip-line">Rolls ' + fleetStripDash((today.rolls || {}).count) +
+          ' ' + fleetStripNumFormat((today.rolls || {}).net, true) +
+          ' Ejections ' + fleetStripDash((today.ejections || {}).count) +
+          ' ' + fleetStripNumFormat((today.ejections || {}).net, true) +
+          ' Total net ' + fleetStripNumFormat(today.total_net, true) + '</div>';
+        var pairs = today.by_pair || [];
+        if (pairs.length) {
+          var pairChunks = [];
+          for (var pi = 0; pi < pairs.length; pi += 2) {
+            var chunk = pairs.slice(pi, pi + 2).map(function(p) {
+              return p.pair + ' ' + p.scalps + ' ' + fleetStripNumFormat(p.net, true);
+            }).join(' | ');
+            pairChunks.push(chunk);
+          }
+          todayHtml += pairChunks.map(function(line) {
+            return '<div class="fleet-strip-line">' + line + '</div>';
+          }).join('');
+        }
+      } else {
+        var reason = fleetStripClosedLabel(money.closed_reason || 'view_unavailable');
+        if (reason === 'view unavailable') reason = 'ledger view unavailable';
+        todayHtml = '<div class="fleet-strip-section">Today (FTMO ' + fleetStripFtmoLabel(payload.ftmo_day) + ', ledger)</div>' +
+          '<div class="fleet-strip-line">' + reason + '</div>';
+      }
+      var cycle = card.cycle || {};
+      var cycleHtml = '';
+      if (cycle.day != null) {
+        cycleHtml = '<div class="fleet-strip-line">Cycle day ' + cycle.day + ' since ' +
+          fleetStripCycleStartLabel(cycle.start_date) + ': realised ' +
+          fleetStripNumFormat(cycle.realised, true) + ', equity ' +
+          fleetStripNumFormat(cycle.equity_change, true) + ' vs $' +
+          fleetStripNumFormat(cycle.start_balance, false) + '</div>';
       }
       var cardHtml = '<div class="fleet-strip-card ' + fleetStripStatusClass(card.status) + '">';
-      cardHtml += '<div class="fleet-strip-title">' + title + '</div>';
-      cardHtml += '<div class="fleet-strip-line" title="' + haltedTip.replace(/"/g, '&quot;') + '">' + line1 + '</div>';
-      cardHtml += '<div class="fleet-strip-line">' + line2 + '</div>';
-      cardHtml += '<div class="fleet-strip-line">' + line3 + '</div>';
-      cardHtml += '<div class="fleet-strip-line">L/S ' + fleetStripDash(risk.open_layers_long) + '/' +
-        fleetStripDash(risk.open_layers_short) + ', deep ' + deepTxt + ', day ' + dayLine + '</div>';
+      cardHtml += '<div class="fleet-strip-head"><div class="fleet-strip-title">' + title + '</div>';
+      cardHtml += '<span class="fleet-badge ' + fleetStripBadgeClass(badge) + '">' + badge +
+        ' ' + fleetStripDash(health.instances_live) + '/' + fleetStripDash(health.instances_total) + '</span></div>';
+      cardHtml += alertsHtml;
+      cardHtml += '<div class="fleet-equity-row">' +
+        '<div class="fleet-equity-block"><div class="fleet-equity-label">Equity</div>' +
+        '<div class="fleet-equity">' + fleetStripNumFormat(acct.equity, false) + '</div></div>' +
+        '<div class="fleet-equity-block"><div class="fleet-equity-label">Balance</div>' +
+        '<div class="fleet-equity">' + fleetStripNumFormat(acct.balance, false) + '</div></div></div>';
+      cardHtml += '<div class="fleet-strip-line">Day ' + dayLine + '</div>' + barHtml;
+      cardHtml += '<div class="fleet-strip-section">Open risk</div>';
+      cardHtml += '<div class="fleet-strip-line">' + fleetStripDash(book.positions) + ' positions, ' +
+        fleetStripDash(book.pairs) + ' pairs, deepest ' + deepTxt + '</div>';
+      cardHtml += '<div class="fleet-strip-line">layers L ' + fleetStripDash(risk.open_layers_long) +
+        ' / S ' + fleetStripDash(risk.open_layers_short) + '</div>';
+      cardHtml += '<div class="fleet-strip-line">Open MTM ' + fleetStripNumFormat(book.open_mtm_book, true) +
+        ' Financing ' + fleetStripNumFormat(book.financing, true) + '</div>';
+      cardHtml += todayHtml + cycleHtml;
+      cardHtml += '<div class="fleet-strip-updated">updated ' + (genAge !== '' ? genAge + ' s ago' : '--') + '</div>';
       cardHtml += '</div>';
       return cardHtml;
     }).join('');

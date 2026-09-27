@@ -42,6 +42,7 @@ GRIND_C_INSTANCES = [
 
 EJECTION_VIEW_KEY = "fxmatrix:ejection:view"
 DAILY_TABLE_KEY = "fxmatrix:daily:table"
+CRITICAL_KEY = "fxmatrix:critical:last24h"
 
 now = datetime.now(timezone.utc)
 today = ftmo_day_of_utc(now)
@@ -86,6 +87,11 @@ def _daily_rows_fb():
     ]
 
 
+def HBB(seconds_ago, **overrides):
+    book = {"positions": [{"profit": -1.0}, {"profit": -0.5}]}
+    return HB(seconds_ago, book=book, **overrides)
+
+
 def _apply_fixture_fb(fake):
     for inst in GRIND_B_INSTANCES:
         if inst == "GRIND_GBPUSD_OPTB":
@@ -104,6 +110,103 @@ def _apply_fixture_fb(fake):
             continue
         fake.set(f"fxmatrix:state:{inst}", HB(30))
     fake.set(DAILY_TABLE_KEY, json.dumps({"generated_at": now.isoformat(), "rows": _daily_rows_fb()}))
+
+
+def _apply_fixture_fb2(fake, equity_override=None):
+    extra = {}
+    if equity_override is not None:
+        extra["account_equity"] = equity_override
+    for inst in GRIND_B_INSTANCES:
+        if inst == "GRIND_GBPUSD_OPTB":
+            continue
+        if inst == "GRIND_EURUSD_OPTB":
+            fake.set(
+                f"fxmatrix:state:{inst}",
+                HBB(30, halted=True, halt_reason="I6_LONG", **extra),
+            )
+            continue
+        if inst == "GRIND_AUDCAD_OPTB":
+            fake.set(f"fxmatrix:state:{inst}", HBB(30, open_layers_long=5, **extra))
+            continue
+        if inst == "GRIND_NZDCHF_OPTB":
+            fake.set(f"fxmatrix:state:{inst}", HBB(30, open_layers_short=7, **extra))
+            continue
+        fake.set(f"fxmatrix:state:{inst}", HBB(30, **extra))
+    fake.set(DAILY_TABLE_KEY, json.dumps({"generated_at": now.isoformat(), "rows": _daily_rows_fb()}))
+
+
+def _alert_triples(card):
+    return [
+        (a.get("level"), a.get("kind"), a.get("instance_id"))
+        for a in (card.get("alerts") or [])
+    ]
+
+
+def BK(count, gross, comm, swap, net):
+    return {
+        "count": count,
+        "gross": gross,
+        "commission": comm,
+        "swap": swap,
+        "net": net,
+    }
+
+
+Z = BK(0, 0.0, 0.0, 0.0, 0.0)
+
+
+def SD(side, scalps, rolls, ejections):
+    nets = [scalps.get("net"), rolls.get("net"), ejections.get("net")]
+    if any(n is None for n in nets):
+        closed_net = None
+    else:
+        closed_net = round(float(scalps["net"]) + float(rolls["net"]) + float(ejections["net"]), 2)
+    return {
+        "side": side,
+        "scalps": scalps,
+        "rolls": rolls,
+        "ejections": ejections,
+        "closed_net": closed_net,
+    }
+
+
+def _today_payload_fs25():
+    return {
+        "days": [
+            {
+                "ftmo_day": yesterday.isoformat(),
+                "instances": [
+                    {
+                        "instance_id": "IGNORE",
+                        "sides": [SD("L", BK(50, 999.0, 0.0, 0.0, 999.0), Z, Z)],
+                    }
+                ],
+            },
+            {
+                "ftmo_day": today.isoformat(),
+                "instances": [
+                    {
+                        "instance_id": "GRIND_AUDNZD_OPTB",
+                        "sides": [
+                            SD("L", BK(2, 1.00, -0.16, 0.0, 0.84), BK(1, -5.00, -0.08, 0.0, -5.08), Z),
+                            SD("S", BK(1, 0.50, -0.08, -0.02, 0.40), Z, Z),
+                        ],
+                    },
+                    {
+                        "instance_id": "GRIND_AUDNZD_ALTB",
+                        "sides": [
+                            SD("L", BK(3, 1.50, -0.24, 0.0, 1.26), Z, Z),
+                            SD("S", Z, Z, Z),
+                        ],
+                    },
+                    {
+                        "instance_id": "GRIND_GBPUSD_OPTB",
+                        "sides": [SD("L", Z, Z, Z), SD("S", BK(1, 1.00, -0.08, 0.0, 0.92), Z, Z)],
+                    },
+                ],
+            },
+        ]
+    }
 
 
 def _fleet_by_letter(payload, letter):
@@ -560,6 +663,234 @@ def check_fs18():
     return "status_b regression"
 
 
+def check_fs20():
+    import app as pipshed
+
+    fake = FakeRedis()
+    _apply_fixture_fb2(fake)
+    for inst in GRIND_C_INSTANCES:
+        fake.set(f"fxmatrix:state:{inst}", HB(30))
+    pipshed.r = fake
+    data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
+    if _fleet_by_letter(data, "B").get("badge") != "PARTIAL":
+        raise AssertionError("B badge must be PARTIAL")
+    if _fleet_by_letter(data, "C").get("badge") != "LIVE":
+        raise AssertionError("C badge must be LIVE")
+    if _fleet_by_letter(data, "A").get("badge") != "NO CONNECTION":
+        raise AssertionError("A badge must be NO CONNECTION")
+    if _fleet_by_letter(data, "D").get("badge") != "NOT BUILT":
+        raise AssertionError("D badge must be NOT BUILT")
+    return "badges FB2"
+
+
+def check_fs21():
+    import app as pipshed
+
+    fake = FakeRedis()
+    _apply_fixture_fb2(fake)
+    pipshed.r = fake
+    b = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "B")
+    expected = [
+        ("red", "HALTED", "GRIND_EURUSD_OPTB"),
+        ("amber", "NOT_REPORTING", "GRIND_GBPUSD_OPTB"),
+        ("amber", "LEDGER", None),
+        ("amber", "EVENTS_UNAVAILABLE", None),
+    ]
+    if _alert_triples(b) != expected:
+        raise AssertionError(f"alerts expected {expected}, got {_alert_triples(b)}")
+    return "FB2 alerts baseline"
+
+
+def check_fs22():
+    import app as pipshed
+
+    fake = FakeRedis()
+    _apply_fixture_fb2(fake)
+    crit = {
+        "generated_at": now.isoformat(),
+        "rows": [
+            {
+                "instance_id": "GRIND_NZDCAD_OPTB",
+                "level": "CRITICAL",
+                "code": "STARTUP_EXIT_SHORTFALL_SIDE",
+                "count": 2,
+                "first_at": "2026-09-27T10:00:00Z",
+                "last_at": "2026-09-27T12:00:00Z",
+            },
+            {
+                "instance_id": "GRIND_AUDCHF_OPTB",
+                "level": "WARN",
+                "code": "ROLL_STRANDED",
+                "count": 1,
+                "first_at": "2026-09-27T11:00:00Z",
+                "last_at": "2026-09-27T11:30:00Z",
+            },
+            {
+                "instance_id": "GRIND_GBPUSD_OPT",
+                "level": "CRITICAL",
+                "code": "X",
+                "count": 1,
+                "first_at": "2026-09-27T09:00:00Z",
+                "last_at": "2026-09-27T09:05:00Z",
+            },
+        ],
+    }
+    fake.set(CRITICAL_KEY, json.dumps(crit))
+    pipshed.r = fake
+    data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
+    b = _fleet_by_letter(data, "B")
+    expected_b = [
+        ("red", "HALTED", "GRIND_EURUSD_OPTB"),
+        ("red", "EVENT", "GRIND_NZDCAD_OPTB"),
+        ("amber", "EVENT", "GRIND_AUDCHF_OPTB"),
+        ("amber", "NOT_REPORTING", "GRIND_GBPUSD_OPTB"),
+        ("amber", "LEDGER", None),
+    ]
+    if _alert_triples(b) != expected_b:
+        raise AssertionError(f"B alerts expected {expected_b}, got {_alert_triples(b)}")
+    red_event = next(a for a in b["alerts"] if a.get("kind") == "EVENT" and a.get("level") == "red")
+    if red_event.get("code") != "STARTUP_EXIT_SHORTFALL_SIDE":
+        raise AssertionError("red EVENT code mismatch")
+    a_alerts = _alert_triples(_fleet_by_letter(data, "A"))
+    if ("red", "EVENT", "GRIND_GBPUSD_OPT") not in a_alerts:
+        raise AssertionError(f"A must include GBPUSD OPT event, got {a_alerts}")
+    c_events = [t for t in _alert_triples(_fleet_by_letter(data, "C")) if t[1] == "EVENT"]
+    if c_events:
+        raise AssertionError(f"C must have no EVENT alerts, got {c_events}")
+    return "critical feed alerts"
+
+
+def check_fs23():
+    import app as pipshed
+
+    for equity, want_pnl, want_share, want_level in (
+        (9800.0, -250.00, 0.5, "amber"),
+        (9650.0, -400.00, 0.8, "red"),
+    ):
+        fake = FakeRedis()
+        _apply_fixture_fb2(fake, equity_override=equity)
+        pipshed.r = fake
+        risk = _fleet_by_letter(
+            pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "B"
+        ).get("risk") or {}
+        if risk.get("day_pnl") != want_pnl:
+            raise AssertionError(f"day_pnl expected {want_pnl}, got {risk.get('day_pnl')}")
+        if risk.get("loss_share") != want_share:
+            raise AssertionError(f"loss_share expected {want_share}, got {risk.get('loss_share')}")
+        alerts = _fleet_by_letter(
+            pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "B"
+        ).get("alerts") or []
+        day_loss = [a for a in alerts if a.get("kind") == "DAY_LOSS"]
+        if len(day_loss) != 1 or day_loss[0].get("level") != want_level:
+            raise AssertionError(f"DAY_LOSS {want_level} expected, got {day_loss}")
+    return "DAY_LOSS thresholds"
+
+
+def check_fs24():
+    import app as pipshed
+
+    fake = FakeRedis()
+    _apply_fixture_fb2(fake)
+    pipshed.r = fake
+    book = _fleet_by_letter(
+        pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "B"
+    ).get("book") or {}
+    if book.get("positions") != 20:
+        raise AssertionError(f"positions expected 20, got {book.get('positions')}")
+    if book.get("pairs") != 8:
+        raise AssertionError(f"pairs expected 8, got {book.get('pairs')}")
+    if book.get("open_mtm_book") != -15.00:
+        raise AssertionError(f"open_mtm_book expected -15.00, got {book.get('open_mtm_book')}")
+    if book.get("financing") != -85.00:
+        raise AssertionError(f"financing expected -85.00, got {book.get('financing')}")
+    return "book stats FB2"
+
+
+def check_fs25():
+    import app as pipshed
+
+    got = pipshed._fleet_strip_today(_today_payload_fs25(), today.isoformat())
+    if got is None:
+        raise AssertionError("expected today block")
+    scalps = got.get("scalps") or {}
+    if scalps.get("count") != 7 or scalps.get("gross") != 4.00:
+        raise AssertionError(f"scalps aggregate wrong: {scalps}")
+    if scalps.get("commission") != -0.56 or scalps.get("swap") != -0.02:
+        raise AssertionError(f"scalps comm/swap wrong: {scalps}")
+    if scalps.get("net") != 3.42:
+        raise AssertionError(f"scalps net expected 3.42, got {scalps.get('net')}")
+    rolls = got.get("rolls") or {}
+    if rolls.get("count") != 1 or rolls.get("net") != -5.08:
+        raise AssertionError(f"rolls wrong: {rolls}")
+    eject = got.get("ejections") or {}
+    if eject.get("count") != 0 or eject.get("net") != 0.0:
+        raise AssertionError(f"ejections wrong: {eject}")
+    if got.get("total_net") != -1.66:
+        raise AssertionError(f"total_net expected -1.66, got {got.get('total_net')}")
+    by_pair = got.get("by_pair") or []
+    if by_pair != [
+        {"pair": "GBPUSD", "scalps": 1, "net": 0.92},
+        {"pair": "AUDNZD", "scalps": 6, "net": -2.58},
+    ]:
+        raise AssertionError(f"by_pair wrong: {by_pair}")
+    if got.get("incomplete") is not False:
+        raise AssertionError("incomplete must be false")
+    return "_fleet_strip_today happy path"
+
+
+def check_fs26():
+    import app as pipshed
+
+    payload = _today_payload_fs25()
+    payload["days"][1]["instances"][1]["sides"][0]["scalps"]["net"] = None
+    payload["days"][1]["instances"][1]["sides"][0]["closed_net"] = None
+    got = pipshed._fleet_strip_today(payload, today.isoformat())
+    if got.get("scalps", {}).get("net") is not None:
+        raise AssertionError("scalps.net must be null")
+    if got.get("scalps", {}).get("gross") != 4.00 or got.get("scalps", {}).get("count") != 7:
+        raise AssertionError("scalps gross/count must still sum")
+    if got.get("total_net") is not None:
+        raise AssertionError("total_net must be null")
+    aud = next(p for p in got.get("by_pair") or [] if p.get("pair") == "AUDNZD")
+    if aud.get("net") is not None:
+        raise AssertionError("AUDNZD net must be null")
+    if got.get("incomplete") is not True:
+        raise AssertionError("incomplete must be true")
+    if pipshed._fleet_strip_today({"days": []}, today.isoformat()) is not None:
+        raise AssertionError("no today block must return None")
+    return "_fleet_strip_today incomplete"
+
+
+def check_fs27():
+    import app as pipshed
+
+    got = pipshed._fleet_strip_cycle("2026-09-24", 10000.0, 10050.0, 9950.0, "2026-09-28")
+    if got.get("day") != 3 or got.get("realised") != 50.00 or got.get("equity_change") != -50.00:
+        raise AssertionError(f"cycle 28 wrong: {got}")
+    got2 = pipshed._fleet_strip_cycle("2026-09-24", 10000.0, 10050.0, 9950.0, "2026-09-27")
+    if got2.get("day") != 2:
+        raise AssertionError(f"cycle 27 day expected 2, got {got2.get('day')}")
+    got3 = pipshed._fleet_strip_cycle("2026-09-28", 10000.0, 10000.0, 10000.0, "2026-09-27")
+    if got3.get("day") is not None:
+        raise AssertionError("day must be null when today before start")
+    if got3.get("realised") != 0.0 or got3.get("equity_change") != 0.0:
+        raise AssertionError(f"realised/equity wrong: {got3}")
+    got4 = pipshed._fleet_strip_cycle("2026-09-24", 10000.0, None, 9950.0, "2026-09-27")
+    if got4.get("realised") is not None:
+        raise AssertionError("realised null when balance None")
+    return "_fleet_strip_cycle"
+
+
+def check_fs28():
+    import app as pipshed
+
+    html = pipshed.app.test_client().get("/").get_data(as_text=True)
+    for marker in ("fleet-badge", "fleet-alerts", "fleet-equity"):
+        if marker not in html:
+            raise AssertionError(f"missing class marker {marker}")
+    return "v2 template markers"
+
+
 CHECKS = [
     ("FS1", check_fs1),
     ("FS2", check_fs2),
@@ -580,6 +911,15 @@ CHECKS = [
     ("FS16", check_fs16),
     ("FS17", check_fs17),
     ("FS18", check_fs18),
+    ("FS20", check_fs20),
+    ("FS21", check_fs21),
+    ("FS22", check_fs22),
+    ("FS23", check_fs23),
+    ("FS24", check_fs24),
+    ("FS25", check_fs25),
+    ("FS26", check_fs26),
+    ("FS27", check_fs27),
+    ("FS28", check_fs28),
 ]
 
 

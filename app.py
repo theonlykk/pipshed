@@ -133,6 +133,8 @@ FLEET_STRIP = [
         "url": "https://pipshed.com",
         "instances": GRIND_A_STRIP_INSTANCES,
         "daily_loss_limit_usd": 500.0,
+        "cycle_start": "2026-09-24",
+        "start_balance": 10000.0,
         "placeholder": False,
     },
     {
@@ -142,6 +144,8 @@ FLEET_STRIP = [
         "url": "https://linux.pipshed.com",
         "instances": GRIND_B_INSTANCES,
         "daily_loss_limit_usd": 500.0,
+        "cycle_start": "2026-09-24",
+        "start_balance": 10000.0,
         "placeholder": False,
     },
     {
@@ -151,6 +155,8 @@ FLEET_STRIP = [
         "url": "https://linuxc.pipshed.com",
         "instances": GRIND_C_INSTANCES,
         "daily_loss_limit_usd": 500.0,
+        "cycle_start": "2026-09-28",
+        "start_balance": 10000.0,
         "placeholder": False,
     },
     {
@@ -160,6 +166,8 @@ FLEET_STRIP = [
         "url": None,
         "instances": [],
         "daily_loss_limit_usd": 500.0,
+        "cycle_start": None,
+        "start_balance": 10000.0,
         "placeholder": True,
     },
 ]
@@ -459,6 +467,509 @@ def _fleet_strip_status(instances_live, instances_total, halted, oldest_age_s):
     return "green"
 
 
+def _fleet_strip_badge(instances_live, instances_total, placeholder):
+    if placeholder:
+        return "NOT BUILT"
+    if instances_total > 0 and instances_live == instances_total:
+        return "LIVE"
+    if 0 < instances_live < instances_total:
+        return "PARTIAL"
+    return "NO CONNECTION"
+
+
+def _fleet_strip_pair_symbol(instance_id):
+    if not isinstance(instance_id, str):
+        return ""
+    parts = instance_id.split("_")
+    return parts[1] if len(parts) > 1 else instance_id
+
+
+def _load_critical_rows():
+    raw = r.get(ARCHIVE_CRITICAL_KEY)
+    if not raw:
+        return None, False
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None, False
+    if not isinstance(payload, dict):
+        return None, False
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return None, False
+    return rows, True
+
+
+def _fleet_strip_book(instances, cards, raw_by_inst, account):
+    null_book = {
+        "positions": None,
+        "pairs": None,
+        "open_mtm_book": None,
+        "financing": None,
+    }
+    position_count = 0
+    symbols_with_positions = set()
+    open_mtm = 0.0
+    has_book = False
+
+    for inst in instances:
+        if (cards.get(inst) or {}).get("connection") != "live":
+            continue
+        raw = raw_by_inst.get(inst)
+        if raw is None:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        book = data.get("book")
+        if not isinstance(book, dict):
+            continue
+        positions = book.get("positions")
+        if not isinstance(positions, list):
+            continue
+        has_book = True
+        symbol = _fleet_strip_pair_symbol(inst)
+        for pos in positions:
+            if not isinstance(pos, dict):
+                continue
+            position_count += 1
+            if symbol:
+                symbols_with_positions.add(symbol)
+            profit = pos.get("profit")
+            if isinstance(profit, (int, float)) and not isinstance(profit, bool):
+                open_mtm += float(profit)
+
+    if not has_book:
+        return null_book
+
+    equity = account.get("equity")
+    balance = account.get("balance")
+    open_mtm_book = round(open_mtm, 2)
+    financing = None
+    if (
+        isinstance(equity, (int, float))
+        and not isinstance(equity, bool)
+        and isinstance(balance, (int, float))
+        and not isinstance(balance, bool)
+    ):
+        financing = round(float(equity) - float(balance) - open_mtm_book, 2)
+
+    return {
+        "positions": position_count,
+        "pairs": len(symbols_with_positions),
+        "open_mtm_book": open_mtm_book,
+        "financing": financing,
+    }
+
+
+def _fleet_strip_sum_bucket_field(buckets, field, null_if_any_null=False):
+    total = 0.0 if field != "count" else 0
+    saw = False
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        val = bucket.get(field)
+        if val is None:
+            if null_if_any_null:
+                return None
+            continue
+        if isinstance(val, bool):
+            if null_if_any_null:
+                return None
+            continue
+        if field == "count":
+            total += int(val)
+            saw = True
+        elif isinstance(val, (int, float)):
+            total += float(val)
+            saw = True
+    if field == "count":
+        return total if saw or buckets else 0
+    if not saw:
+        return 0.0 if not null_if_any_null else None
+    return round(total, 2)
+
+
+def _fleet_strip_today(view_payload, ftmo_day_iso):
+    if not view_payload or not isinstance(view_payload, dict):
+        return None
+    day_block = None
+    for block in view_payload.get("days") or []:
+        if isinstance(block, dict) and block.get("ftmo_day") == ftmo_day_iso:
+            day_block = block
+            break
+    if day_block is None:
+        return None
+
+    scalp_buckets = []
+    roll_buckets = []
+    eject_buckets = []
+    pair_scalps = {}
+    pair_nets = {}
+    pair_has_null_net = set()
+
+    for inst in day_block.get("instances") or []:
+        if not isinstance(inst, dict):
+            continue
+        pair = _fleet_strip_pair_symbol(inst.get("instance_id"))
+        for side in inst.get("sides") or []:
+            if not isinstance(side, dict):
+                continue
+            scalp_buckets.append(side.get("scalps") or {})
+            roll_buckets.append(side.get("rolls") or {})
+            eject_buckets.append(side.get("ejections") or {})
+            scalps_b = side.get("scalps") or {}
+            rolls_b = side.get("rolls") or {}
+            eject_b = side.get("ejections") or {}
+            act = 0
+            for b in (scalps_b, rolls_b, eject_b):
+                c = b.get("count")
+                if isinstance(c, (int, float)) and not isinstance(c, bool):
+                    act += int(c)
+            if act <= 0:
+                continue
+            sc = scalps_b.get("count")
+            if isinstance(sc, (int, float)) and not isinstance(sc, bool):
+                pair_scalps[pair] = pair_scalps.get(pair, 0) + int(sc)
+            closed_net = side.get("closed_net")
+            if closed_net is None:
+                pair_has_null_net.add(pair)
+            elif isinstance(closed_net, (int, float)) and not isinstance(closed_net, bool):
+                pair_nets[pair] = pair_nets.get(pair, 0.0) + float(closed_net)
+
+    scalps = {
+        "count": _fleet_strip_sum_bucket_field(scalp_buckets, "count"),
+        "gross": _fleet_strip_sum_bucket_field(scalp_buckets, "gross"),
+        "commission": _fleet_strip_sum_bucket_field(
+            scalp_buckets, "commission", null_if_any_null=True
+        ),
+        "swap": _fleet_strip_sum_bucket_field(scalp_buckets, "swap", null_if_any_null=True),
+        "net": _fleet_strip_sum_bucket_field(scalp_buckets, "net", null_if_any_null=True),
+    }
+    rolls = {
+        "count": _fleet_strip_sum_bucket_field(roll_buckets, "count"),
+        "net": _fleet_strip_sum_bucket_field(roll_buckets, "net", null_if_any_null=True),
+    }
+    ejections = {
+        "count": _fleet_strip_sum_bucket_field(eject_buckets, "count"),
+        "net": _fleet_strip_sum_bucket_field(eject_buckets, "net", null_if_any_null=True),
+    }
+
+    incomplete = (
+        scalps.get("net") is None
+        or rolls.get("net") is None
+        or ejections.get("net") is None
+    )
+    if incomplete:
+        total_net = None
+    else:
+        total_net = round(
+            float(scalps["net"]) + float(rolls["net"]) + float(ejections["net"]), 2
+        )
+
+    by_pair = []
+    for pair in set(list(pair_scalps.keys()) + list(pair_nets.keys())):
+        if pair in pair_has_null_net:
+            net_val = None
+        else:
+            net_val = round(pair_nets.get(pair, 0.0), 2)
+        by_pair.append(
+            {"pair": pair, "scalps": pair_scalps.get(pair, 0), "net": net_val}
+        )
+
+    def _pair_sort_key(row):
+        net_val = row.get("net")
+        if net_val is None:
+            return (1, 0.0, row.get("pair") or "")
+        return (0, -float(net_val), row.get("pair") or "")
+
+    by_pair.sort(key=_pair_sort_key)
+
+    return {
+        "ftmo_day": ftmo_day_iso,
+        "scalps": scalps,
+        "rolls": rolls,
+        "ejections": ejections,
+        "total_net": total_net,
+        "by_pair": by_pair,
+        "incomplete": incomplete,
+    }
+
+
+def _fleet_strip_cycle(start_date_iso, start_balance, balance, equity, today_iso):
+    null = {
+        "start_date": start_date_iso,
+        "day": None,
+        "realised": None,
+        "equity_change": None,
+    }
+    if not start_date_iso or not today_iso:
+        return null
+    from datetime import date as date_cls
+
+    try:
+        start_day = date_cls.fromisoformat(str(start_date_iso))
+        today_day = date_cls.fromisoformat(str(today_iso))
+    except ValueError:
+        return null
+
+    if today_day < start_day:
+        realised = None
+        if balance is None:
+            realised_out = None
+        elif isinstance(balance, (int, float)) and not isinstance(balance, bool):
+            realised_out = round(float(balance) - float(start_balance or 0), 2)
+        else:
+            realised_out = None
+        equity_change = None
+        if equity is None:
+            equity_change = None
+        elif isinstance(equity, (int, float)) and not isinstance(equity, bool):
+            equity_change = round(float(equity) - float(start_balance or 0), 2)
+        return {
+            "start_date": start_date_iso,
+            "day": None,
+            "realised": realised_out,
+            "equity_change": equity_change,
+        }
+
+    weekday_count = 0
+    cursor = start_day
+    while cursor <= today_day:
+        if cursor.weekday() < 5:
+            weekday_count += 1
+        cursor += timedelta(days=1)
+    day_num = max(1, weekday_count)
+
+    if balance is None or not isinstance(balance, (int, float)) or isinstance(balance, bool):
+        realised = None
+    else:
+        realised = round(float(balance) - float(start_balance or 0), 2)
+
+    if equity is None or not isinstance(equity, (int, float)) or isinstance(equity, bool):
+        equity_change = None
+    else:
+        equity_change = round(float(equity) - float(start_balance or 0), 2)
+
+    return {
+        "start_date": start_date_iso,
+        "day": day_num,
+        "realised": realised,
+        "equity_change": equity_change,
+    }
+
+
+def _fleet_strip_short_time(ts):
+    """ISO timestamp -> 'HH:MMZ' (UTC) for banner lines; the raw text if unparsable."""
+    if not isinstance(ts, str) or not ts.strip():
+        return "--"
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return ts
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(ZoneInfo("UTC")).strftime("%H:%MZ")
+
+
+_FLEET_STRIP_ALERT_KIND_ORDER = {
+    "HALTED": 0,
+    "EVENT": 1,
+    "DAY_LOSS": 2,
+    "NOT_REPORTING": 3,
+    "STALE_HEARTBEAT": 4,
+    "LEDGER": 5,
+    "EVENTS_UNAVAILABLE": 6,
+}
+
+
+def _fleet_strip_build_alerts(
+    *,
+    instances,
+    cards,
+    raw_by_inst,
+    halted,
+    instances_live,
+    instances_total,
+    critical_rows,
+    critical_ok,
+    closed_reason,
+    loss_share,
+    now_dt,
+):
+    import ejection_view as ev
+
+    inst_index = {inst: idx for idx, inst in enumerate(instances)}
+    alerts = []
+
+    if instances_live == 0:
+        if critical_ok and critical_rows:
+            fleet_set = set(instances)
+            for row in critical_rows:
+                if not isinstance(row, dict):
+                    continue
+                inst = row.get("instance_id")
+                if inst not in fleet_set:
+                    continue
+                level_raw = row.get("level")
+                level = "red" if level_raw == "CRITICAL" else "amber"
+                count = row.get("count")
+                last_at = row.get("last_at") or ""
+                alerts.append(
+                    {
+                        "level": level,
+                        "kind": "EVENT",
+                        "code": row.get("code"),
+                        "instance_id": inst,
+                        "detail": f"x{count}, last {_fleet_strip_short_time(last_at)}",
+                    }
+                )
+        if not critical_ok:
+            alerts.append(
+                {
+                    "level": "amber",
+                    "kind": "EVENTS_UNAVAILABLE",
+                    "code": "EVENTS_UNAVAILABLE",
+                    "instance_id": None,
+                    "detail": "critical feed unavailable",
+                }
+            )
+        return sorted(
+            alerts,
+            key=lambda a: (
+                0 if a.get("level") == "red" else 1,
+                _FLEET_STRIP_ALERT_KIND_ORDER.get(a.get("kind"), 99),
+                inst_index.get(a.get("instance_id"), 9999),
+            ),
+        )
+
+    for h in halted:
+        inst = h.get("instance_id")
+        alerts.append(
+            {
+                "level": "red",
+                "kind": "HALTED",
+                "code": "HALTED",
+                "instance_id": inst,
+                "detail": h.get("halt_reason"),
+            }
+        )
+
+    if critical_ok and critical_rows:
+        fleet_set = set(instances)
+        for row in critical_rows:
+            if not isinstance(row, dict):
+                continue
+            inst = row.get("instance_id")
+            if inst not in fleet_set:
+                continue
+            level_raw = row.get("level")
+            level = "red" if level_raw == "CRITICAL" else "amber"
+            count = row.get("count")
+            last_at = row.get("last_at") or ""
+            alerts.append(
+                {
+                    "level": level,
+                    "kind": "EVENT",
+                    "code": row.get("code"),
+                    "instance_id": inst,
+                    "detail": f"x{count}, last {_fleet_strip_short_time(last_at)}",
+                }
+            )
+    elif not critical_ok:
+        alerts.append(
+            {
+                "level": "amber",
+                "kind": "EVENTS_UNAVAILABLE",
+                "code": "EVENTS_UNAVAILABLE",
+                "instance_id": None,
+                "detail": "critical feed unavailable",
+            }
+        )
+
+    if isinstance(loss_share, (int, float)) and not isinstance(loss_share, bool):
+        if loss_share >= 0.8:
+            alerts.append(
+                {
+                    "level": "red",
+                    "kind": "DAY_LOSS",
+                    "code": "DAY_LOSS",
+                    "instance_id": None,
+                    "detail": f"{round(float(loss_share) * 100, 1)}% of daily limit",
+                }
+            )
+        elif loss_share >= 0.5:
+            alerts.append(
+                {
+                    "level": "amber",
+                    "kind": "DAY_LOSS",
+                    "code": "DAY_LOSS",
+                    "instance_id": None,
+                    "detail": f"{round(float(loss_share) * 100, 1)}% of daily limit",
+                }
+            )
+
+    if 0 < instances_live < instances_total:
+        for inst in instances:
+            if (cards.get(inst) or {}).get("connection") == "live":
+                continue
+            alerts.append(
+                {
+                    "level": "amber",
+                    "kind": "NOT_REPORTING",
+                    "code": "NOT_REPORTING",
+                    "instance_id": inst,
+                    "detail": "no heartbeat",
+                }
+            )
+
+    for inst in instances:
+        if (cards.get(inst) or {}).get("connection") != "live":
+            continue
+        raw = raw_by_inst.get(inst)
+        age = None
+        if raw is not None:
+            try:
+                data = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                data = None
+            if isinstance(data, dict):
+                age = ev._heartbeat_timestamp_age_s(data, now_dt)
+        if age is None or age > FLEET_STRIP_STALE_S:
+            alerts.append(
+                {
+                    "level": "amber",
+                    "kind": "STALE_HEARTBEAT",
+                    "code": "STALE_HEARTBEAT",
+                    "instance_id": inst,
+                    "detail": f"{age if age is not None else 'unknown'} s",
+                }
+            )
+
+    if closed_reason in ("view_unavailable", "incomplete"):
+        alerts.append(
+            {
+                "level": "amber",
+                "kind": "LEDGER",
+                "code": closed_reason,
+                "instance_id": None,
+                "detail": closed_reason.replace("_", " "),
+            }
+        )
+
+    return sorted(
+        alerts,
+        key=lambda a: (
+            0 if a.get("level") == "red" else 1,
+            _FLEET_STRIP_ALERT_KIND_ORDER.get(a.get("kind"), 99),
+            inst_index.get(a.get("instance_id"), 9999),
+        ),
+    )
+
+
 def _fleet_strip_placeholder_card(entry):
     limit = entry.get("daily_loss_limit_usd")
     return {
@@ -492,6 +1003,16 @@ def _fleet_strip_placeholder_card(entry):
             "loss_share": None,
             "daily_loss_limit_usd": limit,
         },
+        "badge": "NOT BUILT",
+        "book": {
+            "positions": None,
+            "pairs": None,
+            "open_mtm_book": None,
+            "financing": None,
+        },
+        "today": None,
+        "cycle": None,
+        "alerts": [],
     }
 
 
@@ -503,6 +1024,8 @@ def _fleet_strip_live_card(
     ftmo_day_iso,
     daily_rows,
     closed_unavailable,
+    critical_rows,
+    critical_ok,
 ):
     instances = list(entry["instances"])
     instances_total = len(instances)
@@ -562,6 +1085,36 @@ def _fleet_strip_live_card(
         entry.get("daily_loss_limit_usd") or 500.0,
     )
 
+    if closed_unavailable:
+        today_block = None
+    else:
+        today_block = _fleet_strip_today(view_payload, ftmo_day_iso)
+
+    book = _fleet_strip_book(instances, cards, raw_by_inst, account)
+    cycle = _fleet_strip_cycle(
+        entry.get("cycle_start"),
+        entry.get("start_balance"),
+        account.get("balance"),
+        account.get("equity"),
+        ftmo_day_iso,
+    )
+    if isinstance(cycle, dict):
+        cycle["start_balance"] = entry.get("start_balance")
+    badge = _fleet_strip_badge(instances_live, instances_total, False)
+    alerts = _fleet_strip_build_alerts(
+        instances=instances,
+        cards=cards,
+        raw_by_inst=raw_by_inst,
+        halted=halted,
+        instances_live=instances_live,
+        instances_total=instances_total,
+        critical_rows=critical_rows,
+        critical_ok=critical_ok,
+        closed_reason=closed_reason,
+        loss_share=day_fields.get("loss_share"),
+        now_dt=now_dt,
+    )
+
     return {
         "letter": entry["letter"],
         "name": entry["name"],
@@ -593,6 +1146,11 @@ def _fleet_strip_live_card(
             "loss_share": day_fields["loss_share"],
             "daily_loss_limit_usd": entry.get("daily_loss_limit_usd"),
         },
+        "badge": badge,
+        "book": book,
+        "today": today_block,
+        "cycle": cycle,
+        "alerts": alerts,
     }
 
 
@@ -603,6 +1161,7 @@ def _build_fleet_strip_payload():
     now_dt = datetime.now(ZoneInfo("UTC"))
     ftmo_day_iso = ftmo_day_of_utc(now_dt).isoformat()
     daily_rows = _load_daily_table_rows()
+    critical_rows, critical_ok = _load_critical_rows()
 
     views_by_letter = ev.ejection_views_for_fleets(r, FLEET_STRIP, hours=24)
     closed_unavailable = views_by_letter is None
@@ -638,6 +1197,8 @@ def _build_fleet_strip_payload():
                 ftmo_day_iso,
                 daily_rows,
                 closed_unavailable,
+                critical_rows,
+                critical_ok,
             )
         )
 

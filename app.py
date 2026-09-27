@@ -97,8 +97,27 @@ GRIND_B_INSTANCES = [
     "GRIND_NZDCAD_ALTB",
 ]
 
+GRIND_C_INSTANCES = [
+    "GRIND_GBPUSD_OPTC",
+    "GRIND_EURUSD_OPTC",
+    "GRIND_EURGBP_OPTC",
+    "GRIND_AUDCAD_OPTC",
+    "GRIND_AUDCHF_OPTC",
+    "GRIND_CADCHF_OPTC",
+    "GRIND_NZDCHF_OPTC",
+    "GRIND_NZDCAD_OPTC",
+    "GRIND_AUDNZD_OPTC",
+    "GRIND_AUDNZD_ALTC",
+    "GRIND_NZDCAD_ALTC",
+]
+
 _grind_fleet_raw = os.environ.get("GRIND_FLEET", "A").strip().upper()
-if _grind_fleet_raw not in ("A", "B"):
+GRIND_FLEET_INSTANCES = {
+    "A": GRIND_A_INSTANCES,
+    "B": GRIND_B_INSTANCES,
+    "C": GRIND_C_INSTANCES,
+}
+if _grind_fleet_raw not in GRIND_FLEET_INSTANCES:
     logging.getLogger(__name__).warning(
         "Unknown GRIND_FLEET=%r; using fleet A", os.environ.get("GRIND_FLEET", "")
     )
@@ -106,7 +125,7 @@ if _grind_fleet_raw not in ("A", "B"):
 else:
     GRIND_FLEET = _grind_fleet_raw
 
-GRIND_INSTANCES = GRIND_B_INSTANCES if GRIND_FLEET == "B" else GRIND_A_INSTANCES
+GRIND_INSTANCES = GRIND_FLEET_INSTANCES[GRIND_FLEET]
 
 GRIND_FLEET_LABEL = os.environ.get("GRIND_FLEET_LABEL", "")
 
@@ -116,7 +135,7 @@ def _grind_slot(inst):
     if len(parts) < 3:
         return ""
     slot = parts[2]
-    if slot in ("OPTB", "ALTB"):
+    if slot in ("OPTB", "ALTB", "OPTC", "ALTC"):
         return slot[:-1]
     return slot
 
@@ -125,7 +144,8 @@ GRIND_OPT_INSTANCES = [inst for inst in GRIND_INSTANCES if _grind_slot(inst) == 
 GRIND_ALT_INSTANCES = [inst for inst in GRIND_INSTANCES if _grind_slot(inst) == "ALT"]
 
 
-def _fleet_summary(cards, raws):
+def _fleet_summary(cards, raws, instances=None):
+    insts = GRIND_B_INSTANCES if instances is None else instances
     instances_live = 0
     halted_instances = []
     open_layers_long = 0
@@ -135,7 +155,7 @@ def _fleet_summary(cards, raws):
     realised_total = 0.0
     api_count_max = 0
 
-    for inst in GRIND_B_INSTANCES:
+    for inst in insts:
         card = cards.get(inst) or {}
         if card.get("connection") != "live":
             continue
@@ -154,7 +174,7 @@ def _fleet_summary(cards, raws):
     account_login = None
     account_balance = None
     account_equity = None
-    for inst in GRIND_B_INSTANCES:
+    for inst in insts:
         raw = raws.get(inst)
         if raw is None:
             continue
@@ -181,7 +201,7 @@ def _fleet_summary(cards, raws):
         break
 
     return {
-        "instances_total": len(GRIND_B_INSTANCES),
+        "instances_total": len(insts),
         "instances_live": instances_live,
         "halted_instances": halted_instances,
         "open_layers_long": open_layers_long,
@@ -1427,6 +1447,32 @@ def public_grind_status(token, _ignored):
         return _apply_no_cache_headers(response), 500
 
 
+def _fleet_status_response(fleet_letter, instances, log_name):
+    try:
+        grind_cards = {}
+        raw_by_inst = {}
+        for inst in instances:
+            raw_grind = r.get(f"fxmatrix:state:{inst}")
+            raw_by_inst[inst] = raw_grind
+            grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
+
+        payload = {
+            "generated_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "fleet": fleet_letter,
+            "instances": {
+                inst: _public_grind_instance_fields(grind_cards[inst])
+                for inst in instances
+            },
+            "summary": _fleet_summary(grind_cards, raw_by_inst, instances),
+        }
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("%s failed", log_name)
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
 @app.route(
     "/api/g/<token>/status_b",
     methods=["GET"],
@@ -1441,30 +1487,24 @@ def public_grind_status(token, _ignored):
 def public_grind_status_b(token, _ignored):
     if token != PUBLIC_GRIND_STATUS_TOKEN:
         return jsonify({"error": "not found"}), 404
+    return _fleet_status_response("B", GRIND_B_INSTANCES, "public_grind_status_b")
 
-    try:
-        grind_cards = {}
-        raw_by_inst = {}
-        for inst in GRIND_B_INSTANCES:
-            raw_grind = r.get(f"fxmatrix:state:{inst}")
-            raw_by_inst[inst] = raw_grind
-            grind_cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
 
-        payload = {
-            "generated_at": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "fleet": "B",
-            "instances": {
-                inst: _public_grind_instance_fields(grind_cards[inst])
-                for inst in GRIND_B_INSTANCES
-            },
-            "summary": _fleet_summary(grind_cards, raw_by_inst),
-        }
-        response = jsonify(payload)
-        return _apply_no_cache_headers(response), 200
-    except Exception:
-        app.logger.exception("public_grind_status_b failed")
-        response = jsonify({"error": "internal error"})
-        return _apply_no_cache_headers(response), 500
+@app.route(
+    "/api/g/<token>/status_c",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/status_c/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_grind_status_c(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+    return _fleet_status_response("C", GRIND_C_INSTANCES, "public_grind_status_c")
 
 
 @app.route(

@@ -499,6 +499,7 @@
       border-radius: 3px;
       width: 0;
     }
+    .fleet-day-bar.calm { background: var(--muted); }
     .fleet-day-bar.amber { background: #d4a017; }
     .fleet-day-bar.red { background: var(--red); }
     .fleet-strip-section {
@@ -2121,6 +2122,7 @@
 
   function fleetStripAlertLabel(alert) {
     var inst = alert.instance_id || '';
+    if (!inst) return (alert.kind || 'ALERT') + ': ' + (alert.detail || '');
     var pair = fleetStripPair(inst);
     var slot = '';
     if (inst.indexOf('_OPTB') >= 0) slot = 'OPTB';
@@ -2130,7 +2132,6 @@
     else if (inst.indexOf('_OPT') >= 0) slot = 'OPT';
     else if (inst.indexOf('_ALT') >= 0) slot = 'ALT';
     var who = pair + (slot ? ' ' + slot : '');
-    if (!who.trim()) who = '--';
     return (alert.kind || 'ALERT') + ' ' + who + ': ' + (alert.detail || '');
   }
 
@@ -2219,7 +2220,7 @@
         dayLine = fleetStripNumFormat(dayPnl, true) + ' (' + pct + '% of $' + lim + ')';
         if (Number(dayPnl) < 0 && risk.loss_share != null) {
           var share = Math.min(1, Math.max(0, Number(risk.loss_share)));
-          var barClass = share >= 0.8 ? 'red' : (share >= 0.5 ? 'amber' : 'amber');
+          var barClass = share >= 0.8 ? 'red' : (share >= 0.5 ? 'amber' : 'calm');
           barHtml = '<div class="fleet-day-bar-wrap"><div class="fleet-day-bar ' + barClass +
             '" style="width:' + (share * 100).toFixed(1) + '%"></div></div>';
         }

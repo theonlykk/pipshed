@@ -762,6 +762,19 @@ def _fleet_strip_cycle(start_date_iso, start_balance, balance, equity, today_iso
     }
 
 
+def _fleet_strip_short_time(ts):
+    """ISO timestamp -> 'HH:MMZ' (UTC) for banner lines; the raw text if unparsable."""
+    if not isinstance(ts, str) or not ts.strip():
+        return "--"
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return ts
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(ZoneInfo("UTC")).strftime("%H:%MZ")
+
+
 _FLEET_STRIP_ALERT_KIND_ORDER = {
     "HALTED": 0,
     "EVENT": 1,
@@ -811,7 +824,7 @@ def _fleet_strip_build_alerts(
                         "kind": "EVENT",
                         "code": row.get("code"),
                         "instance_id": inst,
-                        "detail": f"x{count}, last {last_at}",
+                        "detail": f"x{count}, last {_fleet_strip_short_time(last_at)}",
                     }
                 )
         if not critical_ok:
@@ -863,7 +876,7 @@ def _fleet_strip_build_alerts(
                     "kind": "EVENT",
                     "code": row.get("code"),
                     "instance_id": inst,
-                    "detail": f"x{count}, last {last_at}",
+                    "detail": f"x{count}, last {_fleet_strip_short_time(last_at)}",
                 }
             )
     elif not critical_ok:

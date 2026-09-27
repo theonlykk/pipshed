@@ -428,6 +428,20 @@
     }
     .fleet-strip-title a:hover { text-decoration: underline; }
     .fleet-strip-line { color: var(--muted); margin-bottom: 4px; }
+    .fleet-legend {
+      margin: -8px 0 16px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .fleet-legend summary { cursor: pointer; }
+    .fleet-legend table { border-collapse: collapse; margin-top: 8px; width: 100%; }
+    .fleet-legend th, .fleet-legend td {
+      text-align: left; vertical-align: top;
+      padding: 4px 8px; border-bottom: 1px solid var(--border);
+    }
+    .fleet-legend code { font-family: var(--font-mono); color: var(--text); }
+    .fleet-legend .lg-red { color: var(--red); font-weight: 600; }
+    .fleet-legend .lg-amber { color: #d4a017; font-weight: 600; }
     .fleet-strip-unavail {
       margin-bottom: 16px;
       padding: 12px 16px;
@@ -993,6 +1007,30 @@
 </div>
 
 <div id="fleetStrip" class="fleet-strip"></div>
+<details class="fleet-legend">
+  <summary>How to read the fleet alerts (red means act, amber means look)</summary>
+  <p>Each banner line is <code>WHAT PAIR SLOT: detail</code>. Slot OPT/ALT = cycle 3, OPTB/ALTB = Fleet B, OPTC/ALTC = Fleet C. "x2, last 21:05Z" = twice in the last 24 h, latest at 21:05 UTC.</p>
+  <table>
+    <tr><th>What</th><th>Colour</th><th>Meaning</th><th>What to do</th></tr>
+    <tr><td><code>HALTED</code></td><td class="lg-red">red</td><td>The instance has stopped; the detail is its reason (e.g. I6_LONG)</td><td>Act: bring it to the chat</td></tr>
+    <tr><td>an event code</td><td><span class="lg-red">red</span> if CRITICAL, <span class="lg-amber">amber</span> if WARN</td><td>Something the EA logged in the last 24 h (codes below)</td><td>Red: act. Amber: read the code</td></tr>
+    <tr><td><code>DAY_LOSS</code></td><td><span class="lg-amber">amber</span> 50%, <span class="lg-red">red</span> 80%</td><td>Day loss against the $500 limit; at 80% the breaker trips and blocks new entries</td><td>Amber: watch. Red: the breaker has acted</td></tr>
+    <tr><td><code>NOT_REPORTING</code></td><td class="lg-amber">amber</td><td>One instance has sent no heartbeat for 5 minutes</td><td>Check that chart and terminal</td></tr>
+    <tr><td><code>STALE_HEARTBEAT</code></td><td class="lg-amber">amber</td><td>An instance's last heartbeat is over 3 minutes old</td><td>Usually a slow minute; check if it persists</td></tr>
+    <tr><td><code>LEDGER</code></td><td class="lg-amber">amber</td><td>Closed P&amp;L unavailable or incomplete</td><td>A pipshed worker issue, not trading</td></tr>
+    <tr><td><code>EVENTS_UNAVAILABLE</code></td><td class="lg-amber">amber</td><td>The event feed is down: the banner cannot see events</td><td>A pipshed worker issue; the banner is blind until fixed</td></tr>
+  </table>
+  <table>
+    <tr><th>Event code</th><th>Colour</th><th>Meaning</th></tr>
+    <tr><td><code>QUARANTINE_ENTER</code></td><td class="lg-amber">amber</td><td>A layer was briefly uncovered while its exit moved (C40); releases within a second. Look only if one instance repeats it many times in an hour</td></tr>
+    <tr><td><code>STARTUP_EXIT_SHORTFALL_SIDE</code></td><td class="lg-red">red</td><td>At start a required exit was missing on a side (placed by ADR-156); bring it to the chat</td></tr>
+    <tr><td><code>INVARIANT_FAIL</code></td><td class="lg-red">red</td><td>A book invariant failed; the instance halts. Bring it to the chat</td></tr>
+    <tr><td><code>QUARANTINE_HALT</code></td><td class="lg-red">red</td><td>A quarantine did not clear and the instance halted. Bring it to the chat</td></tr>
+    <tr><td><code>RECON_FAIL</code></td><td class="lg-red">red</td><td>Reconstruction at start rejected the book. Bring it to the chat</td></tr>
+    <tr><td><code>ROLL_STRANDED</code></td><td class="lg-amber">amber</td><td>Lattice (from C63): every layer rolled and the market is 2 add steps beyond; a manual decision</td></tr>
+    <tr><td><code>ROLL_CLOSING_STUCK</code></td><td class="lg-amber">amber</td><td>Lattice (from C63): a roll candidate has been closing for 60 s</td></tr>
+  </table>
+</details>
 
 <div id="criticalBanner" aria-live="polite"></div>
 
@@ -2121,8 +2159,9 @@
   }
 
   function fleetStripAlertLabel(alert) {
+    var head = (alert.kind === 'EVENT' && alert.code) ? alert.code : (alert.kind || 'ALERT');
     var inst = alert.instance_id || '';
-    if (!inst) return (alert.kind || 'ALERT') + ': ' + (alert.detail || '');
+    if (!inst) return head + ': ' + (alert.detail || '');
     var pair = fleetStripPair(inst);
     var slot = '';
     if (inst.indexOf('_OPTB') >= 0) slot = 'OPTB';
@@ -2132,7 +2171,7 @@
     else if (inst.indexOf('_OPT') >= 0) slot = 'OPT';
     else if (inst.indexOf('_ALT') >= 0) slot = 'ALT';
     var who = pair + (slot ? ' ' + slot : '');
-    return (alert.kind || 'ALERT') + ' ' + who + ': ' + (alert.detail || '');
+    return head + ' ' + who + ': ' + (alert.detail || '');
   }
 
   function fleetStripBadgeClass(badge) {

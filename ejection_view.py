@@ -1004,6 +1004,83 @@ def _ejection_unavailable(view_age_s=None):
     return {"error": "ejection view unavailable", "view_age_s": view_age_s}
 
 
+def ejection_views_for_fleets(
+    redis_client,
+    fleets,
+    hours,
+    view_key="fxmatrix:ejection:view",
+):
+    """Parse ejection snapshot once; build per-fleet views (same staleness as serve_ejection_from_redis)."""
+    import redis
+
+    hours = clamp_hours(hours)
+    now_dt = datetime.now(timezone.utc)
+    window_end_ms = int(now_dt.timestamp() * 1000)
+    window_start_ms = window_end_ms - hours * 3600 * 1000
+    generated_at = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    try:
+        raw = redis_client.get(view_key)
+    except redis.exceptions.ConnectionError:
+        return None
+
+    if not raw:
+        return None
+
+    try:
+        snap = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    built_at = snap.get("built_at")
+    view_age_s = None
+    if isinstance(built_at, str) and built_at.strip():
+        try:
+            built_dt = datetime.fromisoformat(built_at.replace("Z", "+00:00"))
+            if built_dt.tzinfo is None:
+                built_dt = built_dt.replace(tzinfo=timezone.utc)
+            view_age_s = max(0, int((now_dt - built_dt).total_seconds()))
+        except ValueError:
+            view_age_s = None
+
+    if view_age_s is None or view_age_s > EJECTION_VIEW_MAX_AGE_S:
+        return None
+
+    events = snap.get("events") or []
+    scalps = snap.get("scalps") or []
+    fill_logs = snap.get("fill_logs") or []
+
+    views = {}
+    try:
+        for fleet_entry in fleets:
+            if fleet_entry.get("placeholder"):
+                continue
+            letter = fleet_entry.get("letter") or ""
+            grind_instances = list(fleet_entry.get("instances") or [])
+            state_by_instance = {}
+            for inst in grind_instances:
+                raw_state = redis_client.get(f"fxmatrix:state:{inst}")
+                state_by_instance[inst] = _parse_live_heartbeat(raw_state, now_dt)
+            views[letter] = build_ejection_view(
+                generated_at=generated_at,
+                fleet=letter,
+                fleet_label="",
+                hours=hours,
+                grind_instances=grind_instances,
+                events=events,
+                scalps=scalps,
+                fill_logs=fill_logs,
+                state_by_instance=state_by_instance,
+                now_dt=now_dt,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            )
+    except redis.exceptions.ConnectionError:
+        return None
+
+    return views
+
+
 def serve_ejection_from_redis(
     redis_client,
     hours,

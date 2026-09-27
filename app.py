@@ -111,6 +111,60 @@ GRIND_C_INSTANCES = [
     "GRIND_NZDCAD_ALTC",
 ]
 
+GRIND_A_STRIP_INSTANCES = [
+    "GRIND_GBPUSD_OPT",
+    "GRIND_EURUSD_OPT",
+    "GRIND_EURGBP_OPT",
+    "GRIND_AUDCAD_OPT",
+    "GRIND_AUDCHF_OPT",
+    "GRIND_CADCHF_OPT",
+    "GRIND_NZDCHF_OPT",
+    "GRIND_NZDCAD_OPT",
+    "GRIND_AUDNZD_OPT",
+    "GRIND_AUDNZD_ALT",
+    "GRIND_NZDCAD_ALT",
+]
+
+FLEET_STRIP = [
+    {
+        "letter": "A",
+        "name": "Cycle 3 (FTMO)",
+        "broker": "FTMO",
+        "url": "https://pipshed.com",
+        "instances": GRIND_A_STRIP_INSTANCES,
+        "daily_loss_limit_usd": 500.0,
+        "placeholder": False,
+    },
+    {
+        "letter": "B",
+        "name": "Fleet B (IC)",
+        "broker": "IC Markets",
+        "url": "https://linux.pipshed.com",
+        "instances": GRIND_B_INSTANCES,
+        "daily_loss_limit_usd": 500.0,
+        "placeholder": False,
+    },
+    {
+        "letter": "C",
+        "name": "Fleet C (IC)",
+        "broker": "IC Markets",
+        "url": "https://linuxc.pipshed.com",
+        "instances": GRIND_C_INSTANCES,
+        "daily_loss_limit_usd": 500.0,
+        "placeholder": False,
+    },
+    {
+        "letter": "D",
+        "name": "Fleet D",
+        "broker": "IC Markets",
+        "url": None,
+        "instances": [],
+        "daily_loss_limit_usd": 500.0,
+        "placeholder": True,
+    },
+]
+FLEET_STRIP_STALE_S = 180
+
 _grind_fleet_raw = os.environ.get("GRIND_FLEET", "A").strip().upper()
 GRIND_FLEET_INSTANCES = {
     "A": GRIND_A_INSTANCES,
@@ -213,6 +267,380 @@ def _fleet_summary(cards, raws, instances=None):
         "account_login": account_login,
         "account_balance": account_balance,
         "account_equity": account_equity,
+    }
+
+
+def _load_daily_table_rows():
+    raw = r.get(ARCHIVE_DAILY_KEY)
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("rows")
+    return rows if isinstance(rows, list) else []
+
+
+def _fleet_strip_closed_today(view_payload, ftmo_day_iso):
+    if not view_payload or not isinstance(view_payload, dict):
+        return None, None, "view_unavailable"
+    day_block = None
+    for block in view_payload.get("days") or []:
+        if isinstance(block, dict) and block.get("ftmo_day") == ftmo_day_iso:
+            day_block = block
+            break
+    if day_block is None:
+        return None, None, "no_day"
+    scalps_today = 0
+    closed_total = 0.0
+    for inst in day_block.get("instances") or []:
+        if not isinstance(inst, dict):
+            continue
+        for side in inst.get("sides") or []:
+            if not isinstance(side, dict):
+                continue
+            scalps = side.get("scalps") or {}
+            count = scalps.get("count")
+            if isinstance(count, (int, float)) and not isinstance(count, bool):
+                scalps_today += int(count)
+            closed_net = side.get("closed_net")
+            if closed_net is None:
+                return scalps_today, None, "incomplete"
+            if isinstance(closed_net, (int, float)) and not isinstance(closed_net, bool):
+                closed_total += float(closed_net)
+    return scalps_today, round(closed_total, 2), None
+
+
+def _fleet_strip_day_pnl(rows, login, equity, ftmo_day_iso, limit):
+    null = {
+        "day_pnl": None,
+        "day_start_balance": None,
+        "anchor_day": None,
+        "loss_share": None,
+    }
+    if login is None or equity is None or not ftmo_day_iso:
+        return null
+    if not isinstance(rows, list):
+        return null
+    try:
+        login_int = int(login)
+    except (TypeError, ValueError):
+        return null
+    if not isinstance(equity, (int, float)) or isinstance(equity, bool):
+        return null
+    best_day = None
+    best_balance = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("ftmo_day") is None:
+            continue
+        day_key = str(row.get("ftmo_day"))
+        if day_key >= ftmo_day_iso:
+            continue
+        try:
+            row_login = int(row.get("account_login"))
+        except (TypeError, ValueError):
+            continue
+        if row_login != login_int:
+            continue
+        balance_end = row.get("balance_end")
+        if not isinstance(balance_end, (int, float)) or isinstance(balance_end, bool):
+            continue
+        if best_day is None or day_key > best_day:
+            best_day = day_key
+            best_balance = float(balance_end)
+    if best_day is None or best_balance is None:
+        return null
+    day_pnl = round(float(equity) - best_balance, 2)
+    loss_share = round(max(0.0, -day_pnl) / float(limit), 4)
+    return {
+        "day_pnl": day_pnl,
+        "day_start_balance": round(best_balance, 2),
+        "anchor_day": best_day,
+        "loss_share": loss_share,
+    }
+
+
+def _fleet_strip_deepest(instances, cards):
+    best = None
+    for inst in instances:
+        card = cards.get(inst) or {}
+        if card.get("connection") != "live":
+            continue
+        for side_code, key in (("L", "open_layers_long"), ("S", "open_layers_short")):
+            layers = card.get(key)
+            if not isinstance(layers, (int, float)) or isinstance(layers, bool):
+                continue
+            layers_int = int(layers)
+            if layers_int <= 0:
+                continue
+            if best is None or layers_int > best[0]:
+                best = (layers_int, inst, side_code)
+    if best is None:
+        return None
+    return {"instance_id": best[1], "side": best[2], "layers": best[0]}
+
+
+def _fleet_strip_account(instances, cards, raw_by_inst):
+    for inst in instances:
+        if (cards.get(inst) or {}).get("connection") != "live":
+            continue
+        raw = raw_by_inst.get(inst)
+        if raw is None:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        login = data.get("account_login")
+        if not isinstance(login, (int, float)) or isinstance(login, bool):
+            continue
+        balance = data.get("account_balance")
+        equity = data.get("account_equity")
+        balance_out = (
+            round(float(balance), 2)
+            if isinstance(balance, (int, float)) and not isinstance(balance, bool)
+            else None
+        )
+        equity_out = (
+            round(float(equity), 2)
+            if isinstance(equity, (int, float)) and not isinstance(equity, bool)
+            else None
+        )
+        return {
+            "login": int(login),
+            "balance": balance_out,
+            "equity": equity_out,
+        }
+    return {"login": None, "balance": None, "equity": None}
+
+
+def _fleet_strip_oldest_age(instances, cards, raw_by_inst, now_dt):
+    import ejection_view as ev
+
+    oldest = None
+    for inst in instances:
+        if (cards.get(inst) or {}).get("connection") != "live":
+            continue
+        raw = raw_by_inst.get(inst)
+        if raw is None:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        age = ev._heartbeat_timestamp_age_s(data, now_dt)
+        if age is None:
+            continue
+        if oldest is None or age > oldest:
+            oldest = age
+    return oldest
+
+
+def _fleet_strip_status(instances_live, instances_total, halted, oldest_age_s):
+    if instances_live == 0:
+        return "no_data"
+    if halted or instances_live < instances_total:
+        return "red"
+    if oldest_age_s is None or oldest_age_s > FLEET_STRIP_STALE_S:
+        return "amber"
+    return "green"
+
+
+def _fleet_strip_placeholder_card(entry):
+    limit = entry.get("daily_loss_limit_usd")
+    return {
+        "letter": entry["letter"],
+        "name": entry["name"],
+        "broker": entry["broker"],
+        "url": entry.get("url"),
+        "placeholder": True,
+        "is_self": entry["letter"] == GRIND_FLEET,
+        "status": "grey",
+        "health": {
+            "instances_total": 0,
+            "instances_live": 0,
+            "halted": [],
+            "oldest_heartbeat_age_s": None,
+        },
+        "account": {"login": None, "balance": None, "equity": None},
+        "money": {
+            "open_mtm": None,
+            "closed_net_today": None,
+            "scalps_today": None,
+            "closed_reason": None,
+        },
+        "risk": {
+            "open_layers_long": None,
+            "open_layers_short": None,
+            "deepest": None,
+            "day_pnl": None,
+            "day_start_balance": None,
+            "anchor_day": None,
+            "loss_share": None,
+            "daily_loss_limit_usd": limit,
+        },
+    }
+
+
+def _fleet_strip_live_card(
+    entry,
+    cards,
+    raw_by_inst,
+    view_payload,
+    ftmo_day_iso,
+    daily_rows,
+    closed_unavailable,
+):
+    instances = list(entry["instances"])
+    instances_total = len(instances)
+    instances_live = 0
+    halted = []
+    open_mtm_total = 0.0
+    open_layers_long = 0
+    open_layers_short = 0
+
+    for inst in instances:
+        card = cards.get(inst) or {}
+        if card.get("connection") != "live":
+            continue
+        instances_live += 1
+        open_mtm_total += _grind_pnl_contribution(card.get("net_mtm"))
+        open_layers_long += card.get("open_layers_long") or 0
+        open_layers_short += card.get("open_layers_short") or 0
+        if card.get("halted"):
+            halted.append(
+                {
+                    "instance_id": inst,
+                    "halt_reason": card.get("halt_reason"),
+                }
+            )
+
+    now_dt = datetime.now(ZoneInfo("UTC"))
+    oldest_age_s = _fleet_strip_oldest_age(instances, cards, raw_by_inst, now_dt)
+    status = _fleet_strip_status(instances_live, instances_total, halted, oldest_age_s)
+
+    if instances_live == 0:
+        open_mtm = None
+        layers_long = None
+        layers_short = None
+        deepest = None
+    else:
+        open_mtm = round(open_mtm_total, 2)
+        layers_long = open_layers_long
+        layers_short = open_layers_short
+        deepest = _fleet_strip_deepest(instances, cards)
+
+    account = _fleet_strip_account(instances, cards, raw_by_inst)
+
+    if closed_unavailable:
+        scalps_today = None
+        closed_net_today = None
+        closed_reason = "view_unavailable"
+    else:
+        scalps_today, closed_net_today, closed_reason = _fleet_strip_closed_today(
+            view_payload, ftmo_day_iso
+        )
+
+    day_fields = _fleet_strip_day_pnl(
+        daily_rows,
+        account.get("login"),
+        account.get("equity"),
+        ftmo_day_iso,
+        entry.get("daily_loss_limit_usd") or 500.0,
+    )
+
+    return {
+        "letter": entry["letter"],
+        "name": entry["name"],
+        "broker": entry["broker"],
+        "url": entry.get("url"),
+        "placeholder": False,
+        "is_self": entry["letter"] == GRIND_FLEET,
+        "status": status,
+        "health": {
+            "instances_total": instances_total,
+            "instances_live": instances_live,
+            "halted": halted,
+            "oldest_heartbeat_age_s": oldest_age_s,
+        },
+        "account": account,
+        "money": {
+            "open_mtm": open_mtm,
+            "closed_net_today": closed_net_today,
+            "scalps_today": scalps_today,
+            "closed_reason": closed_reason,
+        },
+        "risk": {
+            "open_layers_long": layers_long,
+            "open_layers_short": layers_short,
+            "deepest": deepest,
+            "day_pnl": day_fields["day_pnl"],
+            "day_start_balance": day_fields["day_start_balance"],
+            "anchor_day": day_fields["anchor_day"],
+            "loss_share": day_fields["loss_share"],
+            "daily_loss_limit_usd": entry.get("daily_loss_limit_usd"),
+        },
+    }
+
+
+def _build_fleet_strip_payload():
+    import ejection_view as ev
+    from ftmo_daily import ftmo_day_of_utc
+
+    now_dt = datetime.now(ZoneInfo("UTC"))
+    ftmo_day_iso = ftmo_day_of_utc(now_dt).isoformat()
+    daily_rows = _load_daily_table_rows()
+
+    views_by_letter = ev.ejection_views_for_fleets(r, FLEET_STRIP, hours=24)
+    closed_unavailable = views_by_letter is None
+
+    cards_by_fleet = {}
+    raw_by_fleet = {}
+    for entry in FLEET_STRIP:
+        if entry.get("placeholder"):
+            continue
+        letter = entry["letter"]
+        cards = {}
+        raw_map = {}
+        for inst in entry["instances"]:
+            raw_grind = r.get(f"fxmatrix:state:{inst}")
+            raw_map[inst] = raw_grind
+            cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
+        cards_by_fleet[letter] = cards
+        raw_by_fleet[letter] = raw_map
+
+    fleets_out = []
+    for entry in FLEET_STRIP:
+        if entry.get("placeholder"):
+            fleets_out.append(_fleet_strip_placeholder_card(entry))
+            continue
+        letter = entry["letter"]
+        view_payload = None if closed_unavailable else views_by_letter.get(letter)
+        fleets_out.append(
+            _fleet_strip_live_card(
+                entry,
+                cards_by_fleet[letter],
+                raw_by_fleet[letter],
+                view_payload,
+                ftmo_day_iso,
+                daily_rows,
+                closed_unavailable,
+            )
+        )
+
+    return {
+        "generated_at": now_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ftmo_day": ftmo_day_iso,
+        "fleets": fleets_out,
     }
 
 
@@ -1505,6 +1933,31 @@ def public_grind_status_c(token, _ignored):
     if token != PUBLIC_GRIND_STATUS_TOKEN:
         return jsonify({"error": "not found"}), 404
     return _fleet_status_response("C", GRIND_C_INSTANCES, "public_grind_status_c")
+
+
+@app.route(
+    "/api/g/<token>/fleets",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/fleets/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_fleet_strip(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        payload = _build_fleet_strip_payload()
+        response = jsonify(payload)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_fleet_strip failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
 
 
 @app.route(

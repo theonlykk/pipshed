@@ -385,6 +385,55 @@
       font-family: var(--font-mono);
     }
 
+    .fleet-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .fleet-strip-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      border-left-width: 4px;
+      font-size: 12px;
+      line-height: 1.45;
+      font-family: var(--font-mono);
+    }
+    .fleet-strip-card.status-green { border-left-color: var(--green); }
+    .fleet-strip-card.status-amber { border-left-color: #d4a017; }
+    .fleet-strip-card.status-red { border-left-color: var(--red); }
+    .fleet-strip-card.status-neutral { border-left-color: var(--border); }
+    .fleet-strip-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      font-family: var(--font-sans, system-ui, sans-serif);
+    }
+    .fleet-strip-title a {
+      color: var(--text);
+      text-decoration: none;
+    }
+    .fleet-strip-title a:hover { text-decoration: underline; }
+    .fleet-strip-line { color: var(--muted); margin-bottom: 4px; }
+    .fleet-strip-unavail {
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 1100px) {
+      .fleet-strip { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 600px) {
+      .fleet-strip { grid-template-columns: 1fr; }
+    }
+
     .positive { color: var(--green); }
     .negative { color: var(--red); }
 
@@ -863,6 +912,8 @@
     <span id="statusText">Connecting...</span>
   </div>
 </div>
+
+<div id="fleetStrip" class="fleet-strip"></div>
 
 <div id="criticalBanner" aria-live="polite"></div>
 
@@ -1948,18 +1999,130 @@
     }
   }
 
+  function fleetStripDash(v) {
+    return v === null || v === undefined ? '--' : v;
+  }
+
+  function fleetStripMoney(v, digits) {
+    if (v === null || v === undefined) return '--';
+    var n = Number(v);
+    if (isNaN(n)) return '--';
+    return n.toFixed(digits != null ? digits : 2);
+  }
+
+  function fleetStripPair(instanceId) {
+    if (!instanceId) return '--';
+    var s = String(instanceId).replace(/^GRIND_/, '');
+    s = s.replace(/_(OPT|ALT|OPTB|ALTB|OPTC|ALTC)$/, '');
+    return s;
+  }
+
+  function fleetStripClosedLabel(reason) {
+    if (reason === 'view_unavailable') return 'view unavailable';
+    if (reason === 'incomplete') return 'incomplete';
+    if (reason === 'no_day') return 'no day yet';
+    return reason;
+  }
+
+  function fleetStripStatusClass(status) {
+    if (status === 'green') return 'status-green';
+    if (status === 'amber') return 'status-amber';
+    if (status === 'red') return 'status-red';
+    return 'status-neutral';
+  }
+
+  function renderFleetStrip(payload) {
+    var el = document.getElementById('fleetStrip');
+    if (!el) return;
+    if (!payload || !payload.fleets) {
+      el.className = '';
+      el.innerHTML = '<div class="fleet-strip-unavail">fleet strip unavailable</div>';
+      return;
+    }
+    el.className = 'fleet-strip';
+    el.innerHTML = payload.fleets.map(function(card) {
+      if (card.placeholder) {
+        return '<div class="fleet-strip-card status-neutral">' +
+          '<div class="fleet-strip-title">Fleet D -- not built yet</div>' +
+          '</div>';
+      }
+      var title = card.name || card.letter;
+      if (card.url) {
+        title = '<a href="' + card.url + '" target="_blank" rel="noopener">' + title + '</a>';
+      }
+      if (card.is_self) {
+        title += ' (this page)';
+      }
+      var health = card.health || {};
+      var halted = health.halted || [];
+      var haltedTip = halted.map(function(h) {
+        return (h.instance_id || '') + ': ' + (h.halt_reason || '');
+      }).join('; ');
+      var line1 = fleetStripDash(health.instances_live) + '/' + fleetStripDash(health.instances_total) +
+        ' reporting';
+      if (halted.length) {
+        line1 += ', halted ' + halted.length;
+      }
+      line1 += ', oldest ' + fleetStripDash(health.oldest_heartbeat_age_s) + ' s';
+      var acct = card.account || {};
+      var line2 = 'acct ' + fleetStripDash(acct.login) + ', eq ' + fleetStripMoney(acct.equity, 2);
+      var money = card.money || {};
+      var closedPart = fleetStripMoney(money.closed_net_today, 2);
+      if (money.closed_reason) {
+        closedPart = fleetStripClosedLabel(money.closed_reason);
+      }
+      var line3 = 'open ' + fleetStripMoney(money.open_mtm, 2) +
+        ', closed ' + closedPart +
+        ' (' + fleetStripDash(money.scalps_today) + ' scalps)';
+      var risk = card.risk || {};
+      var deepest = risk.deepest;
+      var deepTxt = '--';
+      if (deepest && deepest.layers != null) {
+        deepTxt = fleetStripPair(deepest.instance_id) + ' ' + deepest.side + ' ' + deepest.layers;
+      }
+      var dayPnl = risk.day_pnl;
+      var dayLine = '--';
+      if (dayPnl !== null && dayPnl !== undefined) {
+        var pct = risk.loss_share != null ? (Number(risk.loss_share) * 100).toFixed(1) : '--';
+        var lim = risk.daily_loss_limit_usd != null ? risk.daily_loss_limit_usd : 500;
+        dayLine = '$' + fleetStripMoney(dayPnl, 2) + ' (' + pct + '% of $' + lim + ')';
+      }
+      var cardHtml = '<div class="fleet-strip-card ' + fleetStripStatusClass(card.status) + '">';
+      cardHtml += '<div class="fleet-strip-title">' + title + '</div>';
+      cardHtml += '<div class="fleet-strip-line" title="' + haltedTip.replace(/"/g, '&quot;') + '">' + line1 + '</div>';
+      cardHtml += '<div class="fleet-strip-line">' + line2 + '</div>';
+      cardHtml += '<div class="fleet-strip-line">' + line3 + '</div>';
+      cardHtml += '<div class="fleet-strip-line">L/S ' + fleetStripDash(risk.open_layers_long) + '/' +
+        fleetStripDash(risk.open_layers_short) + ', deep ' + deepTxt + ', day ' + dayLine + '</div>';
+      cardHtml += '</div>';
+      return cardHtml;
+    }).join('');
+  }
+
+  async function fetchFleetStrip() {
+    try {
+      const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/fleets/' + Date.now());
+      if (!res.ok) throw new Error('fetch failed');
+      renderFleetStrip(await res.json());
+    } catch (e) {
+      renderFleetStrip(null);
+    }
+  }
+
   fetchDailySummary();
   fetchCarryTable();
   fetchCarryAudit();
   fetchCriticalBanner();
   fetchDailyTable();
   fetchEjectionPanel();
+  fetchFleetStrip();
   setInterval(fetchDailySummary, 5000);
   setInterval(fetchCarryTable, 5000);
   setInterval(fetchCarryAudit, 5000);
   setInterval(fetchCriticalBanner, 30000);
   setInterval(fetchDailyTable, 30000);
   setInterval(fetchEjectionPanel, 30000);
+  setInterval(fetchFleetStrip, 30000);
 
   let todayAllCache = { headers: ['Time', 'Pair', 'Direction', 'Entry', 'Exit', 'Pips'], rows: [], summary: '' };
   let openPosCache  = { headers: ['Pair', 'Direction', 'Entry', 'Layers', 'Net PnL'], rows: [] };

@@ -428,6 +428,13 @@
     }
     .fleet-strip-title a:hover { text-decoration: underline; }
     .fleet-strip-line { color: var(--muted); margin-bottom: 4px; }
+    .fleet-sum { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
+                 white-space: pre; overflow-x: auto; margin: 6px 0 4px; }
+    .fleet-sum-line { line-height: 1.45; }
+    .fleet-sum-line.net { font-weight: 700; }
+    .fleet-sum-pairs { font-size: 11px; margin: 2px 0 6px; }
+    .fleet-sum-pairs summary { cursor: pointer; color: var(--muted); }
+    .fleet-sum-pairs .fleet-sum-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
     .fleet-legend {
       margin: -8px 0 16px;
       font-size: 12px;
@@ -2207,6 +2214,66 @@
     return days[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + months[d.getUTCMonth()];
   }
 
+  function fleetSumPad(text, width) {
+    text = String(text);
+    while (text.length < width) text = ' ' + text;
+    return text;
+  }
+
+  function fleetSumPips(v) {
+    if (v === null || v === undefined || isNaN(Number(v))) return '--';
+    var n = Number(v);
+    return (n > 0 ? '+' : (n < 0 ? '-' : '+')) + Math.abs(n).toFixed(1);
+  }
+
+  function fleetSumMoney(v) {
+    if (v === null || v === undefined) return 'n/a';
+    var n = Number(v);
+    return (n < 0 ? '-' : '+') + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // the daily summary's block (the same numbers as /summary), one fleet
+  function fleetSumHtml(sm) {
+    if (!sm) return '<div class="fleet-strip-line">summary unavailable</div>';
+    function row(label, count, word, pips, usd, cls) {
+      return '<div class="fleet-sum-line' + (cls ? ' ' + cls : '') + '">' +
+        (label + '          ').slice(0, 11) + fleetSumPad(count, 4) + ' ' + (word + '      ').slice(0, 6) +
+        fleetSumPad(fleetSumPips(pips), 10) + ' pips ' + fleetSumPad(fleetSumMoney(usd), 10) + ' USD</div>';
+    }
+    var sc = sm.scalps || {}, ej = sm.ejections || {}, rl = sm.rolls || {};
+    var html = '<div class="fleet-sum">';
+    html += row('Scalps', sc.count, 'closed', sc.pips, sc.usd);
+    html += row('Ejections', ej.count, '', ej.pips, ej.usd);
+    html += row('Rolls', rl.count, '', rl.pips, rl.usd);
+    html += '<div class="fleet-sum-line">' + 'Commission ' + fleetSumPad(sm.closes, 4) + ' closes' +
+      fleetSumPad('', 16) + fleetSumPad(sm.commission === null ? 'unknown' : fleetSumMoney(sm.commission), 10) +
+      (sm.commission === null ? '' : ' USD') + '</div>';
+    html += '<div class="fleet-sum-line net">' + (('Net' + fleetSumPad('', 19))) +
+      fleetSumPad(fleetSumPips(sm.net_pips), 10) + ' pips ' + fleetSumPad(fleetSumMoney(sm.net_usd), 10) +
+      (sm.net_usd === null ? ' (commission unknown)' : ' USD') + '</div>';
+    html += '</div>';
+    var pairs = sm.by_pair || [];
+    if (pairs.length) {
+      html += '<details class="fleet-sum-pairs"><summary>by pair (' + pairs.length + ')</summary>' +
+        pairs.map(function(p) {
+          var parts = [p.scalps + (p.scalps === 1 ? ' scalp' : ' scalps')];
+          if (p.ejections) parts.push(p.ejections + (p.ejections === 1 ? ' ejection' : ' ejections'));
+          if (p.rolls) parts.push(p.rolls + (p.rolls === 1 ? ' roll' : ' rolls'));
+          return '<div class="fleet-sum-line">' + (p.pair + '       ').slice(0, 7) + parts.join(', ') +
+            '   ' + fleetSumPips(p.pips) + ' pips   ' + fleetSumMoney(p.usd) + ' USD</div>';
+        }).join('') + '</details>';
+    }
+    var cy = sm.cycle;
+    if (cy) {
+      html += '<div class="fleet-strip-line">Cycle day ' + cy.day + ' since ' + fleetStripCycleStartLabel(cy.start) +
+        ': ' + cy.scalps + ' scalps, net ' + fleetSumMoney(cy.net_usd) +
+        (cy.net_usd === null ? ' (commission unknown)' : '') +
+        ', ejections ' + cy.ejections + ', rolls ' + cy.rolls +
+        (cy.truncated ? ' (history truncated)' : '') + '</div>';
+    }
+    return html;
+  }
+
   function renderFleetStrip(payload) {
     var el = document.getElementById('fleetStrip');
     if (!el) return;
@@ -2256,11 +2323,6 @@
       var risk = card.risk || {};
       var book = card.book || {};
       var money = card.money || {};
-      var deepest = risk.deepest;
-      var deepTxt = '--';
-      if (deepest && deepest.layers != null) {
-        deepTxt = fleetStripPair(deepest.instance_id) + ' ' + deepest.side + ' ' + deepest.layers;
-      }
       var dayPnl = risk.day_pnl;
       var dayLine = '--';
       var barHtml = '';
@@ -2275,48 +2337,6 @@
             '" style="width:' + (share * 100).toFixed(1) + '%"></div></div>';
         }
       }
-      var today = card.today;
-      var todayHtml = '';
-      if (today) {
-        var sc = today.scalps || {};
-        todayHtml = '<div class="fleet-strip-section">Today (FTMO ' + fleetStripFtmoLabel(today.ftmo_day || payload.ftmo_day) + ', ledger)</div>' +
-          '<div class="fleet-strip-line">Scalps ' + fleetStripDash(sc.count) +
-          ' gross ' + fleetStripNumFormat(sc.gross, true) +
-          ' comm ' + fleetStripNumFormat(sc.commission, true) +
-          ' net ' + fleetStripNumFormat(sc.net, true) + '</div>' +
-          '<div class="fleet-strip-line">Rolls ' + fleetStripDash((today.rolls || {}).count) +
-          ' ' + fleetStripNumFormat((today.rolls || {}).net, true) +
-          ' Ejections ' + fleetStripDash((today.ejections || {}).count) +
-          ' ' + fleetStripNumFormat((today.ejections || {}).net, true) +
-          ' Total net ' + fleetStripNumFormat(today.total_net, true) + '</div>';
-        var pairs = today.by_pair || [];
-        if (pairs.length) {
-          var pairChunks = [];
-          for (var pi = 0; pi < pairs.length; pi += 2) {
-            var chunk = pairs.slice(pi, pi + 2).map(function(p) {
-              return p.pair + ' ' + p.scalps + ' ' + fleetStripNumFormat(p.net, true);
-            }).join(' | ');
-            pairChunks.push(chunk);
-          }
-          todayHtml += pairChunks.map(function(line) {
-            return '<div class="fleet-strip-line">' + line + '</div>';
-          }).join('');
-        }
-      } else {
-        var reason = fleetStripClosedLabel(money.closed_reason || 'view_unavailable');
-        if (reason === 'view unavailable') reason = 'ledger view unavailable';
-        todayHtml = '<div class="fleet-strip-section">Today (FTMO ' + fleetStripFtmoLabel(payload.ftmo_day) + ', ledger)</div>' +
-          '<div class="fleet-strip-line">' + reason + '</div>';
-      }
-      var cycle = card.cycle || {};
-      var cycleHtml = '';
-      if (cycle.day != null) {
-        cycleHtml = '<div class="fleet-strip-line">Cycle day ' + cycle.day + ' since ' +
-          fleetStripCycleStartLabel(cycle.start_date) + ': realised ' +
-          fleetStripNumFormat(cycle.realised, true) + ', equity ' +
-          fleetStripNumFormat(cycle.equity_change, true) + ' vs $' +
-          fleetStripNumFormat(cycle.start_balance, false) + '</div>';
-      }
       var cardHtml = '<div class="fleet-strip-card ' + fleetStripStatusClass(card.status) + '">';
       cardHtml += '<div class="fleet-strip-head"><div class="fleet-strip-title">' + title + '</div>';
       cardHtml += '<span class="fleet-badge ' + fleetStripBadgeClass(badge) + '">' + badge +
@@ -2328,14 +2348,16 @@
         '<div class="fleet-equity-block"><div class="fleet-equity-label">Balance</div>' +
         '<div class="fleet-equity">' + fleetStripNumFormat(acct.balance, false) + '</div></div></div>';
       cardHtml += '<div class="fleet-strip-line">Day ' + dayLine + '</div>' + barHtml;
-      cardHtml += '<div class="fleet-strip-section">Open risk</div>';
-      cardHtml += '<div class="fleet-strip-line">' + fleetStripDash(book.positions) + ' positions, ' +
-        fleetStripDash(book.pairs) + ' pairs, deepest ' + deepTxt + '</div>';
-      cardHtml += '<div class="fleet-strip-line">layers L ' + fleetStripDash(risk.open_layers_long) +
-        ' / S ' + fleetStripDash(risk.open_layers_short) + '</div>';
+      var sm = card.summary;
+      var ds = sm && sm.deepest_side;
+      var deepSideTxt = ds ? (ds.layers + ' (' + ds.pair + ' ' + ds.side + ')') : '--';
+      cardHtml += '<div class="fleet-strip-line">Open risk ' + fleetStripDash(book.positions) + ' positions, ' +
+        fleetStripDash(book.pairs) + ' pairs, deepest side ' + deepSideTxt + '</div>';
       cardHtml += '<div class="fleet-strip-line">Open MTM ' + fleetStripNumFormat(book.open_mtm_book, true) +
         ' Financing ' + fleetStripNumFormat(book.financing, true) + '</div>';
-      cardHtml += todayHtml + cycleHtml;
+      cardHtml += '<div class="fleet-strip-section">Today (broker day ' +
+        fleetStripCycleStartLabel(sm && sm.broker_day) + ')</div>';
+      cardHtml += fleetSumHtml(sm);
       cardHtml += '<div class="fleet-strip-updated">updated ' + (genAge !== '' ? genAge + ' s ago' : '--') + '</div>';
       cardHtml += '</div>';
       return cardHtml;

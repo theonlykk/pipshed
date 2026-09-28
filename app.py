@@ -398,6 +398,29 @@ def _fleet_strip_deepest(instances, cards):
 
 
 def _fleet_strip_account(instances, cards, raw_by_inst):
+    """Login, balance and equity for a fleet. Only the MAE reporter's heartbeat
+    carries balance and equity (grind_mae.mqh 314-326; C72), so prefer the
+    live instance that reports a balance; else the first live one with a
+    login (money null)."""
+    ordered = sorted(
+        instances,
+        key=lambda i: 0 if _fleet_strip_has_balance(raw_by_inst.get(i)) else 1,
+    )
+    return _fleet_strip_account_first(ordered, cards, raw_by_inst)
+
+
+def _fleet_strip_has_balance(raw):
+    try:
+        data = json.loads(raw) if raw is not None else None
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    bal = data.get("account_balance")
+    return isinstance(bal, (int, float)) and not isinstance(bal, bool)
+
+
+def _fleet_strip_account_first(instances, cards, raw_by_inst):
     for inst in instances:
         if (cards.get(inst) or {}).get("connection") != "live":
             continue
@@ -1049,6 +1072,36 @@ def _fleet_strip_placeholder_card(entry):
     }
 
 
+def _fleet_strip_summary(entry, instances, cards):
+    """The daily summary's numbers for one fleet (its own instances), for the
+    broker day; the same function builds the text summary."""
+    try:
+        broker_today = _broker_today()
+        _, records = _collect_today_scalp_records(broker_today, instances=instances)
+        data = _summary_data(records)
+        start = entry.get("cycle_start") or DEFAULT_CYCLE_START_DATE
+        data["cycle"] = _summary_cycle(
+            _collect_scalp_records_between(start, broker_today, instances=instances),
+            start, broker_today, broker_today)
+    except Exception:
+        app.logger.exception("fleet strip summary failed for %s", entry.get("letter"))
+        return None
+    data["broker_day"] = broker_today
+    deepest = None
+    for inst in instances:
+        card = cards.get(inst) or {}
+        if card.get("connection") != "live":
+            continue
+        pair = inst.split("_")[1] if "_" in inst else inst
+        for side, key in (("L", "open_layers_long"), ("S", "open_layers_short")):
+            n = card.get(key)
+            if isinstance(n, (int, float)) and not isinstance(n, bool):
+                if deepest is None or int(n) > deepest["layers"]:
+                    deepest = {"layers": int(n), "pair": pair, "side": side}
+    data["deepest_side"] = deepest
+    return data
+
+
 def _fleet_strip_live_card(
     entry,
     cards,
@@ -1133,6 +1186,7 @@ def _fleet_strip_live_card(
     )
     if isinstance(cycle, dict):
         cycle["start_balance"] = entry.get("start_balance")
+    summary = _fleet_strip_summary(entry, instances, cards)
     badge = _fleet_strip_badge(instances_live, instances_total, False)
     alerts = _fleet_strip_build_alerts(
         instances=instances,
@@ -1183,6 +1237,7 @@ def _fleet_strip_live_card(
         "book": book,
         "today": today_block,
         "cycle": cycle,
+        "summary": summary,
         "alerts": alerts,
     }
 
@@ -1924,13 +1979,14 @@ def _public_scalp_fields(record):
     return {key: record.get(key) for key in _PUBLIC_SCALP_KEYS}
 
 
-def _collect_today_scalp_records(selected_date=None):
-    """Cross-instance scalp exits for one broker calendar date."""
+def _collect_today_scalp_records(selected_date=None, instances=None):
+    """Cross-instance scalp exits for one broker calendar date (this host's
+    instances unless a list is given)."""
     broker_today = _broker_today()
     date = selected_date or broker_today
     all_records = []
 
-    for inst in GRIND_INSTANCES:
+    for inst in (GRIND_INSTANCES if instances is None else instances):
         raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         day_records = [
@@ -1951,11 +2007,11 @@ def _count_scalp_records_for_summary(records):
     return sum(1 for record in records if not _scalp_excluded_from_counts(record))
 
 
-def _collect_scalp_records_between(start_date, end_date):
+def _collect_scalp_records_between(start_date, end_date, instances=None):
     """Cross-instance scalp exits for an inclusive broker-date range."""
     all_records = []
 
-    for inst in GRIND_INSTANCES:
+    for inst in (GRIND_INSTANCES if instances is None else instances):
         raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
         records = [json.loads(item) for item in raw_list]
         range_records = [
@@ -2162,6 +2218,90 @@ def _collect_open_book_stats():
     }
 
 
+def _summary_kind(record):
+    if record.get("rolled") is True:
+        return "rolls"
+    if record.get("ejected") is True:
+        return "ejections"
+    return "scalps"
+
+
+def _summary_data(records):
+    """The daily summary's numbers for a set of closed-layer records: one
+    source for the text summary and the fleet cards. Pips are signed; money
+    includes every close; counts keep scalps apart from ejections and rolls;
+    commission by account (None when any account's rate is unknown)."""
+    kinds = {k: {"count": 0, "pips": 0.0, "usd": 0.0, "pips_unknown": 0}
+             for k in ("scalps", "ejections", "rolls")}
+    by_symbol = {}
+    for record in records:
+        kind = _summary_kind(record)
+        pips = _scalp_signed_pips(record)
+        usd = record.get("gross_pnl")
+        usd_ok = isinstance(usd, (int, float)) and not isinstance(usd, bool)
+        k = kinds[kind]
+        k["count"] += 1
+        if pips is None:
+            k["pips_unknown"] += 1
+        else:
+            k["pips"] += pips
+        if usd_ok:
+            k["usd"] += float(usd)
+        pair = record.get("instrument") or "?"
+        b = by_symbol.setdefault(pair, {"pair": pair, "scalps": 0, "ejections": 0,
+                                        "rolls": 0, "pips": 0.0, "usd": 0.0})
+        b[kind] += 1
+        if pips is not None:
+            b["pips"] += pips
+        if usd_ok:
+            b["usd"] += float(usd)
+    commission, comm_unknown = _commission_for_records(records)
+    net_pips = sum(k["pips"] for k in kinds.values())
+    usd_before = sum(k["usd"] for k in kinds.values())
+    for k in kinds.values():
+        k["pips"] = round(k["pips"], 1)
+        k["usd"] = round(k["usd"], 2)
+    pairs = []
+    for b in by_symbol.values():
+        b["pips"] = round(b["pips"], 1)
+        b["usd"] = round(b["usd"], 2)
+        pairs.append(b)
+    pairs.sort(key=lambda b: (-b["usd"], b["pair"]))
+    return {
+        "scalps": kinds["scalps"],
+        "ejections": kinds["ejections"],
+        "rolls": kinds["rolls"],
+        "closes": len(records),
+        "usd_before_commission": round(usd_before, 2),
+        "commission": commission,
+        "commission_unknown": comm_unknown,
+        "net_pips": round(net_pips, 1),
+        "net_usd": (round(usd_before + commission, 2) if commission is not None else None),
+        "by_pair": pairs,
+    }
+
+
+def _summary_cycle(cycle_all, cycle_start, date, broker_today):
+    """Cycle totals since cycle_start (same rules as the day)."""
+    scalps = [r for r in cycle_all if not _scalp_excluded_from_counts(r)]
+    gross = _scalp_usd_gross(cycle_all)
+    commission, unknown = _commission_for_records(cycle_all)
+    truncated = bool(scalps) and min(_closed_record_date(r) for r in scalps) > cycle_start
+    return {
+        "start": cycle_start,
+        "day": _cycle_day_number(cycle_start, date, broker_today),
+        "scalps": len(scalps),
+        "usd_before_commission": round(gross, 2),
+        "commission": commission,
+        "commission_unknown": unknown,
+        "closes": len(cycle_all),
+        "net_usd": (round(gross + commission, 2) if commission is not None else None),
+        "rolls": sum(1 for r in cycle_all if r.get("rolled") is True),
+        "ejections": sum(1 for r in cycle_all if r.get("ejected") is True),
+        "truncated": truncated,
+    }
+
+
 def _build_daily_summary_text(selected_date=None):
     """Plain-text broker-day summary for copy/paste."""
     broker_today = _broker_today()
@@ -2210,43 +2350,8 @@ def _build_daily_summary_text(selected_date=None):
     if not scalps:
         lines.append("Scalps       none closed")
     else:
-        # three kinds of close, each with signed pips and USD (gross_pnl
-        # includes swap); counts exclude rolls and ejections from "Scalps",
-        # money includes everything (02_TRAPS 26 Sep)
-        kinds = {k: {"count": 0, "pips": 0.0, "usd": 0.0, "pips_unknown": 0}
-                 for k in ("scalp", "eject", "roll")}
-        by_symbol = {}
-        for record in scalps:
-            instrument = record.get("instrument") or "?"
-            if record.get("rolled") is True:
-                kind = "roll"
-            elif record.get("ejected") is True:
-                kind = "eject"
-            else:
-                kind = "scalp"
-            pips = _scalp_signed_pips(record)
-            usd = record.get("gross_pnl")
-            k = kinds[kind]
-            k["count"] += 1
-            if pips is None:
-                k["pips_unknown"] += 1
-            else:
-                k["pips"] += pips
-            if isinstance(usd, (int, float)) and not isinstance(usd, bool):
-                k["usd"] += float(usd)
-
-            bucket = by_symbol.setdefault(
-                instrument, {"scalp": 0, "eject": 0, "roll": 0, "pips": 0.0, "usd": 0.0})
-            bucket[kind] += 1
-            if pips is not None:
-                bucket["pips"] += pips
-            if isinstance(usd, (int, float)) and not isinstance(usd, bool):
-                bucket["usd"] += float(usd)
-
-        commission, comm_unknown = _commission_for_records(scalps)
-        net_pips = sum(k["pips"] for k in kinds.values())
-        net_usd_before = sum(k["usd"] for k in kinds.values())
-        sk, ek, rk = kinds["scalp"], kinds["eject"], kinds["roll"]
+        d = _summary_data(scalps)
+        sk, ek, rk = d["scalps"], d["ejections"], d["rolls"]
         lines.append(
             f"Scalps     {sk['count']:>4} closed   {_fmt_signed(sk['pips'], 1):>9} pips  "
             f"{_fmt_money(sk['usd']):>10} USD"
@@ -2259,78 +2364,62 @@ def _build_daily_summary_text(selected_date=None):
             f"Rolls      {rk['count']:>4}          {_fmt_signed(rk['pips'], 1):>9} pips  "
             f"{_fmt_money(rk['usd']):>10} USD"
         )
-        if commission is None:
+        if d["commission"] is None:
             lines.append(
-                f"Commission {len(scalps):>4} closes   unknown ({comm_unknown} of {len(scalps)} "
-                f"closes on an account with no known rate)"
+                f"Commission {d['closes']:>4} closes   unknown ({d['commission_unknown']} of "
+                f"{d['closes']} closes on an account with no known rate)"
             )
             lines.append(
-                f"Net                      {_fmt_signed(net_pips, 1):>9} pips   n/a (commission unknown)"
+                f"Net                      {_fmt_signed(d['net_pips'], 1):>9} pips   n/a (commission unknown)"
             )
         else:
             lines.append(
-                f"Commission {len(scalps):>4} closes                   "
-                f"{_fmt_money(commission):>10} USD"
+                f"Commission {d['closes']:>4} closes                   "
+                f"{_fmt_money(d['commission']):>10} USD"
             )
             lines.append(
-                f"Net                      {_fmt_signed(net_pips, 1):>9} pips  "
-                f"{_fmt_money(round(net_usd_before + commission, 2)):>10} USD"
+                f"Net                      {_fmt_signed(d['net_pips'], 1):>9} pips  "
+                f"{_fmt_money(d['net_usd']):>10} USD"
             )
-        unknown_pips = sum(k["pips_unknown"] for k in kinds.values())
+        unknown_pips = sk["pips_unknown"] + ek["pips_unknown"] + rk["pips_unknown"]
         if unknown_pips:
             lines.append(f"             ({unknown_pips} closes without a direction: pips not counted)")
         lines.append("")
 
-        for instrument in sorted(by_symbol.keys(), key=lambda s: (-by_symbol[s]["usd"], s)):
-            bucket = by_symbol[instrument]
-            parts = [f"{bucket['scalp']} {'scalp' if bucket['scalp'] == 1 else 'scalps'}"]
-            if bucket["eject"]:
-                parts.append(f"{bucket['eject']} {'ejection' if bucket['eject'] == 1 else 'ejections'}")
-            if bucket["roll"]:
-                parts.append(f"{bucket['roll']} {'roll' if bucket['roll'] == 1 else 'rolls'}")
+        for bucket in d["by_pair"]:
+            parts = [f"{bucket['scalps']} {'scalp' if bucket['scalps'] == 1 else 'scalps'}"]
+            if bucket["ejections"]:
+                parts.append(f"{bucket['ejections']} {'ejection' if bucket['ejections'] == 1 else 'ejections'}")
+            if bucket["rolls"]:
+                parts.append(f"{bucket['rolls']} {'roll' if bucket['rolls'] == 1 else 'rolls'}")
             lines.append(
-                f"  {instrument:<6} {', '.join(parts)}   "
+                f"  {bucket['pair']:<6} {', '.join(parts)}   "
                 f"{_fmt_signed(bucket['pips'], 1)} pips   "
                 f"{_fmt_money(bucket['usd'])} USD"
             )
         lines.append("")
 
     cycle_start = CYCLE_START_DATE or DEFAULT_CYCLE_START_DATE
-    day_num = _cycle_day_number(cycle_start, date, broker_today)
-    cycle_all = _collect_scalp_records_between(cycle_start, date)
-    cycle_records = [
-        record
-        for record in cycle_all
-        if not _scalp_excluded_from_counts(record)
-    ]
-    cycle_gross = _scalp_usd_gross(cycle_all)
-    cycle_commission, cycle_comm_unknown = _commission_for_records(cycle_all)
-    cycle_roll_count = sum(1 for r in cycle_all if r.get("rolled") is True)
-    cycle_eject_count = sum(1 for r in cycle_all if r.get("ejected") is True)
-
-    truncated = ""
-    if cycle_records:
-        earliest = min(_closed_record_date(record) for record in cycle_records)
-        if earliest > cycle_start:
-            truncated = " (history truncated)"
-
+    cyc = _summary_cycle(_collect_scalp_records_between(cycle_start, date),
+                         cycle_start, date, broker_today)
+    truncated = " (history truncated)" if cyc["truncated"] else ""
     lines.append(
-        f"Cycle        day {day_num} (since {_format_broker_date_label(cycle_start)})"
+        f"Cycle        day {cyc['day']} (since {_format_broker_date_label(cycle_start)})"
         f"{truncated}"
     )
-    if cycle_commission is None:
+    if cyc["commission"] is None:
         lines.append(
-            f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD before "
-            f"commission, commission unknown ({cycle_comm_unknown} of {len(cycle_all)} closes)"
+            f"             {cyc['scalps']} scalps, {_fmt_money(cyc['usd_before_commission'])} USD before "
+            f"commission, commission unknown ({cyc['commission_unknown']} of {cyc['closes']} closes)"
         )
     else:
         lines.append(
-            f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD before "
-            f"commission, {_fmt_money(cycle_commission)} commission, "
-            f"{_fmt_money(round(cycle_gross + cycle_commission, 2))} net"
+            f"             {cyc['scalps']} scalps, {_fmt_money(cyc['usd_before_commission'])} USD before "
+            f"commission, {_fmt_money(cyc['commission'])} commission, "
+            f"{_fmt_money(cyc['net_usd'])} net"
         )
     lines.append(
-        f"             rolls {cycle_roll_count}, ejections {cycle_eject_count}"
+        f"             rolls {cyc['rolls']}, ejections {cyc['ejections']}"
     )
 
     return "\n".join(lines) + "\n"

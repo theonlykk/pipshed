@@ -1999,6 +1999,52 @@ def _pip_multiplier_for_prices(*prices):
     return 10000
 
 
+# Commission per closed layer (two IN deals), measured on the broker ledger
+# 26-28 Sep (639 IN deals): FTMO 0.03 + 0.03, IC Markets 0.04 + 0.04.
+# An account not listed here is reported as unknown, never guessed.
+COMMISSION_PER_CLOSE_BY_ACCOUNT = {
+    1514731800: 0.06,   # FTMO cycle 3
+    53066709: 0.08,     # IC Fleet B (box 1)
+    53071896: 0.08,     # IC Fleet C (box 2)
+}
+
+
+def _scalp_signed_pips(record):
+    """Pips won (+) or lost (-) by one closed layer, from its direction."""
+    entry = record.get("entry_price")
+    exit_price = record.get("exit_price")
+    if not isinstance(entry, (int, float)) or not isinstance(exit_price, (int, float)):
+        return None
+    if isinstance(entry, bool) or isinstance(exit_price, bool):
+        return None
+    direction = str(record.get("direction") or "").upper()
+    if direction == "LONG":
+        move = float(exit_price) - float(entry)
+    elif direction == "SHORT":
+        move = float(entry) - float(exit_price)
+    else:
+        return None
+    return move * _pip_multiplier_for_prices(entry, exit_price)
+
+
+def _commission_for_records(records):
+    """(total USD as a negative number, or None if any account is unknown;
+    count of records whose account has no known rate)."""
+    total = 0.0
+    unknown = 0
+    for record in records:
+        login = record.get("account_login")
+        try:
+            rate = COMMISSION_PER_CLOSE_BY_ACCOUNT.get(int(login)) if login is not None else None
+        except (TypeError, ValueError):
+            rate = None
+        if rate is None:
+            unknown += 1
+        else:
+            total -= rate
+    return (None if unknown else round(total, 2)), unknown
+
+
 def _scalp_gross_pips(record):
     """Absolute pip distance for one scalp exit."""
     entry = record.get("entry_price")
@@ -2053,11 +2099,19 @@ def _scalp_usd_gross(records):
     return total
 
 
+def _fmt_deepest_side(deepest):
+    n, sym, side = deepest
+    if not n:
+        return "0"
+    return f"{n} ({sym} {side})"
+
+
 def _collect_open_book_stats():
     """Open position count, pair count, deepest stack, and MTM from heartbeat book."""
     position_count = 0
     symbols_with_positions = set()
     deepest_stack = 0
+    deepest_side = (0, None, None)          # (layers, symbol, "L"/"S")
     open_mtm = 0.0
     has_mtm = False
 
@@ -2076,6 +2130,10 @@ def _collect_open_book_stats():
             if isinstance(open_short, (int, float)) and not isinstance(open_short, bool):
                 stack = int(open_long) + int(open_short)
                 deepest_stack = max(deepest_stack, stack)
+                sym = inst.split("_")[1] if "_" in inst else inst
+                for n_side, side in ((int(open_long), "L"), (int(open_short), "S")):
+                    if n_side > deepest_side[0]:
+                        deepest_side = (n_side, sym, side)
 
         book = data.get("book")
         if not isinstance(book, dict):
@@ -2099,6 +2157,7 @@ def _collect_open_book_stats():
         "position_count": position_count,
         "pair_count": len(symbols_with_positions),
         "deepest_stack": deepest_stack,
+        "deepest_side": deepest_side,
         "open_mtm": round(open_mtm, 2) if has_mtm else 0.0,
     }
 
@@ -2132,8 +2191,8 @@ def _build_daily_summary_text(selected_date=None):
 
     lines.append(
         f"Open risk    {book_stats['position_count']} positions, "
-        f"{book_stats['pair_count']} pairs, deepest stack "
-        f"{book_stats['deepest_stack']}{live_suffix}"
+        f"{book_stats['pair_count']} pairs, deepest side "
+        f"{_fmt_deepest_side(book_stats['deepest_side'])}{live_suffix}"
     )
 
     open_mtm = book_stats["open_mtm"]
@@ -2151,61 +2210,86 @@ def _build_daily_summary_text(selected_date=None):
     if not scalps:
         lines.append("Scalps       none closed")
     else:
-        total_pips = 0.0
-        total_usd = 0.0
+        # three kinds of close, each with signed pips and USD (gross_pnl
+        # includes swap); counts exclude rolls and ejections from "Scalps",
+        # money includes everything (02_TRAPS 26 Sep)
+        kinds = {k: {"count": 0, "pips": 0.0, "usd": 0.0, "pips_unknown": 0}
+                 for k in ("scalp", "eject", "roll")}
         by_symbol = {}
-        roll_count = 0
-        roll_usd = 0.0
-        eject_count = 0
-        eject_usd = 0.0
-
         for record in scalps:
             instrument = record.get("instrument") or "?"
-            pips = _scalp_gross_pips(record)
-            usd = record.get("gross_pnl")
-            if pips is not None:
-                total_pips += pips
-            if isinstance(usd, (int, float)) and not isinstance(usd, bool):
-                total_usd += float(usd)
             if record.get("rolled") is True:
-                roll_count += 1
-                if isinstance(usd, (int, float)) and not isinstance(usd, bool):
-                    roll_usd += float(usd)
-            if record.get("ejected") is True:
-                eject_count += 1
-                if isinstance(usd, (int, float)) and not isinstance(usd, bool):
-                    eject_usd += float(usd)
+                kind = "roll"
+            elif record.get("ejected") is True:
+                kind = "eject"
+            else:
+                kind = "scalp"
+            pips = _scalp_signed_pips(record)
+            usd = record.get("gross_pnl")
+            k = kinds[kind]
+            k["count"] += 1
+            if pips is None:
+                k["pips_unknown"] += 1
+            else:
+                k["pips"] += pips
+            if isinstance(usd, (int, float)) and not isinstance(usd, bool):
+                k["usd"] += float(usd)
 
-            bucket = by_symbol.setdefault(instrument, {"count": 0, "pips": 0.0, "usd": 0.0})
-            if not _scalp_excluded_from_counts(record):
-                bucket["count"] += 1
+            bucket = by_symbol.setdefault(
+                instrument, {"scalp": 0, "eject": 0, "roll": 0, "pips": 0.0, "usd": 0.0})
+            bucket[kind] += 1
             if pips is not None:
                 bucket["pips"] += pips
             if isinstance(usd, (int, float)) and not isinstance(usd, bool):
                 bucket["usd"] += float(usd)
 
-        commission = round(-0.05 * len(scalps), 2)
-        net_today = round(total_usd + commission, 2)
-        scalp_count = _count_scalp_records_for_summary(scalps)
+        commission, comm_unknown = _commission_for_records(scalps)
+        net_pips = sum(k["pips"] for k in kinds.values())
+        net_usd_before = sum(k["usd"] for k in kinds.values())
+        sk, ek, rk = kinds["scalp"], kinds["eject"], kinds["roll"]
         lines.append(
-            f"Scalps       {scalp_count} closed, {_fmt_signed(total_pips, 1)} pips, "
-            f"{_fmt_money(total_usd)} USD gross"
+            f"Scalps     {sk['count']:>4} closed   {_fmt_signed(sk['pips'], 1):>9} pips  "
+            f"{_fmt_money(sk['usd']):>10} USD"
         )
         lines.append(
-            f"Rolls {roll_count} {_fmt_money(roll_usd)} USD   "
-            f"Ejections {eject_count} {_fmt_money(eject_usd)} USD"
+            f"Ejections  {ek['count']:>4}          {_fmt_signed(ek['pips'], 1):>9} pips  "
+            f"{_fmt_money(ek['usd']):>10} USD"
         )
         lines.append(
-            f"             Commission {_fmt_money(commission)} USD   "
-            f"Net {_fmt_money(net_today)} USD"
+            f"Rolls      {rk['count']:>4}          {_fmt_signed(rk['pips'], 1):>9} pips  "
+            f"{_fmt_money(rk['usd']):>10} USD"
         )
+        if commission is None:
+            lines.append(
+                f"Commission {len(scalps):>4} closes   unknown ({comm_unknown} of {len(scalps)} "
+                f"closes on an account with no known rate)"
+            )
+            lines.append(
+                f"Net                      {_fmt_signed(net_pips, 1):>9} pips   n/a (commission unknown)"
+            )
+        else:
+            lines.append(
+                f"Commission {len(scalps):>4} closes                   "
+                f"{_fmt_money(commission):>10} USD"
+            )
+            lines.append(
+                f"Net                      {_fmt_signed(net_pips, 1):>9} pips  "
+                f"{_fmt_money(round(net_usd_before + commission, 2)):>10} USD"
+            )
+        unknown_pips = sum(k["pips_unknown"] for k in kinds.values())
+        if unknown_pips:
+            lines.append(f"             ({unknown_pips} closes without a direction: pips not counted)")
         lines.append("")
 
         for instrument in sorted(by_symbol.keys(), key=lambda s: (-by_symbol[s]["usd"], s)):
             bucket = by_symbol[instrument]
-            scalp_word = "scalp" if bucket["count"] == 1 else "scalps"
+            parts = [f"{bucket['scalp']} {'scalp' if bucket['scalp'] == 1 else 'scalps'}"]
+            if bucket["eject"]:
+                parts.append(f"{bucket['eject']} {'ejection' if bucket['eject'] == 1 else 'ejections'}")
+            if bucket["roll"]:
+                parts.append(f"{bucket['roll']} {'roll' if bucket['roll'] == 1 else 'rolls'}")
             lines.append(
-                f"  {instrument:<6} {bucket['count']} {scalp_word}   "
+                f"  {instrument:<6} {', '.join(parts)}   "
                 f"{_fmt_signed(bucket['pips'], 1)} pips   "
                 f"{_fmt_money(bucket['usd'])} USD"
             )
@@ -2220,8 +2304,7 @@ def _build_daily_summary_text(selected_date=None):
         if not _scalp_excluded_from_counts(record)
     ]
     cycle_gross = _scalp_usd_gross(cycle_all)
-    cycle_commission = round(-0.05 * len(cycle_all), 2)
-    cycle_net = round(cycle_gross + cycle_commission, 2)
+    cycle_commission, cycle_comm_unknown = _commission_for_records(cycle_all)
     cycle_roll_count = sum(1 for r in cycle_all if r.get("rolled") is True)
     cycle_eject_count = sum(1 for r in cycle_all if r.get("ejected") is True)
 
@@ -2235,10 +2318,17 @@ def _build_daily_summary_text(selected_date=None):
         f"Cycle        day {day_num} (since {_format_broker_date_label(cycle_start)})"
         f"{truncated}"
     )
-    lines.append(
-        f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD gross, "
-        f"{_fmt_money(cycle_commission)} commission, {_fmt_money(cycle_net)} net"
-    )
+    if cycle_commission is None:
+        lines.append(
+            f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD before "
+            f"commission, commission unknown ({cycle_comm_unknown} of {len(cycle_all)} closes)"
+        )
+    else:
+        lines.append(
+            f"             {len(cycle_records)} scalps, {_fmt_money(cycle_gross)} USD before "
+            f"commission, {_fmt_money(cycle_commission)} commission, "
+            f"{_fmt_money(round(cycle_gross + cycle_commission, 2))} net"
+        )
     lines.append(
         f"             rolls {cycle_roll_count}, ejections {cycle_eject_count}"
     )

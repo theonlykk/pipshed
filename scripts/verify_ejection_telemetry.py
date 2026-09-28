@@ -1335,6 +1335,8 @@ def _summary_base_records():
             "rolled": False,
             "ejected": False,
             "close_time": "2026-09-24 10:00:00",
+            "direction": "LONG",
+            "account_login": 53066709,
         })
     records.append({
         "instrument": "GBPUSD",
@@ -1344,6 +1346,8 @@ def _summary_base_records():
         "rolled": True,
         "ejected": False,
         "close_time": "2026-09-24 10:20:00",
+        "direction": "LONG",
+        "account_login": 53066709,
     })
     records.append({
         "instrument": "GBPUSD",
@@ -1353,6 +1357,8 @@ def _summary_base_records():
         "rolled": False,
         "ejected": True,
         "close_time": "2026-09-24 11:10:00",
+        "direction": "LONG",
+        "account_login": 53066709,
     })
     return records
 
@@ -1372,6 +1378,7 @@ def check_et20():
         "position_count": 0,
         "pair_count": 0,
         "deepest_stack": 0,
+        "deepest_side": (0, None, None),
         "open_mtm": 0.0,
     }
     try:
@@ -1381,17 +1388,30 @@ def check_et20():
         pipshed._collect_scalp_records_between = original_between
         pipshed._read_global_account_metrics = original_metrics
         pipshed._collect_open_book_stats = original_book
-    if "Scalps       4 closed" not in text:
-        raise AssertionError("expected Scalps 4 closed")
-    if "Rolls 1 -3.50 USD   Ejections 1 -1.00 USD" not in text:
-        raise AssertionError("missing Rolls/Ejections line")
-    if "-2.50 USD gross" not in text:
-        raise AssertionError("expected gross -2.50")
-    if "Commission -0.30 USD" not in text:
-        raise AssertionError("expected commission -0.30")
-    if "Net -2.80 USD" not in text:
-        raise AssertionError("expected net -2.80")
-    return "summary counts exclude roll/eject; money includes all"
+    # 28 Sep layout (hand-derived): 4 scalps +5.0 pips each; roll -35.0 pips
+    # -3.50; ejection -10.0 pips -1.00; 6 closes x 0.08 = -0.48;
+    # net -25.0 pips, 2.00 - 3.50 - 1.00 - 0.48 = -2.98 USD
+    lines = text.splitlines()
+
+    def line(head):
+        got = [ln for ln in lines if ln.startswith(head)]
+        if not got:
+            raise AssertionError(f"no {head!r} line")
+        return got[0]
+
+    sc, rl, ej = line("Scalps "), line("Rolls "), line("Ejections ")
+    cm, nt = line("Commission "), line("Net ")
+    if not ("4 closed" in sc and "+20.0 pips" in sc and "+2.00 USD" in sc):
+        raise AssertionError(f"scalps line {sc!r}")
+    if not (" 1 " in rl and "-35.0 pips" in rl and "-3.50 USD" in rl):
+        raise AssertionError(f"rolls line {rl!r}")
+    if not (" 1 " in ej and "-10.0 pips" in ej and "-1.00 USD" in ej):
+        raise AssertionError(f"ejections line {ej!r}")
+    if not ("6 closes" in cm and "-0.48 USD" in cm):
+        raise AssertionError(f"commission line {cm!r}")
+    if not ("-25.0 pips" in nt and "-2.98 USD" in nt):
+        raise AssertionError(f"net line {nt!r}")
+    return "summary counts exclude roll/eject; money and pips include all, signed"
 
 
 def _e3_production_sample_fills():

@@ -145,6 +145,7 @@ def check_cr5():
         "#criticalBanner.resolved-bg",
         "crit-line resolved",
         "(r.resolved ? '  resolved: instance running again' : '')",
+        ".concat(rows.filter(function(r) { return r.resolved; }))",   # resolved rows last
     ]
     missing = [n for n in need if n not in html]
     if missing:

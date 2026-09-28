@@ -545,6 +545,8 @@
     #criticalBanner.critical-bg { background: #3d1515; color: #ffc9c9; border: 1px solid #8b2a2a; }
     #criticalBanner.warn-bg { background: #3d2e10; color: #ffe6a8; border: 1px solid #8b6914; }
     #criticalBanner.stale-bg { background: #2a2a2a; color: #bbb; border: 1px solid #555; }
+    #criticalBanner.resolved-bg { background: #222; color: #999; border: 1px solid #444; }
+    #criticalBanner .crit-line.resolved { color: #888; }
     #criticalBanner .crit-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .neutral  { color: var(--text); }
 
@@ -1870,13 +1872,17 @@
       el.style.display = 'none';
       return;
     }
-    const anyCritical = rows.some(function(r) { return r.level === 'CRITICAL'; });
-    el.className = (anyCritical ? 'critical-bg' : 'warn-bg') + ' has-rows';
-    el.innerHTML = rows.map(function(r) {
-      return '<div class="crit-line">' +
+    const anyCritical = rows.some(function(r) { return r.level === 'CRITICAL' && !r.resolved; });
+    const anyOpen = rows.some(function(r) { return !r.resolved; });
+    el.className = (anyCritical ? 'critical-bg' : (anyOpen ? 'warn-bg' : 'resolved-bg')) + ' has-rows';
+    const ordered = rows.filter(function(r) { return !r.resolved; })
+      .concat(rows.filter(function(r) { return r.resolved; }));
+    el.innerHTML = ordered.map(function(r) {
+      return '<div class="' + (r.resolved ? 'crit-line resolved' : 'crit-line') + '">' +
         (r.instance_id || '--') + '  ' +
         (r.code || '--') + '  x' + (r.count != null ? r.count : '--') + '  last ' +
         formatCriticalLast(r.last_at) +
+        (r.resolved ? '  resolved: instance running again' : '') +
         '</div>';
     }).join('');
   }

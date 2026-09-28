@@ -2680,6 +2680,32 @@ def public_daily_table(token, _ignored):
         return _apply_no_cache_headers(response), 500
 
 
+def _critical_mark_resolved(payload):
+    """Add "resolved": true to each halt-code CRITICAL row whose instance is
+    live, not halted and invariant_ok true now (same rule as the fleet
+    strip: a halt clears only on an EA restart). Works on the parsed copy;
+    the Redis payload is never written."""
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return
+    cache = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("level") != "CRITICAL" or row.get("code") not in _FLEET_STRIP_HALT_CODES:
+            continue
+        inst = row.get("instance_id")
+        if not inst:
+            continue
+        if inst not in cache:
+            card = _summarize_grind_instance_state(inst, r.get(f"fxmatrix:state:{inst}"))
+            # a card without a heartbeat has invariant_ok None, so "live" is implied
+            cache[inst] = (card.get("halted") is not True
+                           and card.get("invariant_ok") is True)
+        if cache[inst]:
+            row["resolved"] = True
+
+
 @app.route(
     "/api/g/<token>/critical",
     methods=["GET"],
@@ -2701,6 +2727,7 @@ def public_critical_list(token, _ignored):
             payload = json.loads(raw)
         else:
             payload = {"generated_at": None, "rows": []}
+        _critical_mark_resolved(payload)
         response = jsonify(payload)
         return _apply_no_cache_headers(response), 200
     except Exception:

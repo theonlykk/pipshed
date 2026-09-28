@@ -911,6 +911,121 @@ def check_fs30():
     return "EVENT lines print the code"
 
 
+# FS31-FS35 (resolved halt events): a halt clears only when the EA restarts
+# (g_grind_halted is reset in OnInit), so a halt-family CRITICAL event on an
+# instance that is live, not halted and invariant_ok true NOW is history.
+# Such rows become level "resolved" (grey), sorted after amber. Predicted at
+# the tests-only commit: FS31 and FS34 FAIL; FS32, FS33 and FS35 are guards
+# that pass in both states (they pin what must NOT change).
+def _crit_rows_resolved():
+    return {
+        "generated_at": now.isoformat(),
+        "rows": [
+            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "CRITICAL", "code": "INVARIANT_FAIL",
+             "count": 2, "first_at": "2026-09-28T16:27:38Z", "last_at": "2026-09-28T16:27:40Z"},
+            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "CRITICAL", "code": "QUARANTINE_HALT",
+             "count": 1, "first_at": "2026-09-28T16:27:38Z", "last_at": "2026-09-28T16:27:38Z"},
+            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "WARN", "code": "QUARANTINE_ENTER",
+             "count": 12, "first_at": "2026-09-28T09:56:58Z", "last_at": "2026-09-28T16:59:00Z"},
+            {"instance_id": "GRIND_EURUSD_OPTC", "level": "CRITICAL", "code": "STARTUP_EXIT_SHORTFALL_SIDE",
+             "count": 1, "first_at": "2026-09-28T16:57:11Z", "last_at": "2026-09-28T16:57:11Z"},
+        ],
+    }
+
+
+def _fleet_c_live(fake, gbpusd_hb):
+    for inst in GRIND_C_INSTANCES:
+        fake.set(f"fxmatrix:state:{inst}",
+                 gbpusd_hb if inst == "GRIND_GBPUSD_OPTC"
+                 else HBB(30, account_login=53071896, invariant_ok=True))
+    fake.set(DAILY_TABLE_KEY, json.dumps({"generated_at": now.isoformat(), "rows": _daily_rows_fb()}))
+
+
+def _c_alerts(fake):
+    import app as pipshed
+
+    fake.set(CRITICAL_KEY, json.dumps(_crit_rows_resolved()))
+    pipshed.r = fake
+    data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
+    return _fleet_by_letter(data, "C")
+
+
+def check_fs31():
+    fake = FakeRedis()
+    _fleet_c_live(fake, HBB(30, account_login=53071896, invariant_ok=True))
+    c = _c_alerts(fake)
+    got = [(a.get("level"), a.get("code"), a.get("instance_id")) for a in c.get("alerts") or []
+           if a.get("kind") == "EVENT"]            # the fixture's LEDGER alert is out of scope
+    expected = [
+        ("red", "STARTUP_EXIT_SHORTFALL_SIDE", "GRIND_EURUSD_OPTC"),
+        ("amber", "QUARANTINE_ENTER", "GRIND_GBPUSD_OPTC"),
+        ("resolved", "INVARIANT_FAIL", "GRIND_GBPUSD_OPTC"),
+        ("resolved", "QUARANTINE_HALT", "GRIND_GBPUSD_OPTC"),
+    ]
+    if got != expected:
+        raise AssertionError(f"expected {expected}, got {got}")
+    for a in c["alerts"]:
+        if a.get("level") == "resolved" and not str(a.get("detail", "")).endswith("resolved: instance running again"):
+            raise AssertionError(f"resolved detail must end 'resolved: instance running again': {a}")
+    return "halt events on a healthy instance are resolved, grey, after amber"
+
+
+def check_fs32():
+    fake = FakeRedis()
+    _fleet_c_live(fake, HBB(30, account_login=53071896, halted=True,
+                            halt_reason="I3_SHORT_NAKED", invariant_ok=False))
+    c = _c_alerts(fake)
+    got = [(a.get("level"), a.get("code")) for a in c.get("alerts") or []
+           if a.get("instance_id") == "GRIND_GBPUSD_OPTC"]
+    for want in (("red", "HALTED"), ("red", "INVARIANT_FAIL"), ("red", "QUARANTINE_HALT")):
+        if want not in got:
+            raise AssertionError(f"halted instance must keep {want}, got {got}")
+    return "a still-halted instance keeps its red halt events"
+
+
+def check_fs33():
+    fake = FakeRedis()
+    _fleet_c_live(fake, HBB(30, account_login=53071896, invariant_ok=True))
+    c = _c_alerts(fake)
+    row = [a for a in c.get("alerts") or [] if a.get("code") == "STARTUP_EXIT_SHORTFALL_SIDE"]
+    if len(row) != 1 or row[0].get("level") != "red":
+        raise AssertionError(f"a non-halt CRITICAL stays red on a healthy instance, got {row}")
+    return "non-halt CRITICAL codes are never resolved"
+
+
+def check_fs34():
+    import app as pipshed
+
+    html = pipshed.app.test_client().get("/").get_data(as_text=True)
+    if ".fleet-alerts.sev-resolved" not in html:
+        raise AssertionError("a grey sev-resolved banner style is required")
+    if "a.level === 'amber'" not in html:
+        raise AssertionError("banner severity must fall back red -> amber -> resolved")
+    if "grey" not in html.lower() or "resolved" not in html.lower():
+        raise AssertionError("the alert legend must explain grey = resolved")
+    return "grey banner and legend for resolved events"
+
+
+def check_fs35():
+    fake = FakeRedis()
+    # live, not halted, but in quarantine now (invariant_ok false): not resolved
+    _fleet_c_live(fake, HBB(30, account_login=53071896, invariant_ok=False))
+    c = _c_alerts(fake)
+    got = [(a.get("level"), a.get("code")) for a in c.get("alerts") or []
+           if a.get("instance_id") == "GRIND_GBPUSD_OPTC"]
+    if ("red", "INVARIANT_FAIL") not in got or ("red", "QUARANTINE_HALT") not in got:
+        raise AssertionError(f"invariant_ok false keeps halt events red, got {got}")
+    # and a heartbeat with no invariant_ok key at all (older builds) stays red too
+    fake2 = FakeRedis()
+    _fleet_c_live(fake2, HBB(30, account_login=53071896))
+    c2 = _c_alerts(fake2)
+    got2 = [(a.get("level"), a.get("code")) for a in c2.get("alerts") or []
+            if a.get("instance_id") == "GRIND_GBPUSD_OPTC"]
+    if ("red", "INVARIANT_FAIL") not in got2:
+        raise AssertionError(f"missing invariant_ok must not resolve, got {got2}")
+    return "quarantined or unknown invariant state keeps halt events red"
+
+
 CHECKS = [
     ("FS1", check_fs1),
     ("FS2", check_fs2),
@@ -942,6 +1057,11 @@ CHECKS = [
     ("FS28", check_fs28),
     ("FS29", check_fs29),
     ("FS30", check_fs30),
+    ("FS31", check_fs31),
+    ("FS32", check_fs32),
+    ("FS33", check_fs33),
+    ("FS34", check_fs34),
+    ("FS35", check_fs35),
 ]
 
 

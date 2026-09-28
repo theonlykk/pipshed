@@ -19,9 +19,16 @@ Options:
     --depth          scalp_history per instance and direction over the last --hours:
                      scalps, max stack_depth, scalps closed at stack_depth >= --cap
                      (default 8); honours --instance. Combines with --codes
+    --export-study   JSON lines for the ejection value study (fxmatrix
+                     docs/research): a _meta line, then fill_logs, scalp_history
+                     and ea_events (EJECT_*, ROLL_*, CARRY_*) of the last --days
+                     (default 7), and every config_events row; honours --instance.
+                     Save it on the desktop with
+                     ... --export-study --days 7 | Set-Content -Encoding utf8 <file>
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
+import json
 import os
 import sys
 
@@ -37,6 +44,39 @@ TABLES = {
     "scalp_history": ["received_at", "instance_id", "direction", "entry_price", "exit_price",
                       "gross_pnl", "close_time_broker", "source"],
 }
+
+EXPORT_STUDY_SQL = {
+    "fill_logs": (
+        "SELECT * FROM fill_logs WHERE received_at > now() - make_interval(days => %(days)s)"
+        " AND (%(instance)s::text IS NULL OR instance_id = %(instance)s) ORDER BY received_at, id"
+    ),
+    "scalp_history": (
+        "SELECT * FROM scalp_history WHERE received_at > now() - make_interval(days => %(days)s)"
+        " AND (%(instance)s::text IS NULL OR instance_id = %(instance)s) ORDER BY received_at, id"
+    ),
+    "ea_events": (
+        "SELECT * FROM ea_events WHERE received_at > now() - make_interval(days => %(days)s)"
+        " AND (code LIKE 'EJECT\\_%%' OR code LIKE 'ROLL\\_%%' OR code LIKE 'CARRY\\_%%')"
+        " AND (%(instance)s::text IS NULL OR instance_id = %(instance)s) ORDER BY received_at, id"
+    ),
+    "config_events": (
+        "SELECT * FROM config_events"
+        " WHERE (%(instance)s::text IS NULL OR instance_id = %(instance)s) ORDER BY received_at, id"
+    ),
+}
+
+
+def export_study(cur, days, instance):
+    """Print the study export as JSON lines: a _meta line, then one line per row."""
+    print(json.dumps({"table": "_meta", "days": days, "instance": instance}))
+    for table, sql in EXPORT_STUDY_SQL.items():
+        cur.execute(sql, {"days": days, "instance": instance})
+        cols = [desc[0] for desc in cur.description]
+        for row in cur.fetchall():
+            rec = {"table": table}
+            rec.update(dict(zip(cols, row)))
+            print(json.dumps(rec, default=str))
+
 
 CARRY_SQL = """
 SELECT DISTINCT ON (detail->>'symbol')
@@ -278,6 +318,8 @@ def main(argv=None):
     parser.add_argument("--codes")
     parser.add_argument("--depth", action="store_true")
     parser.add_argument("--cap", type=int, default=8)
+    parser.add_argument("--export-study", action="store_true")
+    parser.add_argument("--days", type=int, default=7)
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -289,6 +331,10 @@ def main(argv=None):
     conn.set_session(readonly=True, autocommit=True)
     try:
         with conn.cursor() as cur:
+            if args.export_study:
+                export_study(cur, args.days, args.instance)
+                return 0
+
             if args.codes or args.depth:
                 if args.codes:
                     codes = [c.strip() for c in args.codes.split(",") if c.strip()]

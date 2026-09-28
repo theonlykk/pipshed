@@ -48,16 +48,23 @@ def _seed_heartbeat(mock, instance_id, orders=None, positions=None,
     mock.set(f"fxmatrix:state:{instance_id}", json.dumps(payload))
 
 
-def _seed_scalp(mock, instance_id, instrument, entry, exit_price, gross_pnl, trade_date):
+def _seed_scalp(mock, instance_id, instrument, entry, exit_price, gross_pnl, trade_date,
+                direction="LONG", account_login=None, ejected=False, rolled=False):
     record = {
         "close_time": f"{trade_date}T15:30:00+00:00",
         "trade_date": trade_date,
         "instrument": instrument,
-        "direction": "LONG",
+        "direction": direction,
         "entry_price": entry,
         "exit_price": exit_price,
         "gross_pnl": gross_pnl,
     }
+    if account_login is not None:
+        record["account_login"] = account_login
+    if ejected:
+        record["ejected"] = True
+    if rolled:
+        record["rolled"] = True
     key = f"fxmatrix:scalp_history:{instance_id}"
     mock._lists.setdefault(key, []).append(json.dumps(record))
 
@@ -75,21 +82,27 @@ def test_s1_summary_text():
     broker_day = pipshed._broker_today()
 
     _seed_heartbeat(mock, "GRIND_EURGBP_OPT")
-    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85020, 2.00, broker_day)
-    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85100, 0.85110, 1.00, broker_day)
-    _seed_scalp(mock, "GRIND_AUDCAD_OPT", "AUDCAD", 0.90000, 0.90020, 2.00, broker_day)
+    ic = 53066709
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85020, 2.00, broker_day, account_login=ic)
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85100, 0.85110, 1.00, broker_day, account_login=ic)
+    _seed_scalp(mock, "GRIND_AUDCAD_OPT", "AUDCAD", 0.90000, 0.90020, 2.00, broker_day, account_login=ic)
 
     resp = client.get("/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary")
     assert resp.status_code == 200, resp.data
     assert resp.content_type.startswith("text/plain")
     text = resp.get_data(as_text=True)
 
+    # 28 Sep: IC charges 0.04 on each IN deal = 0.08 per close (was 0.05 per record)
+    lines = text.splitlines()
+    scalps_line = [ln for ln in lines if ln.startswith("Scalps ")][0]
+    comm_line = [ln for ln in lines if ln.startswith("Commission ")][0]
+    net_line = [ln for ln in lines if ln.startswith("Net ")][0]
     assert "FXGRIND --" in text
-    assert "3 closed" in text
-    assert "+5.0 pips" in text
-    assert "+5.00 USD gross" in text
-    assert "Commission -0.15 USD" in text
-    assert "Net +4.85 USD" in text
+    assert "3 closed" in scalps_line
+    assert "+5.0 pips" in scalps_line
+    assert "+5.00 USD" in scalps_line
+    assert "3 closes" in comm_line and "-0.24 USD" in comm_line
+    assert "+5.0 pips" in net_line and "+4.76 USD" in net_line
     assert "Equity 100,050.25" in text
     assert "Balance 100,000.00 USD" in text
 
@@ -386,10 +399,11 @@ def test_s7_cycle_totals_multi_day():
             assert "1 closed" in text
             totals_line = [
                 ln for ln in text.splitlines()
-                if ln.startswith("             ") and "USD gross" in ln
+                if ln.startswith("             ") and "scalps," in ln
             ]
             assert totals_line, "missing cycle totals line"
-            assert "3 scalps, +9.00 USD gross" in totals_line[0]
+            assert "3 scalps, +9.00 USD" in totals_line[0]
+            assert "commission unknown" in totals_line[0]
         print("S7 OK: cycle totals aggregate scalps across broker days")
     finally:
         pipshed.CYCLE_START_DATE = old_cycle
@@ -497,28 +511,154 @@ def test_c6_wrong_token():
     print("C6 OK: both routes 404 on wrong token")
 
 
+# S11-S16 (28 Sep): signed pips; ejections and rolls on their own lines,
+# netted into Net; commission by account (FTMO 0.06, IC 0.08 per close,
+# measured on 639 IN deals of the 26-28 Sep ledger); unknown account ->
+# "unknown", never a guess; "deepest side" instead of long+short.
+# Predicted at the tests-only commit: S11, S12, S13, S14, S15, S16 FAIL.
+def _summary(mock, pipshed):
+    resp = pipshed.app.test_client().get("/api/g/" + pipshed.PUBLIC_GRIND_STATUS_TOKEN + "/summary")
+    assert resp.status_code == 200, resp.data
+    return resp.get_data(as_text=True).splitlines()
+
+
+def _line(lines, head):
+    got = [ln for ln in lines if ln.startswith(head)]
+    assert got, f"no line starting {head!r} in {lines}"
+    return got[0]
+
+
+def test_s11_signed_pips_and_ejections():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    day = pipshed._broker_today()
+    ic = 53066709
+    _seed_heartbeat(mock, "GRIND_EURGBP_OPT")
+    # long scalp +2.0 pips; short scalp +1.0 pip (entry 0.85110 -> exit 0.85100)
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85020, 0.27, day, "LONG", ic)
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85110, 0.85100, 0.13, day, "SHORT", ic)
+    # long ejection: entry 0.86092 exit 0.85804 = -28.8 pips, -3.85 USD
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.86092, 0.85804, -3.85, day, "LONG", ic, ejected=True)
+    lines = _summary(mock, pipshed)
+    sc, ej, rl = _line(lines, "Scalps "), _line(lines, "Ejections "), _line(lines, "Rolls ")
+    cm, nt = _line(lines, "Commission "), _line(lines, "Net ")
+    assert "2 closed" in sc and "+3.0 pips" in sc and "+0.40 USD" in sc, sc
+    assert " 1 " in ej and "-28.8 pips" in ej and "-3.85 USD" in ej, ej
+    assert " 0 " in rl and "+0.0 pips" in rl and "+0.00 USD" in rl, rl
+    # 3 closes x 0.08 = -0.24; net pips 3.0 - 28.8 = -25.8; USD 0.40 - 3.85 - 0.24 = -3.69
+    assert "3 closes" in cm and "-0.24 USD" in cm, cm
+    assert "-25.8 pips" in nt and "-3.69 USD" in nt, nt
+    print("S11 OK: signed pips, ejection line, net of ejections and commission")
+
+
+def test_s12_ftmo_commission():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    day = pipshed._broker_today()
+    _seed_heartbeat(mock, "GRIND_EURGBP_OPT")
+    for _ in range(4):
+        _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85050, 0.67, day, "LONG", 1514731800)
+    cm = _line(_summary(mock, pipshed), "Commission ")
+    # 4 closes x 0.06 = -0.24
+    assert "4 closes" in cm and "-0.24 USD" in cm, cm
+    print("S12 OK: FTMO 0.06 per close")
+
+
+def test_s13_unknown_commission():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    day = pipshed._broker_today()
+    _seed_heartbeat(mock, "GRIND_EURGBP_OPT")
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85050, 0.67, day, "LONG", 99999)
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85050, 0.67, day, "LONG", 53066709)
+    lines = _summary(mock, pipshed)
+    cm, nt = _line(lines, "Commission "), _line(lines, "Net ")
+    assert "unknown" in cm and "1 of 2" in cm, cm
+    assert "USD" not in nt.split("pips", 1)[1] or "n/a" in nt, nt
+    assert "n/a" in nt, nt
+    print("S13 OK: an unknown account makes commission and net unknown, not zero")
+
+
+def test_s14_rolls_line():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    day = pipshed._broker_today()
+    ic = 53071896
+    _seed_heartbeat(mock, "GRIND_AUDCAD_OPT")
+    # short roll: entry 0.99000 exit 0.99650 = -65.0 pips
+    _seed_scalp(mock, "GRIND_AUDCAD_OPT", "AUDCAD", 0.99000, 0.99650, -4.60, day, "SHORT", ic, rolled=True)
+    lines = _summary(mock, pipshed)
+    rl, sc, nt = _line(lines, "Rolls "), _line(lines, "Scalps "), _line(lines, "Net ")
+    assert " 1 " in rl and "-65.0 pips" in rl and "-4.60 USD" in rl, rl
+    assert "0 closed" in sc, sc
+    # 1 close x 0.08: -4.60 - 0.08 = -4.68
+    assert "-65.0 pips" in nt and "-4.68 USD" in nt, nt
+    print("S14 OK: rolls on their own line and in Net")
+
+
+def test_s15_deepest_side():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    _seed_heartbeat(mock, "GRIND_EURGBP_OPT", open_long=1, open_short=8)
+    _seed_heartbeat(mock, "GRIND_GBPUSD_OPT", open_long=5, open_short=2)
+    rk = _line(_summary(mock, pipshed), "Open risk")
+    assert "deepest side 8 (EURGBP S)" in rk, rk
+    assert "stack 9" not in rk, rk
+    print("S15 OK: deepest side, not long + short")
+
+
+def test_s16_symbol_line_nets_ejections():
+    import app as pipshed
+
+    mock = MockRedis()
+    pipshed.r = mock
+    day = pipshed._broker_today()
+    ic = 53066709
+    _seed_heartbeat(mock, "GRIND_EURGBP_OPT")
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.85000, 0.85050, 0.67, day, "LONG", ic)
+    _seed_scalp(mock, "GRIND_EURGBP_OPT", "EURGBP", 0.86000, 0.85700, -4.00, day, "LONG", ic, ejected=True)
+    sym = [ln for ln in _summary(mock, pipshed) if ln.startswith("  EURGBP")][0]
+    # +5.0 - 30.0 = -25.0 pips; 0.67 - 4.00 = -3.33 USD
+    assert "1 scalp" in sym and "1 ejection" in sym, sym
+    assert "-25.0 pips" in sym and "-3.33 USD" in sym, sym
+    print("S16 OK: per-pair line counts scalps and ejections and nets their pips")
+
+
 def main():
-    test_s1_summary_text()
-    test_s2_empty_day()
-    test_s3_cycle_start_default()
-    test_s4_layout_order()
-    test_s5_financing_accrued()
-    test_s6_cycle_day_count()
-    test_s7_cycle_totals_multi_day()
-    test_s8_historical_date_markers()
-    test_s9_invalid_date()
-    test_s10_collect_scalp_records_between()
-    test_c1_long_ext_carry()
-    test_c2_short_ext_carry()
-    test_c3_ent_unchanged()
-    test_c4_unparsed_comment()
-    test_c5_no_carry_data()
-    test_c6_wrong_token()
-    test_c7_mult_tomorrow_carry_build()
-    test_c8_mult_tomorrow_fallback()
+    tests = [
+        test_s1_summary_text, test_s2_empty_day, test_s3_cycle_start_default,
+        test_s4_layout_order, test_s5_financing_accrued, test_s6_cycle_day_count,
+        test_s7_cycle_totals_multi_day, test_s8_historical_date_markers,
+        test_s9_invalid_date, test_s10_collect_scalp_records_between,
+        test_s11_signed_pips_and_ejections, test_s12_ftmo_commission,
+        test_s13_unknown_commission, test_s14_rolls_line, test_s15_deepest_side,
+        test_s16_symbol_line_nets_ejections,
+        test_c1_long_ext_carry, test_c2_short_ext_carry, test_c3_ent_unchanged,
+        test_c4_unparsed_comment, test_c5_no_carry_data, test_c6_wrong_token,
+        test_c7_mult_tomorrow_carry_build, test_c8_mult_tomorrow_fallback,
+    ]
+    failed = []
+    for t in tests:
+        try:
+            t()
+        except Exception as exc:
+            failed.append(t.__name__)
+            print(f"FAIL {t.__name__}: {exc!r}"[:400])
+    print(f"SUMMARY passed={len(tests) - len(failed)} failed={len(failed)}")
+    if failed:
+        return 1
     print("All summary and carry audit checks passed.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

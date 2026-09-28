@@ -481,7 +481,9 @@
     .fleet-alerts.has-alerts { display: block; }
     .fleet-alerts.sev-red { background: rgba(239, 68, 68, 0.15); color: var(--red); }
     .fleet-alerts.sev-amber { background: rgba(212, 160, 23, 0.12); color: #b8860b; }
+    .fleet-alerts.sev-resolved { background: rgba(128, 128, 128, 0.10); color: var(--muted); }
     .fleet-alerts-line { margin-bottom: 2px; }
+    .fleet-alerts-line.lvl-resolved { color: var(--muted); }
     .fleet-equity-row {
       display: flex;
       flex-wrap: wrap;
@@ -1008,12 +1010,13 @@
 
 <div id="fleetStrip" class="fleet-strip"></div>
 <details class="fleet-legend">
-  <summary>How to read the fleet alerts (red means act, amber means look)</summary>
+  <summary>How to read the fleet alerts (red means act, amber means look, grey means resolved)</summary>
   <p>Each banner line is <code>WHAT PAIR SLOT: detail</code>. Slot OPT/ALT = cycle 3, OPTB/ALTB = Fleet B, OPTC/ALTC = Fleet C. "x2, last 21:05Z" = twice in the last 24 h, latest at 21:05 UTC.</p>
   <table>
     <tr><th>What</th><th>Colour</th><th>Meaning</th><th>What to do</th></tr>
     <tr><td><code>HALTED</code></td><td class="lg-red">red</td><td>The instance has stopped; the detail is its reason (e.g. I6_LONG)</td><td>Act: bring it to the chat</td></tr>
     <tr><td>an event code</td><td><span class="lg-red">red</span> if CRITICAL, <span class="lg-amber">amber</span> if WARN</td><td>Something the EA logged in the last 24 h (codes below)</td><td>Red: act. Amber: read the code</td></tr>
+    <tr><td>a halt code (<code>INVARIANT_FAIL</code>, <code>QUARANTINE_HALT</code>, <code>RECON_FAIL</code>, <code>REBUILD_EXIT_*</code>)</td><td>grey</td><td>"resolved: instance running again": the instance halted in the last 24 h and has since been restarted; it is live, not halted, and its invariants pass now. A halt clears only on a restart</td><td>Nothing now; the event stays listed for 24 h as history</td></tr>
     <tr><td><code>DAY_LOSS</code></td><td><span class="lg-amber">amber</span> 50%, <span class="lg-red">red</span> 80%</td><td>Day loss against the $500 limit; at 80% the breaker trips and blocks new entries</td><td>Amber: watch. Red: the breaker has acted</td></tr>
     <tr><td><code>NOT_REPORTING</code></td><td class="lg-amber">amber</td><td>One instance has sent no heartbeat for 5 minutes</td><td>Check that chart and terminal</td></tr>
     <tr><td><code>STALE_HEARTBEAT</code></td><td class="lg-amber">amber</td><td>An instance's last heartbeat is over 3 minutes old</td><td>Usually a slow minute; check if it persists</td></tr>
@@ -2231,12 +2234,14 @@
       var badge = card.badge || '--';
       var health = card.health || {};
       var alerts = card.alerts || [];
-      var alertSev = alerts.some(function(a) { return a.level === 'red'; }) ? 'red' : 'amber';
+      var alertSev = alerts.some(function(a) { return a.level === 'red'; }) ? 'red'
+        : (alerts.some(function(a) { return a.level === 'amber'; }) ? 'amber' : 'resolved');
       var alertsHtml = '';
       if (alerts.length) {
         alertsHtml = '<div class="fleet-alerts has-alerts sev-' + alertSev + '">' +
           alerts.map(function(a) {
-            return '<div class="fleet-alerts-line">' + fleetStripAlertLabel(a) + '</div>';
+            return '<div class="fleet-alerts-line' + (a.level === 'resolved' ? ' lvl-resolved' : '') +
+              '">' + fleetStripAlertLabel(a) + '</div>';
           }).join('') + '</div>';
       } else {
         alertsHtml = '<div class="fleet-alerts"></div>';

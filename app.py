@@ -785,6 +785,47 @@ _FLEET_STRIP_ALERT_KIND_ORDER = {
     "EVENTS_UNAVAILABLE": 6,
 }
 
+_FLEET_STRIP_LEVEL_ORDER = {"red": 0, "amber": 1, "resolved": 2}
+
+# CRITICAL codes that mean "this instance halted". A halt clears only when
+# the EA restarts (g_grind_halted is reset in OnInit), so once the instance
+# is live, not halted and invariant_ok true again, the event is history.
+_FLEET_STRIP_HALT_CODES = frozenset({
+    "INVARIANT_FAIL",
+    "QUARANTINE_HALT",
+    "RECON_FAIL",
+    "REBUILD_EXIT_FAILED",
+    "REBUILD_EXIT_UNREADABLE",
+})
+
+
+def _fleet_strip_recovered(instances, cards, raw_by_inst, halted):
+    """Instances whose halt events are resolved: live now, not in the halted
+    list, and a heartbeat with invariant_ok exactly true (a missing key
+    never counts as recovered)."""
+    halted_ids = {h.get("instance_id") for h in halted if isinstance(h, dict)}
+    out = set()
+    for inst in instances:
+        if (cards.get(inst) or {}).get("connection") != "live" or inst in halted_ids:
+            continue
+        try:
+            data = json.loads(raw_by_inst.get(inst) or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("invariant_ok") is True:
+            out.add(inst)
+    return out
+
+
+def _fleet_strip_alert_sort_key(inst_index):
+    return lambda a: (
+        _FLEET_STRIP_LEVEL_ORDER.get(a.get("level"), 1),
+        _FLEET_STRIP_ALERT_KIND_ORDER.get(a.get("kind"), 99),
+        inst_index.get(a.get("instance_id"), 9999),
+    )
+
 
 def _fleet_strip_build_alerts(
     *,
@@ -837,14 +878,7 @@ def _fleet_strip_build_alerts(
                     "detail": "critical feed unavailable",
                 }
             )
-        return sorted(
-            alerts,
-            key=lambda a: (
-                0 if a.get("level") == "red" else 1,
-                _FLEET_STRIP_ALERT_KIND_ORDER.get(a.get("kind"), 99),
-                inst_index.get(a.get("instance_id"), 9999),
-            ),
-        )
+        return sorted(alerts, key=_fleet_strip_alert_sort_key(inst_index))
 
     for h in halted:
         inst = h.get("instance_id")
@@ -860,6 +894,7 @@ def _fleet_strip_build_alerts(
 
     if critical_ok and critical_rows:
         fleet_set = set(instances)
+        recovered = _fleet_strip_recovered(instances, cards, raw_by_inst, halted)
         for row in critical_rows:
             if not isinstance(row, dict):
                 continue
@@ -870,13 +905,18 @@ def _fleet_strip_build_alerts(
             level = "red" if level_raw == "CRITICAL" else "amber"
             count = row.get("count")
             last_at = row.get("last_at") or ""
+            detail = f"x{count}, last {_fleet_strip_short_time(last_at)}"
+            if (level == "red" and row.get("code") in _FLEET_STRIP_HALT_CODES
+                    and inst in recovered):
+                level = "resolved"
+                detail += ", resolved: instance running again"
             alerts.append(
                 {
                     "level": level,
                     "kind": "EVENT",
                     "code": row.get("code"),
                     "instance_id": inst,
-                    "detail": f"x{count}, last {_fleet_strip_short_time(last_at)}",
+                    "detail": detail,
                 }
             )
     elif not critical_ok:
@@ -960,14 +1000,7 @@ def _fleet_strip_build_alerts(
             }
         )
 
-    return sorted(
-        alerts,
-        key=lambda a: (
-            0 if a.get("level") == "red" else 1,
-            _FLEET_STRIP_ALERT_KIND_ORDER.get(a.get("kind"), 99),
-            inst_index.get(a.get("instance_id"), 9999),
-        ),
-    )
+    return sorted(alerts, key=_fleet_strip_alert_sort_key(inst_index))
 
 
 def _fleet_strip_placeholder_card(entry):

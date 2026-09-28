@@ -972,8 +972,10 @@ def check_fs31():
 
 def check_fs32():
     fake = FakeRedis()
+    # halted with invariant_ok TRUE (a REBUILD_EXIT_FAILED halt is not an
+    # invariant failure): only the halted state may keep the events red
     _fleet_c_live(fake, HBB(30, account_login=53071896, halted=True,
-                            halt_reason="I3_SHORT_NAKED", invariant_ok=False))
+                            halt_reason="REBUILD_EXIT_FAILED", invariant_ok=True))
     c = _c_alerts(fake)
     got = [(a.get("level"), a.get("code")) for a in c.get("alerts") or []
            if a.get("instance_id") == "GRIND_GBPUSD_OPTC"]

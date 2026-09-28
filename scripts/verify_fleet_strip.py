@@ -53,12 +53,17 @@ two_days_ago = today - timedelta(days=2)
 class FakeRedis:
     def __init__(self):
         self._kv = {}
+        self._lists = {}
 
     def get(self, key):
         return self._kv.get(key)
 
     def set(self, key, value, ex=None):
         self._kv[key] = value
+
+    def lrange(self, key, start, end):
+        items = self._lists.get(key, [])
+        return items[start:] if end == -1 else items[start:end + 1]
 
 
 def HB(seconds_ago, **overrides):
@@ -1028,6 +1033,156 @@ def check_fs35():
     return "quarantined or unknown invariant state keeps halt events red"
 
 
+# FS36-FS42 (28 Sep): each live card carries "summary", the same numbers as
+# the daily summary text for that fleet's own instances (one data function):
+# scalps / ejections / rolls with signed pips and USD, commission by account,
+# net, per pair, deepest side, and the cycle. C72: account money comes from
+# the instance that reports a balance, not the first live one.
+# Predicted at the tests-only commit: FS36-FS42 all FAIL.
+def _scalp_rec(inst, entry, exit_price, usd, direction="LONG", login=53066709,
+               ejected=False, rolled=False, trade_date=None):
+    import app as pipshed
+    rec = {"instrument": inst.split("_")[1], "direction": direction,
+           "entry_price": entry, "exit_price": exit_price, "gross_pnl": usd,
+           "trade_date": trade_date or pipshed._broker_today(),
+           "close_time": (trade_date or pipshed._broker_today()) + "T12:00:00+00:00",
+           "ejected": ejected, "rolled": rolled}
+    if login is not None:
+        rec["account_login"] = login
+    return rec
+
+
+def _push(fake, inst, rec):
+    fake._lists.setdefault(f"fxmatrix:scalp_history:{inst}", []).append(json.dumps(rec))
+
+
+def _strip(fake):
+    import app as pipshed
+    pipshed.r = fake
+    return pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
+
+
+def _fixture_summary():
+    fake = FakeRedis()
+    _apply_fixture_fb2(fake)
+    # B: 2 EURGBP scalps (+2.0 long, +1.0 short), 1 EURGBP ejection -28.8 pips
+    _push(fake, "GRIND_EURGBP_OPTB", _scalp_rec("GRIND_EURGBP_OPTB", 0.85000, 0.85020, 0.27))
+    _push(fake, "GRIND_EURGBP_OPTB", _scalp_rec("GRIND_EURGBP_OPTB", 0.85110, 0.85100, 0.13, "SHORT"))
+    _push(fake, "GRIND_EURGBP_OPTB", _scalp_rec("GRIND_EURGBP_OPTB", 0.86092, 0.85804, -3.85, ejected=True))
+    # B: 1 GBPUSD scalp +10.0 pips
+    _push(fake, "GRIND_GBPUSD_OPTB", _scalp_rec("GRIND_GBPUSD_OPTB", 1.32000, 1.32100, 1.00))
+    # A (FTMO): 1 EURGBP scalp +5.0 pips; must not appear on B's card
+    _push(fake, "GRIND_EURGBP_OPT", _scalp_rec("GRIND_EURGBP_OPT", 0.85000, 0.85050, 0.67, login=1514731800))
+    return fake
+
+
+def check_fs36():
+    b = _fleet_by_letter(_strip(_fixture_summary()), "B")
+    sm = b.get("summary") or {}
+    sc, ej, rl = sm.get("scalps") or {}, sm.get("ejections") or {}, sm.get("rolls") or {}
+    got = ((sc.get("count"), sc.get("pips"), sc.get("usd")),
+           (ej.get("count"), ej.get("pips"), ej.get("usd")),
+           (rl.get("count"), rl.get("pips"), rl.get("usd")))
+    # scalps 3: +2.0 +1.0 +10.0 = +13.0 pips, 0.27 + 0.13 + 1.00 = 1.40
+    want = ((3, 13.0, 1.40), (1, -28.8, -3.85), (0, 0.0, 0.0))
+    if got != want:
+        raise AssertionError(f"expected {want}, got {got}")
+    # 4 closes x 0.08 = -0.32; net pips 13.0 - 28.8 = -15.8; USD 1.40 - 3.85 - 0.32 = -2.77
+    if (sm.get("closes"), sm.get("commission"), sm.get("net_pips"), sm.get("net_usd")) != (4, -0.32, -15.8, -2.77):
+        raise AssertionError(f"closes/commission/net: {sm}")
+    return "fleet B summary lines, commission and net"
+
+
+def check_fs37():
+    data = _strip(_fixture_summary())
+    a = (_fleet_by_letter(data, "A").get("summary") or {})
+    # A: 1 FTMO scalp +5.0 pips, 0.67 USD; 1 close x 0.06
+    if ((a.get("scalps") or {}).get("count"), a.get("commission"), a.get("net_usd")) != (1, -0.06, 0.61):
+        raise AssertionError(f"fleet A summary {a}")
+    c = (_fleet_by_letter(data, "C").get("summary") or {})
+    if (c.get("scalps") or {}).get("count") != 0 or c.get("closes") != 0:
+        raise AssertionError(f"fleet C must be empty, got {c}")
+    return "fleets counted apart; FTMO 0.06 per close"
+
+
+def check_fs38():
+    fake = FakeRedis()
+    _apply_fixture_fb2(fake)
+    _push(fake, "GRIND_GBPUSD_OPTB", _scalp_rec("GRIND_GBPUSD_OPTB", 1.32000, 1.32100, 1.00, login=None))
+    sm = _fleet_by_letter(_strip(fake), "B").get("summary") or {}
+    if (sm.get("commission"), sm.get("net_usd"), sm.get("commission_unknown")) != (None, None, 1):
+        raise AssertionError(f"unknown account must give commission/net None, got {sm}")
+    return "unknown account: commission and net are null, never zero"
+
+
+def check_fs39():
+    sm = _fleet_by_letter(_strip(_fixture_summary()), "B").get("summary") or {}
+    pairs = [(p.get("pair"), p.get("scalps"), p.get("ejections"), p.get("pips"), p.get("usd"))
+             for p in sm.get("by_pair") or []]
+    # sorted by USD descending: GBPUSD +1.00 first; EURGBP 2 scalps 1 ejection,
+    # +3.0 - 28.8 = -25.8 pips, 0.40 - 3.85 = -3.45
+    want = [("GBPUSD", 1, 0, 10.0, 1.0), ("EURGBP", 2, 1, -25.8, -3.45)]
+    if pairs != want:
+        raise AssertionError(f"expected {want}, got {pairs}")
+    ds = sm.get("deepest_side")
+    # fixture fb2: NZDCHF_OPTB open_layers_short 7 is the deepest single side
+    if ds != {"layers": 7, "pair": "NZDCHF", "side": "S"}:
+        raise AssertionError(f"deepest_side {ds}")
+    return "per-pair lines and deepest side"
+
+
+def check_fs40():
+    fake = FakeRedis()
+    for i, inst in enumerate(GRIND_B_INSTANCES):
+        if i == 0:
+            continue
+        if i == 3:
+            fake.set(f"fxmatrix:state:{inst}", HBB(30, account_balance=10166.58, account_equity=10098.19))
+        else:
+            # every other instance: login but no balance (only the MAE reporter sends it)
+            fake.set(f"fxmatrix:state:{inst}", HBB(30, account_balance=None, account_equity=None))
+    fake.set(DAILY_TABLE_KEY, json.dumps({"generated_at": now.isoformat(), "rows": _daily_rows_fb()}))
+    acct = _fleet_by_letter(_strip(fake), "B").get("account") or {}
+    if (acct.get("balance"), acct.get("equity")) != (10166.58, 10098.19):
+        raise AssertionError(f"C72: balance/equity must come from the reporter, got {acct}")
+    return "C72: account money from the instance that reports it"
+
+
+def check_fs41():
+    import app as pipshed
+
+    html = pipshed.app.test_client().get("/").get_data(as_text=True)
+    need = ["card.summary", "fleet-sum-line", "fleet-sum-pairs", "deepest side "]
+    missing = [n for n in need if n not in html]
+    if missing:
+        raise AssertionError(f"card template lacks {missing}")
+    if "', ledger)</div>'" in html:
+        raise AssertionError("the old ledger 'Today' block must no longer be drawn")
+    return "cards draw the summary block"
+
+
+def check_fs42():
+    import app as pipshed
+
+    fake = _fixture_summary()
+    data = _strip(fake)
+    a = _fleet_by_letter(data, "A").get("summary") or {}
+    old = pipshed.GRIND_INSTANCES
+    try:
+        pipshed.GRIND_INSTANCES = list(GRIND_B_INSTANCES)   # the text summary of Fleet B's host
+        text = pipshed._build_daily_summary_text()
+    finally:
+        pipshed.GRIND_INSTANCES = old
+    b = _fleet_by_letter(data, "B").get("summary") or {}
+    net_line = [ln for ln in text.splitlines() if ln.startswith("Net ")][0]
+    card_pips, card_usd = b.get("net_pips"), b.get("net_usd")
+    if card_pips is None or card_usd is None:
+        raise AssertionError(f"card has no net: {b}")
+    if f"{card_pips:+.1f} pips" not in net_line or f"{card_usd:+.2f} USD" not in net_line:
+        raise AssertionError(f"text summary and card disagree: {net_line!r} vs card {card_pips}, {card_usd}")
+    return "card and text summary agree for the same fleet"
+
+
 CHECKS = [
     ("FS1", check_fs1),
     ("FS2", check_fs2),
@@ -1064,6 +1219,13 @@ CHECKS = [
     ("FS33", check_fs33),
     ("FS34", check_fs34),
     ("FS35", check_fs35),
+    ("FS36", check_fs36),
+    ("FS37", check_fs37),
+    ("FS38", check_fs38),
+    ("FS39", check_fs39),
+    ("FS40", check_fs40),
+    ("FS41", check_fs41),
+    ("FS42", check_fs42),
 ]
 
 

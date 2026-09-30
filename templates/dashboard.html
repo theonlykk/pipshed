@@ -304,6 +304,14 @@
       font-style: italic;
       opacity: 0.7;
     }
+    .grind-layer-table tr.grind-market-row td {
+      border-top: 1px solid var(--blue);
+      border-bottom: 1px solid var(--border);
+      padding: 1px 4px;
+      color: var(--blue);
+      font-size: 9px;
+      letter-spacing: 0.04em;
+    }
     .grind-pending-line {
       font-size: 10px;
       color: var(--muted);
@@ -1639,22 +1647,79 @@
     return Number(price) > 20 ? 0.01 : 0.0001;
   }
 
+  // Bid / ask derived from the heartbeat book (operator 30 Sep; the EA sends no
+  // quote, backlog C65). Every position is 0.01 lot (1000 units), so a long's
+  // profit_usd = (bid - open) * 1000 * r and a short's = (open - ask) * 1000 * r,
+  // r = quote-currency -> USD. r = 1 for a USD-quoted pair; otherwise it is
+  // fitted from the widest-spaced pair of positions on one side (profits are to
+  // the cent). No fit -> nulls, never zeros.
+  function grindMarketFromBook(card) {
+    const none = { bid: null, ask: null, fitted: false };
+    const book = card && card.book;
+    const positions = book && Array.isArray(book.positions) ? book.positions : [];
+    const longs = [];
+    const shorts = [];
+    positions.forEach(function(p) {
+      const price = Number(p && p.price);
+      const profit = Number(p && p.profit);
+      if (!isFinite(price) || !isFinite(profit) || p.price === null || p.profit === null) return;
+      if (p.type === 'BUY') longs.push({ o: price, p: profit });
+      else if (p.type === 'SELL') shorts.push({ o: price, p: profit });
+    });
+    if (!longs.length && !shorts.length) return none;
+    const symbol = grindSymbolFromInstanceId(card.instance_id);
+    let r = null;
+    let fitted = false;
+    if (typeof symbol === 'string' && symbol.length === 6 && symbol.slice(3) === 'USD') {
+      r = 1;
+    } else {
+      let best = null;
+      [longs, shorts].forEach(function(side, idx) {
+        if (side.length < 2) return;
+        let lo = side[0], hi = side[0];
+        side.forEach(function(x) { if (x.o < lo.o) lo = x; if (x.o > hi.o) hi = x; });
+        const span = hi.o - lo.o;
+        if (span <= 0) return;
+        // long: the lower open has the higher profit; short: the reverse
+        const dp = idx === 0 ? (lo.p - hi.p) : (hi.p - lo.p);
+        if (best === null || span > best.span) best = { span: span, r: dp / (span * 1000) };
+      });
+      if (best !== null && best.r > 0.05 && best.r < 20) { r = best.r; fitted = true; }
+    }
+    if (r === null) return none;
+    function mean(arr, f) {
+      if (!arr.length) return null;
+      let sum = 0;
+      arr.forEach(function(x) { sum += f(x); });
+      return sum / arr.length;
+    }
+    return {
+      bid: mean(longs, function(x) { return x.o + x.p / (1000 * r); }),
+      ask: mean(shorts, function(x) { return x.o - x.p / (1000 * r); }),
+      fitted: fitted,
+    };
+  }
+
   function renderGrindLayerTableHtml(layers, card) {
     card = card || {};
     const items = [];
     if (layers && layers.length) {
       layers.forEach(function(layer) {
-        const price = layer.entry_price;
+        const entry = layer.entry_price;
+        const exit = layer.exit_target;
+        // sort by the price that trades: the layer's exit (entry if no exit known)
+        const level = exit !== null && exit !== undefined ? exit : entry;
         items.push({
           kind: 'layer',
-          price: price === null || price === undefined ? null : Number(price),
+          price: entry === null || entry === undefined ? null : Number(entry),
+          level: level === null || level === undefined ? null : Number(level),
           layer: layer,
         });
       });
     }
     function pushPending(price, side, label) {
       if (price === null || price === undefined) return;
-      items.push({ kind: 'pending', price: Number(price), side: side, label: label });
+      items.push({ kind: 'pending', price: Number(price), level: Number(price), side: side, label: label });
     }
     pushPending(card.add_pending_long, 'L', 'add');
     pushPending(card.add_pending_short, 'S', 'add');
@@ -1663,23 +1728,41 @@
     if (!items.length) return '';
 
     items.sort(function(a, b) {
-      if (a.price === null && b.price === null) return 0;
-      if (a.price === null) return 1;
-      if (b.price === null) return -1;
-      return b.price - a.price;
+      if (a.level === null && b.level === null) return 0;
+      if (a.level === null) return 1;
+      if (b.level === null) return -1;
+      return b.level - a.level;
     });
+
+    // market row: at the mid when both prices are known, else at the known one
+    const mkt = grindMarketFromBook(card);
+    const mktRef = mkt.bid !== null && mkt.ask !== null ? (mkt.bid + mkt.ask) / 2
+      : (mkt.bid !== null ? mkt.bid : mkt.ask);
+    let mktAt = -1;
+    if (mktRef !== null) {
+      mktAt = items.length;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].level !== null && items[i].level < mktRef) { mktAt = i; break; }
+      }
+    }
+    function mktFmt(v) { return v === null ? '—' : v.toFixed(5); }
+    const mktRow = '<tr class="grind-market-row"' +
+      (mkt.fitted ? ' title="derived from position P&amp;L; quote rate fitted"' :
+                    ' title="derived from position P&amp;L"') +
+      '><td colspan="6">bid ' + mktFmt(mkt.bid) + ' · ask ' + mktFmt(mkt.ask) + '</td></tr>';
 
     const rows = items.map(function(item, idx) {
       let gapCell = '';
       if (idx > 0) {
-        const abovePrice = items[idx - 1].price;
-        const thisPrice = item.price;
-        if (abovePrice !== null && abovePrice !== undefined &&
-            thisPrice !== null && thisPrice !== undefined) {
-          const pip = grindLayerPipSize(Math.max(abovePrice, thisPrice));
-          gapCell = ((abovePrice - thisPrice) / pip).toFixed(1);
+        const aboveLevel = items[idx - 1].level;
+        const thisLevel = item.level;
+        if (aboveLevel !== null && aboveLevel !== undefined &&
+            thisLevel !== null && thisLevel !== undefined) {
+          const pip = grindLayerPipSize(Math.max(aboveLevel, thisLevel));
+          gapCell = ((aboveLevel - thisLevel) / pip).toFixed(1);
         }
       }
+      const pre = idx === mktAt ? mktRow : '';
 
       if (item.kind === 'layer') {
         const layer = item.layer;
@@ -1687,7 +1770,7 @@
         const exitLabel = layer.has_exit_order === null && layer.has_exit_position === null
           ? '—'
           : (exitCovered ? 'yes' : 'no');
-        return '<tr>' +
+        return pre + '<tr>' +
           '<td>' + (layer.layer_index != null ? layer.layer_index : '—') + '</td>' +
           '<td>' + (layer.side || '—') + '</td>' +
           '<td>' + (item.price != null ? item.price.toFixed(5) : '—') + '</td>' +
@@ -1697,7 +1780,7 @@
           '</tr>';
       }
 
-      return '<tr class="grind-pending-row">' +
+      return pre + '<tr class="grind-pending-row">' +
         '<td>' + item.label + '</td>' +
         '<td>' + item.side + '</td>' +
         '<td>' + item.price.toFixed(5) + '</td>' +
@@ -1705,7 +1788,7 @@
         '<td>--</td>' +
         '<td>--</td>' +
         '</tr>';
-    }).join('');
+    }).join('') + (mktAt === items.length ? mktRow : '');
 
     return '<table class="grind-layer-table"><thead><tr>' +
       '<th>#</th><th>Side</th><th>Entry</th><th>Gap</th><th>Exit</th><th>Covered</th>' +

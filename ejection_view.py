@@ -663,6 +663,15 @@ def _build_reconciliation(
             scalp_gross = round(
                 sum(float(s.get("gross_pnl") or 0) for s in scalp_rows), 2
             )
+            # C66: the ledger's gross is price profit only, the EA's gross_pnl
+            # includes swap. Compare ledger gross + swap with the EA; closes
+            # whose swap is unknown (incomplete) are counted, not guessed.
+            ledger_swap = round(
+                sum(float(c.get("swap") or 0) for c in day_closes if c.get("swap") is not None), 2
+            )
+            swap_unknown = sum(1 for c in day_closes if c.get("swap") is None)
+            ledger_gross_with_swap = round(ledger_gross + ledger_swap, 2)
+            gross_delta = round(scalp_gross - ledger_gross_with_swap, 2)
             day_odd = [
                 o
                 for o in odd_closeby
@@ -758,7 +767,11 @@ def _build_reconciliation(
                 "ledger_closes": len(day_closes),
                 "scalp_history_rows": len(scalp_rows),
                 "ledger_gross": ledger_gross,
+                "ledger_swap": ledger_swap,
+                "ledger_gross_with_swap": ledger_gross_with_swap,
                 "scalp_gross": scalp_gross,
+                "gross_delta": gross_delta,
+                "swap_unknown": swap_unknown,
                 "odd_closeby": day_odd,
                 "incomplete": incomplete,
                 "accepted_unfilled": accepted_unfilled,

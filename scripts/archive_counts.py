@@ -25,6 +25,9 @@ Options:
                      (default 7), and every config_events row; honours --instance.
                      Save it on the desktop with
                      ... --export-study --days 7 | Set-Content -Encoding utf8 <file>
+    --export-archive EVERY row of config_events, ea_events, fill_logs and
+                     scalp_history as JSON lines (C83: the offline copy of the
+                     trade history; no day window, all codes); honours --instance
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -64,6 +67,24 @@ EXPORT_STUDY_SQL = {
         " WHERE (%(instance)s::text IS NULL OR instance_id = %(instance)s) ORDER BY received_at, id"
     ),
 }
+
+
+ARCHIVE_TABLES = ("config_events", "ea_events", "fill_logs", "scalp_history")
+
+
+def export_archive(cur, instance):
+    """C83: every row of the four trade-history tables as JSON lines (a
+    _meta line first) -- the offline copy. send_logs are not included."""
+    print(json.dumps({"table": "_meta", "archive": True, "instance": instance}))
+    for table in ARCHIVE_TABLES:
+        cur.execute(
+            f"SELECT * FROM {table} WHERE (%(instance)s::text IS NULL OR instance_id = %(instance)s)"
+            " ORDER BY received_at, id", {"instance": instance})
+        cols = [desc[0] for desc in cur.description]
+        for row in cur.fetchall():
+            rec = {"table": table}
+            rec.update(dict(zip(cols, row)))
+            print(json.dumps(rec, default=str))
 
 
 def export_study(cur, days, instance):
@@ -319,6 +340,7 @@ def main(argv=None):
     parser.add_argument("--depth", action="store_true")
     parser.add_argument("--cap", type=int, default=8)
     parser.add_argument("--export-study", action="store_true")
+    parser.add_argument("--export-archive", action="store_true")
     parser.add_argument("--days", type=int, default=7)
     args = parser.parse_args(argv)
 
@@ -333,6 +355,9 @@ def main(argv=None):
         with conn.cursor() as cur:
             if args.export_study:
                 export_study(cur, args.days, args.instance)
+                return 0
+            if args.export_archive:
+                export_archive(cur, args.instance)
                 return 0
 
             if args.codes or args.depth:

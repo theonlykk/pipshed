@@ -917,17 +917,11 @@ def run_retention_if_due(conn, redis_client):
             "DELETE FROM send_logs WHERE received_at < now() - interval '14 days'"
         )
         deleted["send_logs"] = cur.rowcount
-        cur.execute(
-            "DELETE FROM ea_events WHERE received_at < now() - interval '90 days'"
-        )
-        deleted["ea_events"] = cur.rowcount
+        # C83 (30 Sep): ea_events are trade history (ejections, rolls,
+        # quarantines, replay markers) and are no longer pruned.
     conn.commit()
     redis_client.set(ARCHIVE_RETENTION_LAST, utc_now_iso())
-    log.info(
-        "retention: send_logs=%s ea_events=%s",
-        deleted["send_logs"],
-        deleted["ea_events"],
-    )
+    log.info("retention: send_logs=%s", deleted["send_logs"])
     return deleted
 
 

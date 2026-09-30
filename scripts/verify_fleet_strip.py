@@ -1042,10 +1042,12 @@ def check_fs35():
 def _scalp_rec(inst, entry, exit_price, usd, direction="LONG", login=53066709,
                ejected=False, rolled=False, trade_date=None):
     import app as pipshed
+    # the day the CARD shows (C81); falls back to the broker day before C81
+    day = trade_date or getattr(pipshed, "_card_summary_day", pipshed._broker_today)()
     rec = {"instrument": inst.split("_")[1], "direction": direction,
            "entry_price": entry, "exit_price": exit_price, "gross_pnl": usd,
-           "trade_date": trade_date or pipshed._broker_today(),
-           "close_time": (trade_date or pipshed._broker_today()) + "T12:00:00+00:00",
+           "trade_date": day,
+           "close_time": day + "T12:00:00+00:00",
            "ejected": ejected, "rolled": rolled}
     if login is not None:
         rec["account_login"] = login
@@ -1170,7 +1172,9 @@ def check_fs42():
     old = pipshed.GRIND_INSTANCES
     try:
         pipshed.GRIND_INSTANCES = list(GRIND_B_INSTANCES)   # the text summary of Fleet B's host
-        text = pipshed._build_daily_summary_text()
+        # the same day as the card (C81: they differ from 21:00Z to 22:00Z)
+        text = pipshed._build_daily_summary_text(
+            selected_date=getattr(pipshed, "_card_summary_day", pipshed._broker_today)())
     finally:
         pipshed.GRIND_INSTANCES = old
     b = _fleet_by_letter(data, "B").get("summary") or {}

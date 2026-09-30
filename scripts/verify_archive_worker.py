@@ -308,7 +308,11 @@ def test_w6_retention():
     deleted = worker.run_retention_if_due(conn, fake_redis)
     assert deleted is not None
     deletes = [sql for sql, _ in conn.executed if sql.startswith("DELETE")]
-    assert len(deletes) == 2
+    # C83 (30 Sep): only send_logs are pruned; ea_events (ejections, rolls,
+    # quarantines, replay markers) are trade history and are kept
+    assert len(deletes) == 1, deletes
+    assert "send_logs" in deletes[0]
+    assert not any("ea_events" in d for d in deletes)
     assert fake_redis.get(worker.ARCHIVE_RETENTION_LAST) is not None
     conn.executed.clear()
 
@@ -321,7 +325,7 @@ def test_w6_retention():
     conn.executed.clear()
     deleted_old = worker.run_retention_if_due(conn, fake_redis)
     assert deleted_old is not None
-    assert len([sql for sql, _ in conn.executed if sql.startswith("DELETE")]) == 2
+    assert len([sql for sql, _ in conn.executed if sql.startswith("DELETE")]) == 1
     print("W6 OK: retention runs at most once per 24h")
 
 

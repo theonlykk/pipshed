@@ -82,10 +82,8 @@ def main():
     mock = MockRedis()
     pipshed.r = mock
     client = pipshed.app.test_client()
-    mock.set("fxmatrix:state:MM_LONG_V2", sample_v2_payload())
-
-    baseline = client.get("/api/telemetry/aggregate").get_json()
-    baseline_arms = json.dumps(baseline["arm_summaries"], sort_keys=True)
+    # C33 (30 Sep): the v2 system and its top-level arm_summaries were removed
+    # (cf422ab); the grind arm summaries now live per ring.
 
     # 5a — net_mtm 0.0 must render as +0.00, not dash
     mock.set("fxmatrix:state:GRIND_GBPUSD_OPT", grind_payload_base(net_mtm=0.0))
@@ -113,7 +111,7 @@ def main():
     mock.set("fxmatrix:state:GRIND_EURUSD_OPT", json.dumps(payload_partial))
     mock._data.pop("fxmatrix:state:GRIND_EURGBP_OPT", None)
     resp = client.get("/api/telemetry/aggregate").get_json()
-    opt = resp["grind_arm_summaries"]["opt"]
+    opt = resp["grind_rings"]["eur_gbp_usd"]["arm_summaries"]["opt"]
     assert opt["status"] == "degraded"
     assert opt["instances_live"] == 2
     assert opt["net_mtm"] == 1.5
@@ -122,14 +120,6 @@ def main():
     assert opt["api_count"] == 11  # still MAX
     print("5c OK: DEGRADED group sums live instances null-safe; api_count still max")
 
-    # 5d — v2 arm_summaries unchanged
-    mock.set("fxmatrix:state:GRIND_GBPUSD_OPT", grind_payload_base(net_mtm=-0.18))
-    arms_with_grind = json.dumps(
-        client.get("/api/telemetry/aggregate").get_json()["arm_summaries"],
-        sort_keys=True,
-    )
-    assert arms_with_grind == baseline_arms
-    print("5d OK: arm_summaries byte-identical with grind P&L present")
 
     # Microstructure fields pass through
     card = pipshed._summarize_grind_instance_state(

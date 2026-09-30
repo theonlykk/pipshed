@@ -1913,6 +1913,38 @@ def _fixture_view_kwargs():
     }
 
 
+def check_et35():
+    """C66 (30 Sep): the ledger's gross is price profit only; the EA's
+    scalp_history gross_pnl includes swap. Compare like with like:
+    ledger gross 1.00 + swap -0.30 = 0.70 = the EA's 0.70 -> delta 0.00.
+    A close with unknown swap (incomplete) is counted apart."""
+    import ejection_view as ev
+
+    inst = FIXTURE_INSTANCE
+    closes = [
+        {"instance_id": inst, "close_ms": _ms("2026-09-24T12:00:00Z"), "gross": 1.00,
+         "commission": -0.08, "swap": -0.30, "net": 0.62, "incomplete": False},
+        {"instance_id": inst, "close_ms": _ms("2026-09-24T13:00:00Z"), "gross": 0.50,
+         "commission": None, "swap": None, "net": None, "incomplete": True},
+    ]
+    scalps = [
+        {"instance_id": inst, "gross_pnl": 0.70, "broker_utc_offset_s": 10800,
+         "close_time_broker": "2026-09-24 15:00:00"},
+        {"instance_id": inst, "gross_pnl": 0.50, "broker_utc_offset_s": 10800,
+         "close_time_broker": "2026-09-24 16:00:00"},
+    ]
+    blocks = ev._build_reconciliation(
+        [], closes, [], scalps, {}, None, [inst],
+        _ms("2026-09-24T06:00:00Z"), _ms("2026-09-24T18:00:00Z"))
+    b = next(x for x in blocks if x["instance_id"] == inst)
+    got = (b.get("ledger_gross"), b.get("ledger_swap"), b.get("ledger_gross_with_swap"),
+           b.get("scalp_gross"), b.get("gross_delta"), b.get("swap_unknown"))
+    want = (1.50, -0.30, 1.20, 1.20, 0.00, 1)
+    if got != want:
+        raise AssertionError(f"expected {want}, got {got}")
+    return "C66: ledger gross + swap vs EA gross; delta 0.00; unknown swap counted"
+
+
 CHECKS = [
     ("ET1", check_et1),
     ("ET2", check_et2),
@@ -1946,6 +1978,7 @@ CHECKS = [
     ("ET32", check_et32),
     ("ET33", check_et33),
     ("ET34", check_et34),
+    ("ET35", check_et35),
 ]
 
 

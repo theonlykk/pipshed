@@ -134,8 +134,31 @@ def check_ex5():
     return "--instance filter"
 
 
+def check_ex6():
+    # C83 (30 Sep): --export-archive copies EVERY row of the four trade-history
+    # tables (all codes, no day window) for an offline copy.
+    code, out = run(["--export-archive"])
+    if code != 0:
+        raise AssertionError(f"exit code {code}")
+    rows = parse(out)
+    if rows[0].get("table") != "_meta" or rows[0].get("archive") is not True:
+        raise AssertionError(f"first line must be _meta with archive=true, got {rows[0]}")
+    tickets = sorted(r["deal_ticket"] for r in rows if r["table"] == "fill_logs")
+    codes = sorted(r["code"] for r in rows if r["table"] == "ea_events")
+    n_cfg = sum(1 for r in rows if r["table"] == "config_events")
+    n_sc = sum(1 for r in rows if r["table"] == "scalp_history")
+    want_codes = sorted(["EJECT_ACCEPTED", "EJECT_FILLED", "ROLL_ACCEPTED", "CARRY_SNAPSHOT",
+                         "QUARANTINE_ENTER", "EJECT_FILLED"])
+    if tickets != [101, 102, 103, 201] or codes != want_codes or (n_cfg, n_sc) != (1, 1):
+        raise AssertionError(f"all rows expected, got fills {tickets}, codes {codes}, "
+                             f"config {n_cfg}, scalps {n_sc}")
+    if any(r["table"] == "send_logs" for r in rows):
+        raise AssertionError("send_logs are not trade history")
+    return "archive export: every row of the four tables, all codes"
+
+
 CHECKS = [("EX1", check_ex1), ("EX2", check_ex2), ("EX3", check_ex3),
-          ("EX4", check_ex4), ("EX5", check_ex5)]
+          ("EX4", check_ex4), ("EX5", check_ex5), ("EX6", check_ex6)]
 
 
 def main():

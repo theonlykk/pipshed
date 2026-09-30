@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 
 class MockRedis:
@@ -120,9 +121,18 @@ def main():
     expected_lots = (2 - 1) * pipshed.GRIND_ASSUMED_LOT_SIZE
     assert data["net_exposure"].get("GBPUSD") == expected_lots
     assert data["intraday_mae"]["mae_equity_low"] == baseline_mae["mae_equity_low"]
-    assert data["intraday_mae"]["source_instance"] == "GRIND_GBPUSD_OPT"
+    # C33 (30 Sep): MAE is account-level and comes from the instance that
+    # reports account_balance (e876a60); a heartbeat without one gives none
+    assert data["intraday_mae"]["source_instance"] is None
+    reporter = json.loads(sample_grind_payload())
+    reporter.update({"account_balance": 10000.0, "account_equity": 9990.0,
+                     "timestamp": datetime.now(timezone.utc).isoformat()})
+    mock.set("fxmatrix:state:GRIND_EURUSD_OPT", json.dumps(dict(reporter, instance_id="GRIND_EURUSD_OPT")))
+    data = client.get("/api/telemetry/aggregate").get_json()
+    assert data["intraday_mae"]["source_instance"] == "GRIND_EURUSD_OPT"
+    mock._data.pop("fxmatrix:state:GRIND_EURUSD_OPT")
     print(
-        f"4c OK: GBPUSD net exposure {expected_lots} lots; MAE values still absent"
+        f"4c OK: GBPUSD net exposure {expected_lots} lots; MAE from the balance reporter only"
     )
 
     # Layer + drift summariser

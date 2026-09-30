@@ -50,14 +50,15 @@ def main():
     pipshed.r = mock
     client = pipshed.app.test_client()
 
-    # 4d baseline — v2 only, no grind
+    # 4d baseline — a v2 (MM_) state no longer counts: the v2 system and its
+    # dashboard were removed (cf422ab); C33 (30 Sep)
     mock.set("fxmatrix:state:MM_SHORT_EURGBP", v2_payload("EURGBP", -1, 0.01))
     baseline = client.get("/api/telemetry/aggregate").get_json()
     baseline_exposure = dict(baseline["net_exposure"])
-    assert baseline_exposure.get("EURGBP") == -0.01
-    print("4d OK: v2-only EURGBP net exposure -0.01")
+    assert baseline_exposure.get("EURGBP") is None
+    print("4d OK: a v2-only state adds no exposure")
 
-    # 4a — live state: v2 0.01 short + grind OPT 0.01 + grind ALT 0.01 = 0.03 short
+    # 4a — live state: grind OPT 0.01 + grind ALT 0.01 = 0.02 short
     mock.set(
         "fxmatrix:state:GRIND_EURGBP_OPT",
         grind_payload(open_short=1),
@@ -68,8 +69,8 @@ def main():
     )
     resp = client.get("/api/telemetry/aggregate").get_json()
     eurgbp = resp["net_exposure"]["EURGBP"]
-    assert eurgbp == -0.03, f"expected -0.03, got {eurgbp}"
-    print("4a OK: EURGBP net exposure -0.03 (v2 + grind OPT + grind ALT)")
+    assert eurgbp == -0.02, f"expected -0.02, got {eurgbp}"
+    print("4a OK: EURGBP net exposure -0.02 (grind OPT + grind ALT)")
 
     # 4b — bidirectional instance nets within instance
     mock.set("fxmatrix:state:GRIND_GBPUSD_OPT", grind_payload(open_long=2, open_short=1))
@@ -86,9 +87,9 @@ def main():
     assert not math.isnan(eurusd)
     print("4c OK: zero-layer grind contributes 0.0 on EURUSD")
 
-    # v2 exposure unchanged when grind added for other symbols — EURGBP still -0.03
-    assert resp["net_exposure"]["EURGBP"] == -0.03
-    print("4d OK: v2 EURGBP component still present in combined figure")
+    # EURGBP unchanged when grind is added for other symbols
+    assert resp["net_exposure"]["EURGBP"] == -0.02
+    print("4d OK: EURGBP figure unchanged by other symbols")
 
     # unknown symbol skipped
     net = {}

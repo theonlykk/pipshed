@@ -2292,10 +2292,12 @@
     el.className = 'fleet-strip';
     el.innerHTML = payload.fleets.map(function(card) {
       if (card.placeholder) {
+        // no link: a placeholder fleet's page may not resolve yet
         return '<div class="fleet-strip-card status-neutral">' +
           '<div class="fleet-strip-head">' +
-          '<div class="fleet-strip-title">Fleet D -- not built yet</div>' +
-          '<span class="fleet-badge fleet-badge-notbuilt">NOT BUILT</span></div></div>';
+          '<div class="fleet-strip-title">' + (card.name || card.letter) + '</div>' +
+          '<span class="fleet-badge fleet-badge-notbuilt">' + (card.badge || 'NOT BUILT') +
+          '</span></div></div>';
       }
       var title = card.name || card.letter;
       if (card.url) {

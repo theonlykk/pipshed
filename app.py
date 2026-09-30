@@ -111,6 +111,20 @@ GRIND_C_INSTANCES = [
     "GRIND_NZDCAD_ALTC",
 ]
 
+GRIND_D_INSTANCES = [
+    "GRIND_GBPUSD_OPTD",
+    "GRIND_EURUSD_OPTD",
+    "GRIND_EURGBP_OPTD",
+    "GRIND_AUDCAD_OPTD",
+    "GRIND_AUDCHF_OPTD",
+    "GRIND_CADCHF_OPTD",
+    "GRIND_NZDCHF_OPTD",
+    "GRIND_NZDCAD_OPTD",
+    "GRIND_AUDNZD_OPTD",
+    "GRIND_AUDNZD_ALTD",
+    "GRIND_NZDCAD_ALTD",
+]
+
 GRIND_A_STRIP_INSTANCES = [
     "GRIND_GBPUSD_OPT",
     "GRIND_EURUSD_OPT",
@@ -161,14 +175,17 @@ FLEET_STRIP = [
     },
     {
         "letter": "D",
-        "name": "Fleet D",
+        "name": "Fleet D (IC)",
         "broker": "IC Markets",
-        "url": None,
-        "instances": [],
+        "url": "https://linuxd.pipshed.com",
+        "instances": GRIND_D_INSTANCES,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": None,
         "start_balance": 10000.0,
+        # wine-d (IC 53077984) built 30 Sep; a placeholder card until the EAs
+        # attach. At attach: placeholder False and cycle_start the attach day.
         "placeholder": True,
+        "built": True,
     },
 ]
 FLEET_STRIP_STALE_S = 180
@@ -178,6 +195,7 @@ GRIND_FLEET_INSTANCES = {
     "A": GRIND_A_INSTANCES,
     "B": GRIND_B_INSTANCES,
     "C": GRIND_C_INSTANCES,
+    "D": GRIND_D_INSTANCES,
 }
 if _grind_fleet_raw not in GRIND_FLEET_INSTANCES:
     logging.getLogger(__name__).warning(
@@ -197,7 +215,7 @@ def _grind_slot(inst):
     if len(parts) < 3:
         return ""
     slot = parts[2]
-    if slot in ("OPTB", "ALTB", "OPTC", "ALTC"):
+    if slot in ("OPTB", "ALTB", "OPTC", "ALTC", "OPTD", "ALTD"):
         return slot[:-1]
     return slot
 
@@ -1059,7 +1077,7 @@ def _fleet_strip_placeholder_card(entry):
             "loss_share": None,
             "daily_loss_limit_usd": limit,
         },
-        "badge": "NOT BUILT",
+        "badge": "NOT ATTACHED" if entry.get("built") else "NOT BUILT",
         "book": {
             "positions": None,
             "pairs": None,
@@ -2722,6 +2740,23 @@ def public_grind_status_c(token, _ignored):
     if token != PUBLIC_GRIND_STATUS_TOKEN:
         return jsonify({"error": "not found"}), 404
     return _fleet_status_response("C", GRIND_C_INSTANCES, "public_grind_status_c")
+
+
+@app.route(
+    "/api/g/<token>/status_d",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/status_d/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_grind_status_d(token, _ignored):
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+    return _fleet_status_response("D", GRIND_D_INSTANCES, "public_grind_status_d")
 
 
 @app.route(

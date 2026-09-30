@@ -157,7 +157,7 @@ CRITICAL_EVENTS_SQL = """
 SELECT instance_id, level, code, received_at
 FROM ea_events
 WHERE received_at > now() - interval '24 hours'
-  AND level IN ('CRITICAL', 'WARN')
+  AND (level IN ('CRITICAL', 'WARN') OR code = 'QUARANTINE_RELEASE')
 """
 
 
@@ -477,6 +477,7 @@ def build_critical_list(conn):
         cur.execute(CRITICAL_EVENTS_SQL)
         rows = cur.fetchall()
     groups = ftmo_daily.critical_groups(rows, datetime.now(timezone.utc))
+    released = len(ftmo_daily.released_quarantines(rows))
     public = []
     for g in groups:
         public.append({
@@ -487,7 +488,8 @@ def build_critical_list(conn):
             "first_at": daily_format_value(g["first_at"]),
             "last_at": daily_format_value(g["last_at"]),
         })
-    return {"generated_at": utc_now_iso(), "rows": public}
+    return {"generated_at": utc_now_iso(), "rows": public,
+            "quarantines_released_24h": released}
 
 
 def publish_critical_list(redis_client, payload):

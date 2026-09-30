@@ -8,7 +8,19 @@ WARN_CRITICAL_ALLOW = frozenset({
     "WARN_API_ENTRY_STOP",
     "ROLL_STRANDED",
     "ROLL_CLOSING_STUCK",
+    # ADR-164 (C80): the C76 fault signal (a replayed deal whose event never
+    # came) and the replay's two start-up failures. DEAL_REPLAYED,
+    # DEAL_EVENT_AFTER_REPLAY and CONNECTION_RESTORED are INFO: counted by
+    # archive_counts.py --codes, never on the banner.
+    "DEAL_EVENT_MISSED",
+    "REPLAY_INIT_DEFERRED",
+    "REPLAY_SEED_FAILED",
 })
+
+# C74: a quarantine the EA released is not something to act on (it either
+# releases or escalates to QUARANTINE_HALT, which is CRITICAL and stays).
+QUARANTINE_ENTER = "QUARANTINE_ENTER"
+QUARANTINE_RELEASE = "QUARANTINE_RELEASE"
 
 
 def _last_sunday(year, month):
@@ -280,9 +292,32 @@ def derive_counts(events, scalps, start, end, account_login):
     }
 
 
+def released_quarantines(rows):
+    """Indices of QUARANTINE_ENTER rows answered by a QUARANTINE_RELEASE of
+    the same instance at or after them (each release answers the latest
+    unanswered enter before it). Rows: (instance_id, level, code, received_at)."""
+    by_inst = {}
+    for i, (instance_id, _level, code, received_at) in enumerate(rows):
+        if code in (QUARANTINE_ENTER, QUARANTINE_RELEASE):
+            by_inst.setdefault(instance_id, []).append((received_at, code != QUARANTINE_RELEASE, i))
+    released = set()
+    for events in by_inst.values():
+        events.sort(key=lambda e: (e[0], not e[1]))   # at a tie, the enter first
+        open_enters = []
+        for _t, is_enter, i in events:
+            if is_enter:
+                open_enters.append(i)
+            elif open_enters:
+                released.add(open_enters.pop())
+    return released
+
+
 def critical_groups(rows, now):
+    released = released_quarantines(rows)
     filtered = []
-    for instance_id, level, code, received_at in rows:
+    for i, (instance_id, level, code, received_at) in enumerate(rows):
+        if i in released:
+            continue
         if level == "CRITICAL":
             filtered.append((instance_id, level, code, received_at))
         elif level == "WARN" and code in WARN_CRITICAL_ALLOW:

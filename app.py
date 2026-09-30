@@ -1072,11 +1072,23 @@ def _fleet_strip_placeholder_card(entry):
     }
 
 
+def _card_summary_day(now_utc=None):
+    """The broker day the fleet card shows (C81). The broker day (server
+    GMT+2/+3) rolls an hour BEFORE the FTMO day (Prague midnight); for that
+    hour the new broker day has nothing booked. Keep the previous broker day
+    until the FTMO roll: the card's day is the FTMO day's date (outside that
+    hour the two dates are equal)."""
+    from datetime import timezone as _tz
+    from ftmo_daily import ftmo_day_of_utc
+    return ftmo_day_of_utc(now_utc or datetime.now(_tz.utc)).isoformat()
+
+
 def _fleet_strip_summary(entry, instances, cards):
     """The daily summary's numbers for one fleet (its own instances), for the
-    broker day; the same function builds the text summary."""
+    card's broker day (_card_summary_day); the same function builds the text
+    summary."""
     try:
-        broker_today = _broker_today()
+        broker_today = _card_summary_day()
         _, records = _collect_today_scalp_records(broker_today, instances=instances)
         data = _summary_data(records)
         start = entry.get("cycle_start") or DEFAULT_CYCLE_START_DATE

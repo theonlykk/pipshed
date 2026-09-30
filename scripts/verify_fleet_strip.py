@@ -307,8 +307,8 @@ def check_fs3():
         raise AssertionError("D must be placeholder")
     if d.get("status") != "grey":
         raise AssertionError(f"D status expected grey, got {d.get('status')}")
-    if d.get("url") is not None:
-        raise AssertionError("D url must be null")
+    if d.get("url") != "https://linuxd.pipshed.com":
+        raise AssertionError(f"D url expected linuxd, got {d.get('url')}")
     health = d.get("health") or {}
     if health.get("instances_total") != 0 or health.get("instances_live") != 0:
         raise AssertionError("D instances counts must be 0")
@@ -683,8 +683,8 @@ def check_fs20():
         raise AssertionError("C badge must be LIVE")
     if _fleet_by_letter(data, "A").get("badge") != "NO CONNECTION":
         raise AssertionError("A badge must be NO CONNECTION")
-    if _fleet_by_letter(data, "D").get("badge") != "NOT BUILT":
-        raise AssertionError("D badge must be NOT BUILT")
+    if _fleet_by_letter(data, "D").get("badge") != "NOT ATTACHED":
+        raise AssertionError("D badge must be NOT ATTACHED (wine-d built 30 Sep)")
     return "badges FB2"
 
 

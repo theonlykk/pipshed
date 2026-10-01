@@ -632,6 +632,11 @@ class FakeRedis:
     def set(self, key, value, ex=None):
         self._kv[key] = value
 
+    def hset(self, key, field, value):
+        # C9: the push endpoints record which telemetry key was used.
+        self.__dict__.setdefault("_hashes", {}).setdefault(key, {})[field] = value
+        return 1
+
     def lrange(self, key, start, end):
         items = self._lists.get(key, [])
         if end == -1:

@@ -48,6 +48,11 @@ class MockRedis:
     def pipeline(self):
         return MockPipeline(self)
 
+    def hset(self, key, field, value):
+        # C9: the push endpoints record which telemetry key was used.
+        self.__dict__.setdefault("_hashes", {}).setdefault(key, {})[field] = value
+        return 1
+
     def llen(self, key):
         return len(self._lists.get(key, []))
 

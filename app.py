@@ -23,10 +23,12 @@ Routes:
   GET  /api/g/<token>/summary      — public broker-day plain-text summary
   GET  /api/g/<token>/carry_audit  — public carry-adjusted order audit (JSON)
   GET  /api/g/<token>/ejection     — public roll/eject telemetry (Postgres + Redis)
+  GET  /api/g/<token>/keyslots     — which telemetry key each instance last pushed with (C9)
   GET  /                         — dashboard UI
   GET  /health                   — Railway health check
 """
 
+import hmac
 import json
 import logging
 import os
@@ -48,6 +50,10 @@ r = redis.from_url(
 )
 
 TELEMETRY_API_KEY = os.environ.get("TELEMETRY_API_KEY", "")
+# C9 key rotation: a second key accepted alongside the first during a
+# changeover. Unset or empty = not accepted. Never logged or returned.
+TELEMETRY_API_KEY_NEXT = os.environ.get("TELEMETRY_API_KEY_NEXT", "")
+TELEMETRY_KEY_SLOTS_KEY = "fxmatrix:telemetry:key_slots"
 REDIS_TTL_SECONDS = 300  # 5 minutes — if VPS drops, key expires
 SCALP_HISTORY_LIST_MAX = 2999  # LTRIM 0..2999 => 3000 entries per instance
 SCALP_HISTORY_TTL_SECONDS = 604800  # 7 days — matches pod history window
@@ -2834,6 +2840,56 @@ def public_grind_status_d(token, _ignored):
 
 
 @app.route(
+    "/api/g/<token>/keyslots",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/keyslots/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_telemetry_key_slots(token, _ignored):
+    """Which key each instance last pushed with (C9 changeover). No key text."""
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        raw = r.hgetall(TELEMETRY_KEY_SLOTS_KEY) or {}
+        instances = {}
+        counts = {"current": 0, "next": 0}
+        for inst in sorted(raw):
+            try:
+                rec = json.loads(raw[inst])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            slot = rec.get("slot")
+            if slot not in counts:
+                continue
+            counts[slot] += 1
+            instances[inst] = {
+                "slot": slot,
+                "endpoint": rec.get("endpoint"),
+                "at": rec.get("at"),
+            }
+        response = jsonify({
+            "generated_at": _utc_now_iso(),
+            "current_configured": bool(TELEMETRY_API_KEY),
+            "next_configured": bool(TELEMETRY_API_KEY_NEXT),
+            "counts": counts,
+            "instances": instances,
+        })
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_telemetry_key_slots failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
     "/api/g/<token>/fleets",
     methods=["GET"],
     defaults={"_ignored": None},
@@ -3134,10 +3190,49 @@ def public_ejection_telemetry(token, _ignored):
         return _apply_no_cache_headers(response), 500
 
 
+def _telemetry_key_matches(auth, key):
+    """True when `auth` is exactly "Bearer <key>" and the key is set.
+
+    Compared as UTF-8 bytes in constant time: hmac.compare_digest refuses
+    a str with non-ASCII characters, and a header can carry them.
+    """
+    if not key:
+        return False
+    return hmac.compare_digest(
+        (auth or "").encode("utf-8"),
+        f"Bearer {key}".encode("utf-8"),
+    )
+
+
+def _telemetry_key_slot(auth):
+    """"current" or "next" for the key an EA push used, None if refused (C9)."""
+    if _telemetry_key_matches(auth, TELEMETRY_API_KEY):
+        return "current"
+    if _telemetry_key_matches(auth, TELEMETRY_API_KEY_NEXT):
+        return "next"
+    return None
+
+
+def _record_telemetry_key_slot(instance_id, key_slot, endpoint):
+    """Best effort: remember which key this instance last pushed with.
+
+    Stores the slot name only, never key text. A failure here must never
+    change the push's response.
+    """
+    try:
+        r.hset(
+            TELEMETRY_KEY_SLOTS_KEY,
+            str(instance_id),
+            json.dumps({"slot": key_slot, "endpoint": endpoint, "at": _utc_now_iso()}),
+        )
+    except Exception as exc:
+        app.logger.warning("telemetry key slot not recorded: %s", type(exc).__name__)
+
+
 @app.route("/api/telemetry/push", methods=["POST"])
 def telemetry_push():
-    auth = request.headers.get("Authorization", "")
-    if not TELEMETRY_API_KEY or auth != f"Bearer {TELEMETRY_API_KEY}":
+    key_slot = _telemetry_key_slot(request.headers.get("Authorization", ""))
+    if key_slot is None:
         return jsonify({"error": "Unauthorized"}), 401
 
     payload = request.get_json(silent=True)
@@ -3149,14 +3244,15 @@ def telemetry_push():
     payload["_received_at"] = _utc_now_iso()
 
     r.set(redis_key, json.dumps(payload), ex=REDIS_TTL_SECONDS)
+    _record_telemetry_key_slot(instance_id, key_slot, "push")
 
     return jsonify({"status": "ok"}), 200
 
 
 @app.route("/api/telemetry/action", methods=["POST"])
 def telemetry_action():
-    auth = request.headers.get("Authorization", "")
-    if not TELEMETRY_API_KEY or auth != f"Bearer {TELEMETRY_API_KEY}":
+    key_slot = _telemetry_key_slot(request.headers.get("Authorization", ""))
+    if key_slot is None:
         return jsonify({"error": "Unauthorized"}), 401
 
     body = request.get_json(silent=True)
@@ -3186,6 +3282,7 @@ def telemetry_action():
         app.logger.exception("telemetry_action queue failed")
         return jsonify({"error": "queue unavailable"}), 503
 
+    _record_telemetry_key_slot(instance_id, key_slot, "action")
     return jsonify({"status": "ok", "queued": len(queue_items)}), 200
 
 
@@ -3228,8 +3325,8 @@ def dashboard():
 @app.route("/api/telemetry/pod_closed", methods=["POST"])
 def telemetry_pod_closed():
     # Bearer token auth
-    auth = request.headers.get("Authorization", "")
-    if not TELEMETRY_API_KEY or auth != f"Bearer {TELEMETRY_API_KEY}":
+    key_slot = _telemetry_key_slot(request.headers.get("Authorization", ""))
+    if key_slot is None:
         return jsonify({"error": "Unauthorized"}), 401
 
     payload = request.get_json(silent=True)
@@ -3246,6 +3343,7 @@ def telemetry_pod_closed():
                                     # closed trades on 2026-06-29
     pipe.expire(redis_key, 604800)  # 7 days
     pipe.execute()
+    _record_telemetry_key_slot(instance_id, key_slot, "pod_closed")
 
     return jsonify({"status": "ok"}), 200
 
@@ -3378,8 +3476,8 @@ def telemetry_closed():
 
 @app.route("/api/telemetry/scalp_closed", methods=["POST"])
 def telemetry_scalp_closed():
-    auth = request.headers.get("Authorization", "")
-    if not TELEMETRY_API_KEY or auth != f"Bearer {TELEMETRY_API_KEY}":
+    key_slot = _telemetry_key_slot(request.headers.get("Authorization", ""))
+    if key_slot is None:
         return jsonify({"error": "Unauthorized"}), 401
 
     payload = request.get_json(silent=True)
@@ -3404,6 +3502,7 @@ def telemetry_scalp_closed():
     pipe.expire(redis_key, SCALP_HISTORY_TTL_SECONDS)
     pipe.rpush(ARCHIVE_QUEUE_KEY, archive_item)
     pipe.execute()
+    _record_telemetry_key_slot(instance_id, key_slot, "scalp_closed")
 
     return jsonify({"status": "ok"}), 200
 

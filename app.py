@@ -541,13 +541,74 @@ def _load_critical_rows():
     return rows, True
 
 
+# C7 (30 Sep): the account's book against the broker's 200 pending-order
+# limit and the EA's entry guard (fxmatrix ea/grind_exitq.mqh 114-185:
+# Grind_SlotEntryAllowed allows an entry while positions + orders + resting
+# non-EXT orders <= 200 - (2 + GRIND_SLOT_MARGIN 4) = 194).
+FLEET_SLOT_LIMIT = 200
+FLEET_GUARD_LIMIT = 194
+# ea/grind_api_counter.mqh 13-14, grind_config.mqh 11
+FLEET_API_SOFT_WARN = 1800
+FLEET_API_ENTRY_STOP = 1900
+
+
+def _book_role(comment):
+    """The role field of a GRIND comment (GRIND|OPT|L|L03|ENT -> ENT), else None."""
+    if not isinstance(comment, str):
+        return None
+    parts = comment.split("|")
+    if len(parts) >= 5 and parts[0] == "GRIND":
+        return parts[4]
+    return None
+
+
+def _fleet_strip_slots(instances, cards, raw_by_inst):
+    """Book (positions + orders) and the EA's guard total for the whole fleet,
+    or None when any instance is not live or has no book (never partial)."""
+    positions = orders = resting_non_ext = 0
+    for inst in instances:
+        if (cards.get(inst) or {}).get("connection") != "live":
+            return None
+        raw = raw_by_inst.get(inst)
+        try:
+            data = json.loads(raw) if raw is not None else None
+        except (json.JSONDecodeError, TypeError):
+            data = None
+        book = data.get("book") if isinstance(data, dict) else None
+        if not isinstance(book, dict):
+            return None
+        pos = book.get("positions")
+        ords = book.get("orders")
+        if not isinstance(pos, list) or not isinstance(ords, list):
+            return None
+        positions += len(pos)
+        orders += len(ords)
+        for o in ords:
+            if not isinstance(o, dict) or _book_role(o.get("comment")) != "EXT":
+                resting_non_ext += 1
+    return {
+        "orders": orders,
+        "slots": positions + orders,
+        "guard_total": positions + orders + resting_non_ext,
+    }
+
+
 def _fleet_strip_book(instances, cards, raw_by_inst, account):
+    slots = _fleet_strip_slots(instances, cards, raw_by_inst)
+    slot_fields = {
+        "orders": slots["orders"] if slots else None,
+        "slots": slots["slots"] if slots else None,
+        "slot_limit": FLEET_SLOT_LIMIT,
+        "guard_total": slots["guard_total"] if slots else None,
+        "guard_limit": FLEET_GUARD_LIMIT,
+    }
     null_book = {
         "positions": None,
         "pairs": None,
         "open_mtm_book": None,
         "financing": None,
     }
+    null_book.update(slot_fields)
     position_count = 0
     symbols_with_positions = set()
     open_mtm = 0.0
@@ -598,12 +659,14 @@ def _fleet_strip_book(instances, cards, raw_by_inst, account):
     ):
         financing = round(float(equity) - float(balance) - open_mtm_book, 2)
 
-    return {
+    out = {
         "positions": position_count,
         "pairs": len(symbols_with_positions),
         "open_mtm_book": open_mtm_book,
         "financing": financing,
     }
+    out.update(slot_fields)
+    return out
 
 
 def _fleet_strip_sum_bucket_field(buckets, field, null_if_any_null=False):
@@ -1151,11 +1214,16 @@ def _fleet_strip_live_card(
     open_layers_long = 0
     open_layers_short = 0
 
+    api_count = None
     for inst in instances:
         card = cards.get(inst) or {}
         if card.get("connection") != "live":
             continue
         instances_live += 1
+        api_val = card.get("api_count")
+        if isinstance(api_val, (int, float)) and not isinstance(api_val, bool):
+            # one shared counter per terminal (ea/grind_api_counter.mqh): max, not sum
+            api_count = int(api_val) if api_count is None else max(api_count, int(api_val))
         open_mtm_total += _grind_pnl_contribution(card.get("net_mtm"))
         open_layers_long += card.get("open_layers_long") or 0
         open_layers_short += card.get("open_layers_short") or 0
@@ -1265,6 +1333,12 @@ def _fleet_strip_live_card(
         },
         "badge": badge,
         "book": book,
+        "api": {
+            "count": api_count,
+            "limit": GRIND_API_DAILY_LIMIT,
+            "soft_warn": FLEET_API_SOFT_WARN,
+            "entry_stop": FLEET_API_ENTRY_STOP,
+        },
         "today": today_block,
         "cycle": cycle,
         "summary": summary,

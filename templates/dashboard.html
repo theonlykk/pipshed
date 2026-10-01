@@ -436,6 +436,8 @@
     }
     .fleet-strip-title a:hover { text-decoration: underline; }
     .fleet-strip-line { color: var(--muted); margin-bottom: 4px; }
+    .fleet-num-amber { color: var(--amber); font-weight: 600; }
+    .fleet-num-red { color: var(--red); font-weight: 600; }
     .fleet-sum { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
                  white-space: pre; overflow-x: auto; margin: 6px 0 4px; }
     .fleet-sum-line { line-height: 1.45; }
@@ -2215,6 +2217,15 @@
     }
   }
 
+  // C7: a count coloured amber from `amber`, red from `red` (null = never)
+  function fleetStripLevel(v, amber, red) {
+    if (v === null || v === undefined) return '--';
+    var n = Number(v);
+    var cls = (red !== null && red !== undefined && n >= red) ? 'fleet-num-red'
+      : ((amber !== null && amber !== undefined && n >= amber) ? 'fleet-num-amber' : 'fleet-num');
+    return '<span class="' + cls + '">' + v + '</span>';
+  }
+
   function fleetStripDash(v) {
     return v === null || v === undefined ? '--' : v;
   }
@@ -2438,6 +2449,12 @@
       var deepSideTxt = ds ? (ds.layers + ' (' + ds.pair + ' ' + ds.side + ')') : '--';
       cardHtml += '<div class="fleet-strip-line">Open risk ' + fleetStripDash(book.positions) + ' positions, ' +
         fleetStripDash(book.pairs) + ' pairs, deepest side ' + deepSideTxt + '</div>';
+      var api = card.api || {};
+      cardHtml += '<div class="fleet-strip-line">Book ' +
+        fleetStripLevel(book.slots, null, null) + '/' + fleetStripDash(book.slot_limit) +
+        ' · guard ' + fleetStripLevel(book.guard_total, 180, book.guard_limit) + '/' + fleetStripDash(book.guard_limit) +
+        ' · API ' + fleetStripLevel(api.count, api.soft_warn, api.entry_stop) + '/' + fleetStripDash(api.limit) +
+        '</div>';
       cardHtml += '<div class="fleet-strip-line">Open MTM ' + fleetStripNumFormat(book.open_mtm_book, true) +
         ' Financing ' + fleetStripNumFormat(book.financing, true) + '</div>';
       cardHtml += '<div class="fleet-strip-section">Today (broker day ' +

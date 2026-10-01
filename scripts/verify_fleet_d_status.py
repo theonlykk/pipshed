@@ -1,6 +1,7 @@
 """Verification for Fleet D (wine-d, IC 53077984; built 30 Sep, not attached):
 GRIND_D_INSTANCES (_OPTD/_ALTD), GRIND_FLEET=D, _grind_slot, /status_d, and the
-strip card (placeholder until attach, badge NOT ATTACHED, url linuxd).
+strip card (placeholder until attach, badge NOT ATTACHED, url linuxd; live
+card from the 1 Oct 2026 attach, cycle_start 2026-10-01: FD10).
 
 Tests first. Predicted at the tests-only commit: FD1, FD3, FD4, FD5, FD6, FD7,
 FD10, FD12 FAIL; FD2, FD8, FD9, FD11 are guards that pass in both states (FD11: an
@@ -279,13 +280,16 @@ def check_fd10():
     entry = next(e for e in pipshed.FLEET_STRIP if e["letter"] == "D")
     if entry.get("instances") != GRIND_D_INSTANCES or entry.get("url") != "https://linuxd.pipshed.com":
         raise AssertionError(f"D strip entry: {entry.get('url')}, {entry.get('instances')}")
+    if entry.get("placeholder") or entry.get("cycle_start") != "2026-10-01":
+        raise AssertionError(f"attached 1 Oct: placeholder off, cycle_start 2026-10-01, got "
+                             f"{entry.get('placeholder')}, {entry.get('cycle_start')}")
     d = _strip_d(FakeRedis())
-    if not d.get("placeholder") or d.get("badge") != "NOT ATTACHED":
-        raise AssertionError(f"built, not attached: placeholder and NOT ATTACHED, got "
+    if d.get("placeholder") or d.get("badge") != "NO CONNECTION":
+        raise AssertionError(f"attached, no heartbeats: live card, NO CONNECTION, got "
                              f"{d.get('placeholder')}, {d.get('badge')}")
     if d.get("url") != "https://linuxd.pipshed.com":
         raise AssertionError(f"card url {d.get('url')}")
-    return "strip D: built, not attached, links linuxd"
+    return "strip D: attached 1 Oct, live card, links linuxd"
 
 
 def check_fd11():

@@ -66,6 +66,21 @@ class FakeRedis:
         return items[start:] if end == -1 else items[start:end + 1]
 
 
+GRIND_D_INSTANCES = [
+    "GRIND_GBPUSD_OPTD",
+    "GRIND_EURUSD_OPTD",
+    "GRIND_EURGBP_OPTD",
+    "GRIND_AUDCAD_OPTD",
+    "GRIND_AUDCHF_OPTD",
+    "GRIND_CADCHF_OPTD",
+    "GRIND_NZDCHF_OPTD",
+    "GRIND_NZDCAD_OPTD",
+    "GRIND_AUDNZD_OPTD",
+    "GRIND_AUDNZD_ALTD",
+    "GRIND_NZDCAD_ALTD",
+]
+
+
 def HB(seconds_ago, **overrides):
     payload = {
         "_received_at": (now - timedelta(seconds=seconds_ago)).strftime(
@@ -296,6 +311,9 @@ def check_fs2():
 
 
 def check_fs3():
+    # Fleet D attached 1 Oct 2026 (wine-d, IC 53077984): a live card, not a
+    # placeholder; cycle from 2026-10-01; NO CONNECTION until its heartbeats
+    # arrive, LIVE when all eleven report.
     import app as pipshed
 
     fake = FakeRedis()
@@ -303,22 +321,23 @@ def check_fs3():
     pipshed.r = fake
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
     d = _fleet_by_letter(data, "D")
-    if not d.get("placeholder"):
-        raise AssertionError("D must be placeholder")
-    if d.get("status") != "grey":
-        raise AssertionError(f"D status expected grey, got {d.get('status')}")
+    if d.get("placeholder"):
+        raise AssertionError("D must not be a placeholder after the 1 Oct attach")
     if d.get("url") != "https://linuxd.pipshed.com":
         raise AssertionError(f"D url expected linuxd, got {d.get('url')}")
     health = d.get("health") or {}
-    if health.get("instances_total") != 0 or health.get("instances_live") != 0:
-        raise AssertionError("D instances counts must be 0")
-    if (d.get("money") or {}).get("open_mtm") is not None:
-        raise AssertionError("D open_mtm must be null")
-    if (d.get("risk") or {}).get("deepest") is not None:
-        raise AssertionError("D deepest must be null")
-    if (d.get("risk") or {}).get("day_pnl") is not None:
-        raise AssertionError("D day_pnl must be null")
-    return "placeholder D"
+    if health.get("instances_total") != 11 or health.get("instances_live") != 0:
+        raise AssertionError(f"D counts expected 11/0, got {health}")
+    if d.get("badge") != "NO CONNECTION":
+        raise AssertionError(f"D badge with no heartbeats: NO CONNECTION, got {d.get('badge')}")
+    if (d.get("cycle") or {}).get("start_date") != "2026-10-01":
+        raise AssertionError(f"D cycle start expected 2026-10-01, got {d.get('cycle')}")
+    for inst in GRIND_D_INSTANCES:
+        fake.set(f"fxmatrix:state:{inst}", HB(30, account_login=53077984))
+    d = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "D")
+    if d.get("badge") != "LIVE" or (d.get("health") or {}).get("instances_live") != 11:
+        raise AssertionError(f"D with 11 heartbeats: LIVE 11, got {d.get('badge')}, {d.get('health')}")
+    return "D live card (attached 1 Oct)"
 
 
 def check_fs4():
@@ -683,8 +702,8 @@ def check_fs20():
         raise AssertionError("C badge must be LIVE")
     if _fleet_by_letter(data, "A").get("badge") != "NO CONNECTION":
         raise AssertionError("A badge must be NO CONNECTION")
-    if _fleet_by_letter(data, "D").get("badge") != "NOT ATTACHED":
-        raise AssertionError("D badge must be NOT ATTACHED (wine-d built 30 Sep)")
+    if _fleet_by_letter(data, "D").get("badge") != "NO CONNECTION":
+        raise AssertionError("D badge must be NO CONNECTION (attached 1 Oct; no D heartbeats here)")
     return "badges FB2"
 
 

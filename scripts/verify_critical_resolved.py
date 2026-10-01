@@ -144,7 +144,8 @@ def check_cr5():
         "r.level === 'CRITICAL' && !r.resolved",
         "#criticalBanner.resolved-bg",
         "crit-line resolved",
-        "(r.resolved ? '  resolved: instance running again' : '')",
+        # C94: the resolved text comes from the row (resolved_note), default as before
+        "(r.resolved ? '  ' + (r.resolved_note || 'resolved: instance running again') : '')",
         ".concat(rows.filter(function(r) { return r.resolved; }))",   # resolved rows last
     ]
     missing = [n for n in need if n not in html]

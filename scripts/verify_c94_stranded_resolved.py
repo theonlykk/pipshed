@@ -73,6 +73,8 @@ def _crit():
          "first_at": "2026-10-01T15:14:32Z", "last_at": "2026-10-01T15:14:32Z"},
         {"instance_id": "GRIND_EURUSD_OPTD", "level": "WARN", "code": "QUARANTINE_ENTER", "count": 3,
          "first_at": "2026-10-01T15:00:00Z", "last_at": "2026-10-01T15:10:00Z"},
+       {"instance_id": INST, "level": "WARN", "code": "QUARANTINE_ENTER", "count": 2,
+         "first_at": "2026-10-01T15:20:00Z", "last_at": "2026-10-01T15:21:00Z"},
     ]}
 
 
@@ -94,6 +96,15 @@ def _strip(fake):
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets/c94").get_json()
     d = fs._fleet_by_letter(data, "D")
     return {a.get("code"): a for a in d.get("alerts") or [] if a.get("kind") == "EVENT"}
+
+
+def _strip_all(fake):
+    import app as pipshed
+
+    pipshed.r = fake
+    data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets/c94b").get_json()
+    d = fs._fleet_by_letter(data, "D")
+    return [a for a in d.get("alerts") or [] if a.get("kind") == "EVENT"]
 
 
 def _critical(fake):
@@ -166,6 +177,8 @@ def check_sr5():
     _fixture(fake3, fs.HBB(30, account_login=53077984, invariant_ok=True, max_layers=8,
                            open_layers_long=8, open_layers_short=1))   # at cap, no layers list
     _assert_amber(fake3, "at cap without layer detail")
+    # (staleness needs no case of its own: heartbeat keys expire after
+    # REDIS_TTL_SECONDS = 300, so a stale instance IS "no heartbeat" above)
     return "unknown or halted state stays amber"
 
 
@@ -173,12 +186,14 @@ def check_sr6():
     """GUARD: other amber codes are untouched."""
     fake = fs.FakeRedis()
     _fixture(fake, _hb(_longs(7, 7)))
-    q = _strip(fake).get("QUARANTINE_ENTER")
-    if not q or q.get("level") != "amber":
-        raise AssertionError(f"QUARANTINE_ENTER stays amber, got {q}")
-    row = _critical(fake).get(("GRIND_EURUSD_OPTD", "QUARANTINE_ENTER")) or {}
-    if row.get("resolved") is True:
-        raise AssertionError(f"QUARANTINE_ENTER is never resolved, got {row}")
+    # the QUARANTINE_ENTER rows of INST (whose sides are cleared) and of another instance
+    q = [a for a in _strip_all(fake) if a.get("code") == "QUARANTINE_ENTER"]
+    if len(q) != 2 or any(a.get("level") != "amber" for a in q):
+        raise AssertionError(f"QUARANTINE_ENTER stays amber on a cleared instance too, got {q}")
+    crit = _critical(fake)
+    for key in ((INST, "QUARANTINE_ENTER"), ("GRIND_EURUSD_OPTD", "QUARANTINE_ENTER")):
+        if (crit.get(key) or {}).get("resolved") is True:
+            raise AssertionError(f"QUARANTINE_ENTER is never resolved, got {crit.get(key)}")
     return "other WARN codes untouched"
 
 

@@ -913,6 +913,50 @@ _FLEET_STRIP_HALT_CODES = frozenset({
 # C90, fxmatrix 02_TRAPS 1 Oct D1). Only the halt codes count as halts.
 _CRITICAL_RESOLVED_WHEN_RUNNING = _FLEET_STRIP_HALT_CODES | frozenset({"DUPLICATE_MAGIC"})
 
+# C94: ROLL_STRANDED is sent once per episode; nothing is sent when the side
+# recovers. It is history once no side of the instance is FULLY ROLLED AT CAP
+# (depth == max_layers and every layer rolled: a long's exit target below its
+# entry, a short's above), judged from the live heartbeat.
+ROLL_STRANDED_RESOLVED_NOTE = "resolved: no side fully rolled at cap"
+
+
+def _roll_stranded_cleared(raw_payload):
+    """True when the heartbeat shows no side fully rolled at cap. Unknown
+    state (no heartbeat, halted, no max_layers or depth, no layer detail for
+    a side at cap) is never cleared."""
+    try:
+        data = json.loads(raw_payload or "")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(data, dict) or data.get("halted") is True:
+        return False
+    max_layers = data.get("max_layers")
+    if not isinstance(max_layers, int) or isinstance(max_layers, bool) or max_layers <= 0:
+        return False
+    layers = _grind_layers_from_payload(data)
+    for side, depth_key in (("L", "open_layers_long"), ("S", "open_layers_short")):
+        depth = data.get(depth_key)
+        if not isinstance(depth, int) or isinstance(depth, bool):
+            return False
+        if depth < max_layers:
+            continue
+        if layers is None:
+            return False
+        side_layers = [l for l in layers if l.get("side") == side]
+        if len(side_layers) < max_layers:
+            return False
+        unrolled = False
+        for layer in side_layers:
+            entry, exit_target = layer.get("entry_price"), layer.get("exit_target")
+            if entry is None or exit_target is None:
+                continue
+            if (side == "L" and exit_target > entry) or (side == "S" and exit_target < entry):
+                unrolled = True
+                break
+        if not unrolled:
+            return False
+    return True
+
 
 def _fleet_strip_recovered(instances, cards, raw_by_inst, halted):
     """Instances whose halt events are resolved: live now, not in the halted
@@ -1025,6 +1069,11 @@ def _fleet_strip_build_alerts(
                     and inst in recovered):
                 level = "resolved"
                 detail += ", resolved: instance running again"
+            elif (level == "amber" and row.get("code") == "ROLL_STRANDED"
+                    and (cards.get(inst) or {}).get("connection") == "live"
+                    and _roll_stranded_cleared(raw_by_inst.get(inst))):
+                level = "resolved"
+                detail += ", " + ROLL_STRANDED_RESOLVED_NOTE
             alerts.append(
                 {
                     "level": level,
@@ -3045,8 +3094,10 @@ def public_daily_table(token, _ignored):
 def _critical_mark_resolved(payload):
     """Add "resolved": true to each halt-code (or DUPLICATE_MAGIC, C90)
     CRITICAL row whose instance is live, not halted and invariant_ok true
-    now (same rule as the fleet strip: a halt clears only on an EA restart). Works on the parsed copy;
-    the Redis payload is never written."""
+    now (same rule as the fleet strip: a halt clears only on an EA restart),
+    and to each ROLL_STRANDED row whose instance has no side fully rolled at
+    cap (C94; with "resolved_note"). Works on the parsed copy; the Redis
+    payload is never written."""
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         return
@@ -3054,10 +3105,15 @@ def _critical_mark_resolved(payload):
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if row.get("level") != "CRITICAL" or row.get("code") not in _CRITICAL_RESOLVED_WHEN_RUNNING:
-            continue
         inst = row.get("instance_id")
         if not inst:
+            continue
+        if row.get("level") == "WARN" and row.get("code") == "ROLL_STRANDED":
+            if _roll_stranded_cleared(r.get(f"fxmatrix:state:{inst}")):
+                row["resolved"] = True
+                row["resolved_note"] = ROLL_STRANDED_RESOLVED_NOTE
+            continue
+        if row.get("level") != "CRITICAL" or row.get("code") not in _CRITICAL_RESOLVED_WHEN_RUNNING:
             continue
         if inst not in cache:
             card = _summarize_grind_instance_state(inst, r.get(f"fxmatrix:state:{inst}"))

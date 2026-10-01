@@ -186,11 +186,10 @@ FLEET_STRIP = [
         "url": "https://linuxd.pipshed.com",
         "instances": GRIND_D_INSTANCES,
         "daily_loss_limit_usd": 500.0,
-        "cycle_start": None,
+        "cycle_start": "2026-10-01",
         "start_balance": 10000.0,
-        # wine-d (IC 53077984) built 30 Sep; a placeholder card until the EAs
-        # attach. At attach: placeholder False and cycle_start the attach day.
-        "placeholder": True,
+        # wine-d (IC 53077984) built 30 Sep, EAs attached 1 Oct 05:10-05:19Z.
+        "placeholder": False,
         "built": True,
     },
 ]

@@ -15,7 +15,9 @@ paired: reattach the chart". No layer detail in the heartbeat: unknown, no
 alert. A resting EXT ORDER is not a position and never counts.
 
 Tests first. Predicted at the tests-only commit: OX1, OX2, OX6 and OX7 FAIL;
-OX3, OX4 and OX5 are guards that pass in both states.
+OX3, OX4 and OX5 are guards that pass in both states. OX8 (two orphans on
+one instance) and OX2's paired long L01 / short L00 were added after the
+rules were broken once (only-first-orphan and ignore-side/index survived).
 
     python scripts/verify_c97_orphan_ext.py
 """
@@ -108,7 +110,11 @@ def check_ox2():
     fake = fs.FakeRedis()
     positions = [_pos(555146463, "BUY", 0.98525, "GRIND|OPT|L|L14|ENT"),
                  _pos(555135550, "BUY", 0.98477, "GRIND|OPT|S|L01|EXT")]
-    layers = [_layer("L", 14, 0.98525, 0.98625, False)]       # no short L01 in the engine
+    # no short L01 in the engine; a LONG L01 and a SHORT L00 with exit positions
+    # must not pair it (side and index both matter)
+    layers = [_layer("L", 14, 0.98525, 0.98625, False),
+              _layer("L", 1, 0.98900, 0.99000, True),
+              _layer("S", 0, 0.98509, 0.98409, True)]
     _fixture(fake, {INST: _hb(positions, layers)})
     _assert_one(_orphan_alerts(fake), INST, 555135550, "S L01", "layer missing from the engine")
     return "EXT position whose layer the engine does not hold: ORPHAN_EXT"
@@ -169,6 +175,23 @@ def check_ox6():
     return "one alert per orphan, per instance; a halted instance still reports its orphan"
 
 
+def check_ox8():
+    fake = fs.FakeRedis()
+    positions = [_pos(555067590, "SELL", 0.80950, "GRIND|OPT|S|L00|ENT"),
+                 _pos(555076933, "BUY", 0.80850, "GRIND|OPT|S|L00|EXT"),
+                 _pos(555067000, "BUY", 0.80500, "GRIND|OPT|L|L02|ENT"),
+                 _pos(555077100, "SELL", 0.80600, "GRIND|OPT|L|L02|EXT")]
+    layers = [_layer("S", 0, 0.80950, 0.80850, False), _layer("L", 2, 0.80500, 0.80600, False)]
+    _fixture(fake, {INST: _hb(positions, layers)})
+    alerts = _orphan_alerts(fake)
+    details = sorted(a.get("detail") for a in alerts if a.get("instance_id") == INST)
+    want = sorted(["EXT position 555076933 (S L00) not paired: reattach the chart",
+                   "EXT position 555077100 (L L02) not paired: reattach the chart"])
+    if details != want:
+        raise AssertionError(f"two orphans on one instance -> two alerts {want}, got {alerts}")
+    return "two orphans on one instance: two alerts"
+
+
 def check_ox7():
     import app as pipshed
 
@@ -181,7 +204,7 @@ def check_ox7():
 
 
 CHECKS = [("OX1", check_ox1), ("OX2", check_ox2), ("OX3", check_ox3), ("OX4", check_ox4),
-          ("OX5", check_ox5), ("OX6", check_ox6), ("OX7", check_ox7)]
+          ("OX5", check_ox5), ("OX6", check_ox6), ("OX7", check_ox7), ("OX8", check_ox8)]
 
 
 def main():

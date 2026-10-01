@@ -887,6 +887,7 @@ def _fleet_strip_short_time(ts):
 _FLEET_STRIP_ALERT_KIND_ORDER = {
     "HALTED": 0,
     "EVENT": 1,
+    "ORPHAN_EXT": 1.5,
     "DAY_LOSS": 2,
     "NOT_REPORTING": 3,
     "STALE_HEARTBEAT": 4,
@@ -956,6 +957,42 @@ def _roll_stranded_cleared(raw_payload):
         if not unrolled:
             return False
     return True
+
+
+# C97: an exit that filled while the EA never saw the deal (a link stall)
+# leaves its EXT position open beside the entry; the close-by never queues
+# and that side stops scalping, with no invariant to notice. An EXT position
+# is paired when the engine holds that side and layer index with
+# has_exit_position true (the close-by is in flight); otherwise it is an
+# orphan. Without layer detail there is no verdict.
+def _orphan_ext_positions(raw_payload):
+    """[(ticket, side, layer_index)] for each unpaired EXT position, in book
+    order; [] when the heartbeat has no book or no layer detail."""
+    try:
+        data = json.loads(raw_payload or "")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    book = data.get("book")
+    positions = book.get("positions") if isinstance(book, dict) else None
+    layers = _grind_layers_from_payload(data)
+    if not isinstance(positions, list) or layers is None:
+        return []
+    out = []
+    for pos in positions:
+        if not isinstance(pos, dict) or _book_role(pos.get("comment")) != "EXT":
+            continue
+        parts = pos["comment"].split("|")
+        side, tag = parts[2], parts[3]
+        if side not in ("L", "S") or not tag.startswith("L") or not tag[1:].isdigit():
+            continue
+        idx = int(tag[1:])
+        paired = any(l.get("side") == side and l.get("layer_index") == idx
+                     and l.get("has_exit_position") is True for l in layers)
+        if not paired:
+            out.append((pos.get("ticket"), side, idx))
+    return out
 
 
 def _fleet_strip_recovered(instances, cards, raw_by_inst, halted):
@@ -1150,6 +1187,20 @@ def _fleet_strip_build_alerts(
                     "code": "STALE_HEARTBEAT",
                     "instance_id": inst,
                     "detail": f"{age if age is not None else 'unknown'} s",
+                }
+            )
+
+    for inst in instances:
+        if (cards.get(inst) or {}).get("connection") != "live":
+            continue
+        for ticket, side, idx in _orphan_ext_positions(raw_by_inst.get(inst)):
+            alerts.append(
+                {
+                    "level": "amber",
+                    "kind": "ORPHAN_EXT",
+                    "code": "ORPHAN_EXT",
+                    "instance_id": inst,
+                    "detail": f"EXT position {ticket} ({side} L{idx:02d}) not paired: reattach the chart",
                 }
             )
 

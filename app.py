@@ -907,6 +907,12 @@ _FLEET_STRIP_HALT_CODES = frozenset({
     "REBUILD_EXIT_UNREADABLE",
 })
 
+# CRITICAL codes that become history once the instance runs healthy again:
+# the halt codes, plus DUPLICATE_MAGIC (the EA failed OnInit and was unloaded,
+# so a live, healthy heartbeat from that instance means it was re-attached;
+# C90, fxmatrix 02_TRAPS 1 Oct D1). Only the halt codes count as halts.
+_CRITICAL_RESOLVED_WHEN_RUNNING = _FLEET_STRIP_HALT_CODES | frozenset({"DUPLICATE_MAGIC"})
+
 
 def _fleet_strip_recovered(instances, cards, raw_by_inst, halted):
     """Instances whose halt events are resolved: live now, not in the halted
@@ -1015,7 +1021,7 @@ def _fleet_strip_build_alerts(
             count = row.get("count")
             last_at = row.get("last_at") or ""
             detail = f"x{count}, last {_fleet_strip_short_time(last_at)}"
-            if (level == "red" and row.get("code") in _FLEET_STRIP_HALT_CODES
+            if (level == "red" and row.get("code") in _CRITICAL_RESOLVED_WHEN_RUNNING
                     and inst in recovered):
                 level = "resolved"
                 detail += ", resolved: instance running again"
@@ -2171,6 +2177,7 @@ COMMISSION_PER_CLOSE_BY_ACCOUNT = {
     1514731800: 0.06,   # FTMO cycle 3
     53066709: 0.08,     # IC Fleet B (box 1)
     53071896: 0.08,     # IC Fleet C (box 2)
+    53077984: 0.08,     # IC Fleet D (wine-d): same Raw account type, checked on its ledger
 }
 
 
@@ -3036,9 +3043,9 @@ def public_daily_table(token, _ignored):
 
 
 def _critical_mark_resolved(payload):
-    """Add "resolved": true to each halt-code CRITICAL row whose instance is
-    live, not halted and invariant_ok true now (same rule as the fleet
-    strip: a halt clears only on an EA restart). Works on the parsed copy;
+    """Add "resolved": true to each halt-code (or DUPLICATE_MAGIC, C90)
+    CRITICAL row whose instance is live, not halted and invariant_ok true
+    now (same rule as the fleet strip: a halt clears only on an EA restart). Works on the parsed copy;
     the Redis payload is never written."""
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
@@ -3047,7 +3054,7 @@ def _critical_mark_resolved(payload):
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if row.get("level") != "CRITICAL" or row.get("code") not in _FLEET_STRIP_HALT_CODES:
+        if row.get("level") != "CRITICAL" or row.get("code") not in _CRITICAL_RESOLVED_WHEN_RUNNING:
             continue
         inst = row.get("instance_id")
         if not inst:

@@ -1352,6 +1352,18 @@
 </div>
 
 <script>
+  // C110: every poller runs through this. A tick is skipped while that
+  // poller's previous call is still running, so slow answers can never pile
+  // up behind an open page (2 Oct: one tab kept four workers busy).
+  function pollNoOverlap(fn, ms) {
+    let busy = false;
+    return setInterval(async function () {
+      if (busy) return;
+      busy = true;
+      try { await fn(); } catch (e) { /* a poller's error never wedges it */ } finally { busy = false; }
+    }, ms);
+  }
+
   const GRIND_RINGS = {{ rings|tojson }};
   const GRIND_RING_IDS = Object.keys(GRIND_RINGS);
   const GRIND_INSTANCES = GRIND_RING_IDS.reduce(function(acc, ringId) {
@@ -1867,7 +1879,7 @@
 
   // Poll every 5 seconds
   fetchAndRender();
-  setInterval(fetchAndRender, 5000);
+  pollNoOverlap(fetchAndRender, 5000);
 </script>
 
 <script>
@@ -1883,7 +1895,7 @@
   }
 
   fetchAggregate();
-  setInterval(fetchAggregate, 5000);
+  pollNoOverlap(fetchAggregate, 5000);
 
   const PUBLIC_CARRY_TOKEN = 'k7m9p2x4q';
 
@@ -2490,13 +2502,13 @@
   fetchDailyTable();
   fetchEjectionPanel();
   fetchFleetStrip();
-  setInterval(fetchDailySummary, 5000);
-  setInterval(fetchCarryTable, 5000);
-  setInterval(fetchCarryAudit, 5000);
-  setInterval(fetchCriticalBanner, 30000);
-  setInterval(fetchDailyTable, 30000);
-  setInterval(fetchEjectionPanel, 30000);
-  setInterval(fetchFleetStrip, 30000);
+  pollNoOverlap(fetchDailySummary, 5000);
+  pollNoOverlap(fetchCarryTable, 5000);
+  pollNoOverlap(fetchCarryAudit, 5000);
+  pollNoOverlap(fetchCriticalBanner, 30000);
+  pollNoOverlap(fetchDailyTable, 30000);
+  pollNoOverlap(fetchEjectionPanel, 30000);
+  pollNoOverlap(fetchFleetStrip, 30000);
 
   let todayAllCache = { headers: ['Time', 'Pair', 'Direction', 'Entry', 'Exit', 'Pips'], rows: [], summary: '' };
   let openPosCache  = { headers: ['Pair', 'Direction', 'Entry', 'Layers', 'Net PnL'], rows: [] };
@@ -2743,9 +2755,9 @@
   }
 
   fetchTodayAll();
-  setInterval(fetchTodayAll, 30000);
+  pollNoOverlap(fetchTodayAll, 30000);
   fetchOpenPositions();
-  setInterval(fetchOpenPositions, 5000);
+  pollNoOverlap(fetchOpenPositions, 5000);
 
   document.getElementById('todayAllPrevDay').addEventListener('click', function() {
     todayAllChangeDay(-1);
@@ -3335,7 +3347,7 @@ function renderClosedPods(records) {
 }
 
 fetchClosedPods();
-setInterval(fetchClosedPods, 30000);
+pollNoOverlap(fetchClosedPods, 30000);
 
 // Scalp exits — per-instance, date navigation, paginated
 const SCALP_PER_PAGE = 10;
@@ -3473,7 +3485,7 @@ function renderScalps(records) {
 }
 
 fetchScalps();
-setInterval(fetchScalps, 30000);
+pollNoOverlap(fetchScalps, 30000);
 </script>
 
 <div class="card grind-book-section">

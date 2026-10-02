@@ -2205,6 +2205,79 @@ def _public_scalp_fields(record):
     return {key: record.get(key) for key in _PUBLIC_SCALP_KEYS}
 
 
+# C110: scalp lists are read through one per-process cache that re-reads only
+# what changed. Premise (guarded by verify_c110 SR6): the ONLY write to a
+# scalp list is telemetry_scalp_closed's LPUSH of one row followed by LTRIM
+# 0..SCALP_HISTORY_LIST_MAX, so a list changes only by new rows at its head
+# and old rows falling off its tail. A read probes the head; new rows are
+# found by locating the cached head window further down; the length follows
+# from the cap; the tail row (and, below the cap, the absence of a row past
+# the end) must agree, or the whole list is read again. Every check fails
+# towards a full read, so the answer is always the list as Redis holds it.
+# Before C110 every read parsed the whole list: one fleet-strip call read
+# ~81 MB from Redis with full lists (2 Oct outage).
+_SCALP_CACHE = {}            # redis key -> (client, raw rows, parsed rows)
+_SCALP_HEAD_WINDOW = 8       # cached head rows that must match, in order
+_SCALP_PROBE_SIZES = (12, 128, 1024)  # the first probe also finds <= 4 new rows
+
+
+def _scalp_history_cap():
+    return SCALP_HISTORY_LIST_MAX + 1
+
+
+def _scalp_cache_extend(client, key, raws, parsed):
+    """(raws, parsed) for the list now, built from the cached copy plus the
+    new head rows; None when the cached copy cannot be trusted."""
+    cap = _scalp_history_cap()
+    window = raws[:_SCALP_HEAD_WINDOW]
+    w = len(window)
+    fetched = []
+    k = None
+    for size in _SCALP_PROBE_SIZES + (cap + w,):
+        fetched = client.lrange(key, 0, size - 1)
+        for i in range(0, len(fetched) - w + 1):
+            if fetched[i:i + w] == window:
+                k = i
+                break
+        if k is not None or len(fetched) < size:
+            break
+    if k is None:
+        return None
+    n = min(len(raws) + k, cap)
+    new_raws = fetched[:k] + raws[:n - k]
+    if len(new_raws) != n:
+        return None
+    tail = client.lrange(key, -1, -1)
+    if not tail or tail[0] != new_raws[-1]:
+        return None
+    if n < cap and client.lrange(key, n, n):
+        return None
+    new_parsed = [json.loads(item) for item in fetched[:k]] + parsed[:n - k]
+    return new_raws, new_parsed
+
+
+def _scalp_history_records(instance_id):
+    """The instance's scalp list, newest first, parsed (C110).
+
+    The dicts are shared with the cache: callers must not mutate them (copy
+    with dict(record) first, as every caller does)."""
+    key = f"fxmatrix:scalp_history:{instance_id}"
+    client = r
+    entry = _SCALP_CACHE.get(key)
+    if entry is not None and entry[0] is client and entry[1]:
+        extended = _scalp_cache_extend(client, key, entry[1], entry[2])
+        if extended is not None:
+            _SCALP_CACHE[key] = (client, extended[0], extended[1])
+            return list(extended[1])
+    raws = client.lrange(key, 0, -1)
+    if not raws:
+        _SCALP_CACHE.pop(key, None)
+        return []
+    parsed = [json.loads(item) for item in raws]
+    _SCALP_CACHE[key] = (client, raws, parsed)
+    return list(parsed)
+
+
 def _collect_today_scalp_records(selected_date=None, instances=None):
     """Cross-instance scalp exits for one broker calendar date (this host's
     instances unless a list is given)."""
@@ -2213,8 +2286,7 @@ def _collect_today_scalp_records(selected_date=None, instances=None):
     all_records = []
 
     for inst in (GRIND_INSTANCES if instances is None else instances):
-        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
-        records = [json.loads(item) for item in raw_list]
+        records = _scalp_history_records(inst)
         day_records = [
             record
             for record in records
@@ -2238,8 +2310,7 @@ def _collect_scalp_records_between(start_date, end_date, instances=None):
     all_records = []
 
     for inst in (GRIND_INSTANCES if instances is None else instances):
-        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
-        records = [json.loads(item) for item in raw_list]
+        records = _scalp_history_records(inst)
         range_records = [
             record
             for record in records
@@ -3696,9 +3767,7 @@ def telemetry_scalps():
     except (TypeError, ValueError):
         per_page = 10
 
-    redis_key = f"fxmatrix:scalp_history:{instance_id}"
-    raw_list = r.lrange(redis_key, 0, -1)
-    records = [json.loads(item) for item in raw_list]
+    records = _scalp_history_records(instance_id)
 
     def sort_scalps(day_records):
         return sorted(
@@ -3744,8 +3813,7 @@ def _collect_scalp_history_meta():
     per_instance = {}
 
     for inst in GRIND_INSTANCES:
-        raw_list = r.lrange(f"fxmatrix:scalp_history:{inst}", 0, -1)
-        records = [json.loads(item) for item in raw_list]
+        records = _scalp_history_records(inst)
         dates = {
             d for rec in records if (d := _closed_record_date(rec))
         }

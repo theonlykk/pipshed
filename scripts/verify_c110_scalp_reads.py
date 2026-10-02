@@ -59,6 +59,8 @@ class FakeRedis:
         self.lists = {}
         self.scalp_bytes = 0
         self.scalp_calls = 0
+        self.scalp_keys = set()
+        self.after_probe = None   # callable run once after the next head probe
 
     # strings
     def get(self, key):
@@ -100,7 +102,11 @@ class FakeRedis:
         out = lst[max(s, 0):e + 1] if e >= max(s, 0) else []
         if key.startswith(SCALP_PREFIX):
             self.scalp_calls += 1
+            self.scalp_keys.add(key)
             self.scalp_bytes += sum(len(x) for x in out)
+            if self.after_probe is not None and start == 0 and end != -1:
+                hook, self.after_probe = self.after_probe, None
+                hook()   # another worker's push lands between two reads
         return out
 
     def lindex(self, key, index):
@@ -246,9 +252,51 @@ def sr1_reader_matches_full_parse():
     fake.delete(SCALP_PREFIX + inst)
     step("expired, read", 0)
     step("recreated +3", 3)
-    # a different Redis client (another worker, a test's new fake)
+    # a push lands between the head probe and the checks that follow it
+    # (another gunicorn thread or the EA, mid-read): below the cap ...
+    def racing_push():
+        nonlocal seq
+        seq += 1
+        push(fake, inst, scalp_row(inst, seq, 0))
+    read(inst)
+    fake.after_probe = racing_push
+    got = read(inst)
+    if read(inst) != full_parse(fake, inst):
+        bad.append("race below cap: stale rows on the next read")
+    # ... and at the cap
+    step("refill to the cap", CAP)
+    fake.after_probe = racing_push
+    read(inst)
+    if read(inst) != full_parse(fake, inst):
+        bad.append("race at cap: stale rows on the next read")
+    # at the cap with identical last two rows, the head pushed again (an EA
+    # re-send): only a multi-row head window tells the shift apart
+    key = SCALP_PREFIX + inst
+    lst = fake.lists[key]
+    lst[-1] = lst[-2]
+    fake.after_probe = None
+    pipshed._SCALP_CACHE.pop(key, None)
+    read(inst)
+    push(fake, inst, lst[0])
+    if read(inst) != full_parse(fake, inst):
+        bad.append("duplicate head over duplicate tail: wrong shift")
+    # the newest 8 rows re-sent in the same order (the head window appears
+    # twice): below the cap only the length check sees it, at the cap only
+    # the tail check
+    for label, size in (("re-send 8 below cap", 40), ("re-send 8 at cap", CAP)):
+        fake.lists[key] = [scalp_row(inst, 600000 + j, j) for j in range(size)]
+        pipshed._SCALP_CACHE.pop(key, None)
+        read(inst)
+        for raw in reversed(fake.lists[key][:8]):
+            push(fake, inst, raw)
+        if read(inst) != full_parse(fake, inst):
+            bad.append(f"{label}: wrong rows")
+    # a different Redis client whose list shares the cached head and tail
+    # but differs in the middle (another worker's client, a test's new fake)
     fake2 = FakeRedis()
-    fake2.lists[SCALP_PREFIX + inst] = [scalp_row(inst, 9000 + k, k) for k in range(10)]
+    rows = list(fake.lists[key])
+    rows[CAP // 2] = scalp_row(inst, 777777, 1)
+    fake2.lists[key] = rows
     pipshed.r = fake2
     if read(inst) != full_parse(fake2, inst):
         bad.append("new client: stale rows")
@@ -277,15 +325,17 @@ def fleets_summaries(client):
 # ---------------------------------------------------------------- SR2
 def sr2_steady_state_reads_little():
     """Strip polls on unchanged lists read almost nothing; one new scalp per
-    instance reads almost nothing; the summaries are still computed."""
+    B instance reads almost nothing; the summaries are still computed.
+    Reference = one full read of every scalp list the strip touches (from
+    the fixture: the cost of a single pass, before any reuse)."""
     fake = full_fixture()
     pipshed.r = fake
     c = pipshed.app.test_client()
     if hasattr(pipshed, "_SCALP_CACHE"):
         pipshed._SCALP_CACHE.clear()
-    fake.scalp_bytes = 0
+    fake.scalp_keys = set()
     s1 = fleets_summaries(c)
-    first = fake.scalp_bytes
+    ref = sum(len(x) for k in fake.scalp_keys for x in fake.lists.get(k, []))
     fake.scalp_bytes = 0
     s2 = fleets_summaries(c)
     second = fake.scalp_bytes
@@ -295,11 +345,12 @@ def sr2_steady_state_reads_little():
     s3 = fleets_summaries(c)
     third = fake.scalp_bytes
     missing = [k for k, v in s3.items() if v is None and k != "D"] if s3 else ["all"]
-    ok = (first > 0 and second <= first * 0.01 and third <= first * 0.02
+    ok = (ref > 0 and second <= ref * 0.01 and third <= ref * 0.02
           and not missing and s1 == s2)
     check("SR2", ok,
-          f"bytes first {first/1e6:.1f} MB, unchanged {second/1e3:.0f} kB, "
-          f"+1 row x11 {third/1e3:.0f} kB; summaries missing {missing}")
+          f"one full pass {ref/1e6:.1f} MB over {len(fake.scalp_keys)} lists; unchanged "
+          f"{second/1e3:.0f} kB ({100*second/max(ref,1):.2f}%), +1 row x11 {third/1e3:.0f} kB "
+          f"({100*third/max(ref,1):.2f}%); summaries missing {missing}")
 
 
 # ---------------------------------------------------------------- SR3

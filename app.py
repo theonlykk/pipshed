@@ -135,6 +135,17 @@ GRIND_D_INSTANCES = [
 # (fxmatrix geometry-cycle3 A7, after FTMO's hyperactivity warning): each
 # currency exactly twice. Retired: AUDNZD_ALT, NZDCAD_ALT, AUDCAD_OPT,
 # NZDCHF_OPT.
+# C108: instances taken out of service. Their 24 h critical-feed rows are
+# history ("resolved: instance retired") whatever their level or code: a
+# retired instance never runs again, so no other rule could clear them.
+GRIND_RETIRED_INSTANCES = frozenset({
+    "GRIND_AUDNZD_ALT",
+    "GRIND_NZDCAD_ALT",
+    "GRIND_AUDCAD_OPT",
+    "GRIND_NZDCHF_OPT",
+})
+RETIRED_RESOLVED_NOTE = "resolved: instance retired"
+
 GRIND_A_STRIP_INSTANCES = [
     "GRIND_GBPUSD_OPT",
     "GRIND_EURUSD_OPT",
@@ -3147,7 +3158,8 @@ def _critical_mark_resolved(payload):
     CRITICAL row whose instance is live, not halted and invariant_ok true
     now (same rule as the fleet strip: a halt clears only on an EA restart),
     and to each ROLL_STRANDED row whose instance has no side fully rolled at
-    cap (C94; with "resolved_note"). Works on the parsed copy; the Redis
+    cap (C94; with "resolved_note"), and to every row of a retired instance
+    (C108, "resolved: instance retired"). Works on the parsed copy; the Redis
     payload is never written."""
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
@@ -3158,6 +3170,10 @@ def _critical_mark_resolved(payload):
             continue
         inst = row.get("instance_id")
         if not inst:
+            continue
+        if inst in GRIND_RETIRED_INSTANCES:
+            row["resolved"] = True
+            row["resolved_note"] = RETIRED_RESOLVED_NOTE
             continue
         if row.get("level") == "WARN" and row.get("code") == "ROLL_STRANDED":
             if _roll_stranded_cleared(r.get(f"fxmatrix:state:{inst}")):

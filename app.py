@@ -3448,6 +3448,9 @@ def dashboard():
         "dashboard.html",
         rings=rings_ctx,
         fleet_label=GRIND_FLEET_LABEL,
+        # C109: open on the fleet's default, not the first ring instance
+        # (tojson sorts ring keys, so that was retired GRIND_AUDCAD_OPT).
+        default_instance=GRIND_DEFAULT_INSTANCE,
     )
 
 

@@ -1357,7 +1357,11 @@
   const GRIND_INSTANCES = GRIND_RING_IDS.reduce(function(acc, ringId) {
     return acc.concat(GRIND_RINGS[ringId].instances);
   }, []);
-  let currentInstance = GRIND_INSTANCES[0];
+  // C109: open on the server's default instance (GBPUSD on every fleet).
+  // GRIND_INSTANCES follows the rings JSON, whose keys tojson sorts, so its
+  // first id is not a safe default (on 2 Oct it was retired GRIND_AUDCAD_OPT).
+  let currentInstance = {{ default_instance|tojson }};
+  if (GRIND_INSTANCES.indexOf(currentInstance) === -1) currentInstance = GRIND_INSTANCES[0];
   const GRIND_TRACKED_COUNT = GRIND_INSTANCES.length;
   const API_DAILY_LIMIT = 2000;
 

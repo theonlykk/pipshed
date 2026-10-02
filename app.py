@@ -1468,6 +1468,75 @@ def _fleet_strip_live_card(
     }
 
 
+FLEET_BOOK_DEFAULT_CAP = 8
+
+
+def _fleet_book_pair(instance_id):
+    """GRIND_EURUSD_OPTB -> EURUSD; a twin (ALT slot) -> EURUSD*."""
+    parts = instance_id.split("_")
+    if len(parts) < 3 or parts[0] != "GRIND":
+        return instance_id
+    return parts[1] + ("*" if parts[2].startswith("ALT") else "")
+
+
+def _fleet_book_cell(card):
+    if not card or card.get("connection") != "live":
+        return {"live": False}
+    long_n = card.get("open_layers_long") or 0
+    short_n = card.get("open_layers_short") or 0
+    cap = card.get("max_layers")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+        cap = FLEET_BOOK_DEFAULT_CAP
+    net = long_n - short_n
+    skew = max(-1.0, min(1.0, net / cap))
+    mtm = card.get("net_mtm")
+    return {
+        "live": True,
+        "long": long_n,
+        "short": short_n,
+        "net": net,
+        "mtm": round(float(mtm), 2) if isinstance(mtm, (int, float)) and not isinstance(mtm, bool) else None,
+        "skew": round(skew, 3),
+    }
+
+
+def _fleet_books(cards_by_fleet):
+    """C113: open layers per pair and fleet (the table under the fleet cards),
+    from the cards the strip already built: no extra reads."""
+    letters = [e["letter"] for e in FLEET_STRIP if not e.get("placeholder")]
+    order = []
+    cells = {}
+    for entry in FLEET_STRIP:
+        if entry.get("placeholder"):
+            continue
+        letter = entry["letter"]
+        for inst in entry["instances"]:
+            pair = _fleet_book_pair(inst)
+            if pair not in cells:
+                order.append(pair)
+                cells[pair] = {x: None for x in letters}
+            cells[pair][letter] = _fleet_book_cell(cards_by_fleet.get(letter, {}).get(inst))
+    totals = {}
+    for letter in letters:
+        t = {"long": 0, "short": 0, "net": 0, "mtm": 0.0, "live": 0}
+        for pair in order:
+            c = cells[pair][letter]
+            if not c or not c.get("live"):
+                continue
+            t["long"] += c["long"]
+            t["short"] += c["short"]
+            t["net"] += c["net"]
+            t["mtm"] += c["mtm"] or 0.0
+            t["live"] += 1
+        t["mtm"] = round(t["mtm"], 2)
+        totals[letter] = t
+    return {
+        "fleets": letters,
+        "rows": [{"pair": p, "cells": cells[p]} for p in order],
+        "totals": totals,
+    }
+
+
 def _build_fleet_strip_payload():
     import ejection_view as ev
     from ftmo_daily import ftmo_day_of_utc
@@ -1520,6 +1589,7 @@ def _build_fleet_strip_payload():
         "generated_at": now_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ftmo_day": ftmo_day_iso,
         "fleets": fleets_out,
+        "books": _fleet_books(cards_by_fleet),
     }
 
 

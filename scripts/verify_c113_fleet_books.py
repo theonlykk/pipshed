@@ -21,8 +21,10 @@ Rule (C113):
      live cells only.
    Retired instances never appear (A lists its strip seven).
 2. Page: `<div id="fleetBooks">` directly after the fleet strip, drawn by
-   `renderFleetBooks(data.books)` from `renderFleetStrip` (no new
-   setInterval or pollNoOverlap); `bookHeat(skew)` tints a cell: clear at
+   `renderFleetBooks(data.books)` from `fetchFleetStrip`, beside
+   `renderFleetStrip` (no new setInterval or pollNoOverlap; renderFleetStrip
+   stays a renderer of the cards only, which verify_fleet_strip_slots
+   runs on its own); `bookHeat(skew)` tints a cell: clear at
    0, blue (long, --blue #2979ff) or amber (short, --amber #ffa000) with
    alpha 0.35 x |skew|; a caption explains the colours.
 
@@ -242,7 +244,10 @@ def bk6_template(t):
     books_at = t.find('<div id="fleetBooks"')
     between = t[strip_at:books_at] if 0 <= strip_at < books_at else ""
     placed = books_at > strip_at >= 0 and between.count("<div") == 1
-    hooked = re.search(r"function renderFleetStrip\(.*?renderFleetBooks\(", t, re.S) is not None
+    fetch_fn = re.search(r"async function fetchFleetStrip\(\).*?\n  \}\n", t, re.S)
+    hooked = bool(fetch_fn) and fetch_fn.group(0).count("renderFleetBooks(") == 2
+    strip_fn = re.search(r"function renderFleetStrip\(.*?\n  \}\n", t, re.S)
+    hooked = hooked and bool(strip_fn) and "renderFleetBooks(" not in strip_fn.group(0)
     caption = re.search(r"fleetBooks.*?(blue|Blue).*?long.*?(amber|Amber).*?short", t, re.S) is not None
     m = re.search(r"function bookHeat\(.*?\n\s*\}\n", t, re.S)
     heat = None
@@ -262,7 +267,7 @@ def bk6_template(t):
     want_heat = ["transparent", "rgba(41,121,255,0.35)", "rgba(255,160,0,0.35)",
                  "rgba(41,121,255,0.175)", "rgba(255,160,0,0.14)", "transparent", "transparent"]
     ok = placed and hooked and caption and heat == want_heat
-    check("BK6", ok, f"placed under the strip {placed}; drawn from renderFleetStrip {hooked}; "
+    check("BK6", ok, f"placed under the strip {placed}; drawn from fetchFleetStrip (ok and error paths) {hooked}; "
                      f"caption {caption}; bookHeat {heat}")
 
 

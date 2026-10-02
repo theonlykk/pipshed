@@ -443,6 +443,15 @@
     .fleet-sum-line { line-height: 1.45; }
     .fleet-sum-line.net { font-weight: 700; }
     .fleet-sum-pairs { font-size: 11px; margin: 2px 0 6px; }
+    /* C113: open layers per pair and fleet, under the fleet cards */
+    .fleet-books { margin: 0 0 16px; overflow-x: auto; }
+    .fleet-books table { border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; }
+    .fleet-books th, .fleet-books td { padding: 3px 12px; text-align: center; border-bottom: 1px solid var(--border); }
+    .fleet-books th { color: var(--muted); font-weight: 600; font-family: var(--font-sans, system-ui, sans-serif); }
+    .fleet-books td.pair { text-align: left; color: var(--text); }
+    .fleet-books td.off { color: var(--muted); }
+    .fleet-books tr.tot td { font-weight: 600; }
+    .fleet-books-caption { color: var(--muted); font-size: 11px; margin-top: 6px; }
     .fleet-sum-pairs summary { cursor: pointer; color: var(--muted); }
     .fleet-sum-pairs .fleet-sum-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
     .fleet-legend {
@@ -1028,6 +1037,7 @@
 </div>
 
 <div id="fleetStrip" class="fleet-strip"></div>
+<div id="fleetBooks" class="fleet-books"></div>
 <details class="fleet-legend">
   <summary>How to read the fleet alerts (red means act, amber means look, grey means resolved)</summary>
   <p>Each banner line is <code>WHAT PAIR SLOT: detail</code>. Slot OPT/ALT = cycle 3, OPTB/ALTB = Fleet B, OPTC/ALTC = Fleet C. "x2, last 21:05Z" = twice in the last 24 h, latest at 21:05 UTC.</p>
@@ -2387,6 +2397,45 @@
     return html;
   }
 
+  // C113: a cell's tint shows how skewed its book is: net / cap, clear when
+  // balanced, blue when long, amber when short, alpha 0.35 x |skew|.
+  function bookHeat(skew) {
+    if (typeof skew !== 'number' || !isFinite(skew) || skew === 0) return 'transparent';
+    var a = Math.round(0.35 * Math.abs(skew) * 1000) / 1000;
+    return skew > 0 ? 'rgba(41,121,255,' + a + ')' : 'rgba(255,160,0,' + a + ')';
+  }
+
+  function renderFleetBooks(books) {
+    var el = document.getElementById('fleetBooks');
+    if (!el) return;
+    if (!books || !books.rows || !books.fleets) { el.innerHTML = ''; return; }
+    var fl = books.fleets;
+    var signed = function (v) { return (v > 0 ? '+' : '') + v; };
+    var money = function (v) { return v === null || v === undefined ? '--' : (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2); };
+    var html = '<table><tr><th>pair</th>' + fl.map(function (f) { return '<th>' + f + '</th>'; }).join('') + '</tr>';
+    books.rows.forEach(function (row) {
+      html += '<tr><td class="pair">' + row.pair + '</td>';
+      fl.forEach(function (f) {
+        var c = row.cells[f];
+        if (!c) { html += '<td></td>'; return; }
+        if (!c.live) { html += '<td class="off" title="not reporting">&ndash;</td>'; return; }
+        html += '<td style="background:' + bookHeat(c.skew) + '" title="net ' + signed(c.net) +
+          ', open MTM ' + money(c.mtm) + '">' + c.long + '/' + c.short + '</td>';
+      });
+      html += '</tr>';
+    });
+    var tot = books.totals || {};
+    html += '<tr class="tot"><td class="pair">long / short</td>' + fl.map(function (f) {
+      var t = tot[f]; return '<td>' + (t ? t.long + ' / ' + t.short : '') + '</td>'; }).join('') + '</tr>';
+    html += '<tr class="tot"><td class="pair">net</td>' + fl.map(function (f) {
+      var t = tot[f]; return '<td>' + (t ? signed(t.net) : '') + '</td>'; }).join('') + '</tr>';
+    html += '<tr class="tot"><td class="pair">open MTM</td>' + fl.map(function (f) {
+      var t = tot[f]; return '<td>' + (t ? money(t.mtm) : '') + '</td>'; }).join('') + '</tr>';
+    html += '</table><div class="fleet-books-caption">Open layers long / short per pair and fleet (* = twin; &ndash; = not reporting). ' +
+      'Tint: blue = book skewed long, amber = skewed short, stronger = larger net against the cap; clear = balanced. Hover a cell for net and open MTM.</div>';
+    el.innerHTML = html;
+  }
+
   function renderFleetStrip(payload) {
     var el = document.getElementById('fleetStrip');
     if (!el) return;
@@ -2489,9 +2538,12 @@
     try {
       const res = await fetch('/api/g/' + PUBLIC_CARRY_TOKEN + '/fleets/' + Date.now());
       if (!res.ok) throw new Error('fetch failed');
-      renderFleetStrip(await res.json());
+      const data = await res.json();
+      renderFleetStrip(data);
+      renderFleetBooks(data && data.books);
     } catch (e) {
       renderFleetStrip(null);
+      renderFleetBooks(null);
     }
   }
 

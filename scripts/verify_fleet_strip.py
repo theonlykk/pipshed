@@ -349,9 +349,11 @@ def check_fs4():
     a = _fleet_by_letter(
         pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "A"
     )
-    if (a.get("health") or {}).get("instances_total") != 11:
-        raise AssertionError("A must total 11 strip instances")
-    return "A total 11"
+    # 2 Oct 2026: cycle 3 cut to the seven-pair ring after FTMO's
+    # hyperactivity warning (fxmatrix geometry-cycle3 A7); was 11.
+    if (a.get("health") or {}).get("instances_total") != 7:
+        raise AssertionError("A must total 7 strip instances (the ring)")
+    return "A total 7"
 
 
 def check_fs5():
@@ -1206,6 +1208,68 @@ def check_fs42():
     return "card and text summary agree for the same fleet"
 
 
+# FS43-FS44 (2 Oct 2026, fxmatrix geometry-cycle3 A7): cycle 3 runs the
+# seven-pair ring. Retired: GRIND_AUDNZD_ALT, GRIND_NZDCAD_ALT (15:14Z),
+# GRIND_AUDCAD_OPT, GRIND_NZDCHF_OPT (~15:40Z). Predicted at the tests-only
+# commit: FS4 and FS43 FAIL (the strip still lists eleven); FS44 is a guard
+# (a kept instance's event still shows) and passes in both states.
+A_RING = [
+    "GRIND_GBPUSD_OPT",
+    "GRIND_EURUSD_OPT",
+    "GRIND_EURGBP_OPT",
+    "GRIND_AUDCHF_OPT",
+    "GRIND_CADCHF_OPT",
+    "GRIND_NZDCAD_OPT",
+    "GRIND_AUDNZD_OPT",
+]
+A_RETIRED = {"GRIND_AUDNZD_ALT", "GRIND_NZDCAD_ALT", "GRIND_AUDCAD_OPT", "GRIND_NZDCHF_OPT"}
+
+
+def _fleet_a_ring_live(fake, crit_rows):
+    for inst in A_RING:
+        fake.set(f"fxmatrix:state:{inst}", HBB(30, account_login=1514731800, invariant_ok=True))
+    fake.set(DAILY_TABLE_KEY, json.dumps({"generated_at": now.isoformat(), "rows": _daily_rows_fb()}))
+    fake.set(CRITICAL_KEY, json.dumps({"generated_at": now.isoformat(), "rows": crit_rows}))
+
+
+def check_fs43():
+    import app as pipshed
+
+    if list(pipshed.GRIND_A_STRIP_INSTANCES) != A_RING:
+        raise AssertionError(f"A strip must be the ring {A_RING}, got {pipshed.GRIND_A_STRIP_INSTANCES}")
+    fake = FakeRedis()
+    _fleet_a_ring_live(fake, [
+        {"instance_id": "GRIND_AUDCAD_OPT", "level": "CRITICAL", "code": "INVARIANT_FAIL",
+         "count": 2, "first_at": "2026-10-01T17:55:00Z", "last_at": "2026-10-01T17:55:30Z"},
+    ])
+    pipshed.r = fake
+    a = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "A")
+    health = a.get("health") or {}
+    if a.get("badge") != "LIVE" or health.get("instances_live") != 7 or health.get("instances_total") != 7:
+        raise AssertionError(f"A with the seven reporting: LIVE 7/7, got {a.get('badge')}, {health}")
+    named = {al.get("instance_id") for al in a.get("alerts") or []}
+    if named & A_RETIRED:
+        raise AssertionError(f"retired instances must not be alerted on A: {sorted(named & A_RETIRED)}")
+    return "A = the seven-pair ring, LIVE 7/7, no alerts for retired instances"
+
+
+def check_fs44():
+    import app as pipshed
+
+    fake = FakeRedis()
+    _fleet_a_ring_live(fake, [
+        {"instance_id": "GRIND_AUDNZD_OPT", "level": "CRITICAL", "code": "STARTUP_EXIT_SHORTFALL",
+         "count": 1, "first_at": "2026-10-01T15:51:00Z", "last_at": "2026-10-01T15:51:00Z"},
+    ])
+    pipshed.r = fake
+    a = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "A")
+    hits = [al for al in a.get("alerts") or []
+            if al.get("instance_id") == "GRIND_AUDNZD_OPT" and al.get("code") == "STARTUP_EXIT_SHORTFALL"]
+    if not hits:
+        raise AssertionError(f"a kept ring instance's event must still show on A: {a.get('alerts')}")
+    return "events of kept instances still show on A"
+
+
 CHECKS = [
     ("FS1", check_fs1),
     ("FS2", check_fs2),
@@ -1249,6 +1313,8 @@ CHECKS = [
     ("FS40", check_fs40),
     ("FS41", check_fs41),
     ("FS42", check_fs42),
+    ("FS43", check_fs43),
+    ("FS44", check_fs44),
 ]
 
 

@@ -163,6 +163,8 @@ FLEET_STRIP = [
         "broker": "FTMO",
         "url": "https://pipshed.com",
         "instances": GRIND_A_STRIP_INSTANCES,
+        # C115: cycle 3 runs ADR-157 ejection, not the ADR-162 lattice
+        "lattice": False,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": "2026-09-24",
         "start_balance": 10000.0,
@@ -174,6 +176,7 @@ FLEET_STRIP = [
         "broker": "IC Markets",
         "url": "https://linux.pipshed.com",
         "instances": GRIND_B_INSTANCES,
+        "lattice": True,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": "2026-09-24",
         "start_balance": 10000.0,
@@ -185,6 +188,7 @@ FLEET_STRIP = [
         "broker": "IC Markets",
         "url": "https://linuxc.pipshed.com",
         "instances": GRIND_C_INSTANCES,
+        "lattice": True,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": "2026-09-28",
         "start_balance": 10000.0,
@@ -196,6 +200,7 @@ FLEET_STRIP = [
         "broker": "IC Markets",
         "url": "https://linuxd.pipshed.com",
         "instances": GRIND_D_INSTANCES,
+        "lattice": True,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": "2026-10-01",
         "start_balance": 10000.0,
@@ -1594,6 +1599,119 @@ def _fleet_gaps(cards_by_fleet):
     }
 
 
+def _fleet_quote_kind(order):
+    comment = order.get("comment") if isinstance(order, dict) else None
+    if isinstance(comment, str):
+        if comment.endswith("|EXT"):
+            return "exit"
+        if comment.endswith("|ENT"):
+            return "entry"
+    return None
+
+
+def _fleet_side_next_level(layers, is_long, add_pips, pip, digits):
+    """The lattice's next level for a side: min effective - add (long), max
+    effective + add (short); effective = virtual_level if present, else the
+    entry. Returns (level, unrolled layer count)."""
+    effs = []
+    unrolled = 0
+    for lay in layers:
+        vl = lay.get("virtual_level")
+        entry = lay.get("entry_price")
+        if isinstance(vl, (int, float)) and not isinstance(vl, bool):
+            effs.append(float(vl))
+        elif isinstance(entry, (int, float)) and not isinstance(entry, bool):
+            effs.append(float(entry))
+            unrolled += 1
+    if not effs or not isinstance(add_pips, (int, float)) or add_pips <= 0:
+        return None, unrolled
+    level = (min(effs) - add_pips * pip) if is_long else (max(effs) + add_pips * pip)
+    return round(level, digits), unrolled
+
+
+def _fleet_quote_cell(pair, card, raw_payload, lattice):
+    """C115: our best bid and offer (with their kind), and the lattice's next
+    level where a capped side has no real order."""
+    if not card or card.get("connection") != "live":
+        return {"live": False}
+    pip = _fleet_gap_pip(pair)
+    digits = 3 if "JPY" in pair else 5
+    book = card.get("book") if isinstance(card.get("book"), dict) else {}
+    best = {"BUY_LIMIT": None, "SELL_LIMIT": None}
+    for o in book.get("orders") or []:
+        price = o.get("price") if isinstance(o, dict) else None
+        kind = o.get("type") if isinstance(o, dict) else None
+        if kind not in best or not isinstance(price, (int, float)) or isinstance(price, bool):
+            continue
+        cur = best[kind]
+        if cur is None or (price > cur[0] if kind == "BUY_LIMIT" else price < cur[0]):
+            best[kind] = (float(price), _fleet_quote_kind(o))
+    cell = {
+        "live": True,
+        "bid": best["BUY_LIMIT"][0] if best["BUY_LIMIT"] else None,
+        "bid_kind": best["BUY_LIMIT"][1] if best["BUY_LIMIT"] else None,
+        "offer": best["SELL_LIMIT"][0] if best["SELL_LIMIT"] else None,
+        "offer_kind": best["SELL_LIMIT"][1] if best["SELL_LIMIT"] else None,
+        "rolls_left_long": None,
+        "rolls_left_short": None,
+        "virtual_bid": None,
+        "virtual_offer": None,
+        "virtual_gap_pips": None,
+    }
+    if not lattice:
+        return cell
+    try:
+        data = json.loads(raw_payload) if raw_payload else {}
+    except (TypeError, ValueError):
+        data = {}
+    layers = data.get("layers") if isinstance(data.get("layers"), list) else []
+    cap = card.get("max_layers")
+    add = card.get("add_pips")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+        return cell
+    for is_long, letter in ((True, "L"), (False, "S")):
+        side_layers = [l for l in layers if isinstance(l, dict) and l.get("side") == letter]
+        if len(side_layers) < cap:
+            continue
+        level, unrolled = _fleet_side_next_level(side_layers, is_long, add, pip, digits)
+        if is_long:
+            cell["rolls_left_long"] = unrolled
+            if cell["bid"] is None and unrolled > 0:
+                cell["virtual_bid"] = level
+        else:
+            cell["rolls_left_short"] = unrolled
+            if cell["offer"] is None and unrolled > 0:
+                cell["virtual_offer"] = level
+    if cell["virtual_bid"] is not None or cell["virtual_offer"] is not None:
+        bid = cell["bid"] if cell["bid"] is not None else cell["virtual_bid"]
+        offer = cell["offer"] if cell["offer"] is not None else cell["virtual_offer"]
+        if bid is not None and offer is not None:
+            cell["virtual_gap_pips"] = round((offer - bid) / pip, 1)
+    return cell
+
+
+def _fleet_quotes(cards_by_fleet, raw_by_fleet):
+    """C115: best bid / offer per pair and fleet, in the books table's order."""
+    entries = [e for e in FLEET_STRIP if not e.get("placeholder")]
+    letters = [e["letter"] for e in entries]
+    order = []
+    cells = {}
+    for entry in entries:
+        letter = entry["letter"]
+        for inst in entry["instances"]:
+            pair = _fleet_book_pair(inst)
+            if pair not in cells:
+                order.append(pair)
+                cells[pair] = {x: None for x in letters}
+            cells[pair][letter] = _fleet_quote_cell(
+                pair.rstrip("*"),
+                cards_by_fleet.get(letter, {}).get(inst),
+                raw_by_fleet.get(letter, {}).get(inst),
+                bool(entry.get("lattice")),
+            )
+    return {"fleets": letters, "rows": [{"pair": p, "cells": cells[p]} for p in order]}
+
+
 def _build_fleet_strip_payload():
     import ejection_view as ev
     from ftmo_daily import ftmo_day_of_utc
@@ -1648,6 +1766,7 @@ def _build_fleet_strip_payload():
         "fleets": fleets_out,
         "books": _fleet_books(cards_by_fleet),
         "gaps": _fleet_gaps(cards_by_fleet),
+        "quotes": _fleet_quotes(cards_by_fleet, raw_by_fleet),
     }
 
 

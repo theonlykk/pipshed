@@ -109,6 +109,12 @@ NZDCHF_LONG = [lay("L", i, round(0.4700 - 0.0003 * i, 5), vl=round(0.4650 - 0.00
 # C CADCHF: 8 short (0.5800 up by 3 pips), L0 rolled to 0.5827; long flat
 CADCHF_SHORT = [lay("S", i, round(0.5800 + 0.0003 * i, 5)) for i in range(8)]
 CADCHF_SHORT[0]["virtual_level"] = 0.5827
+# D AUDCHF: 8 long, two rolled, AND a real bid (a short exit): no virtual
+AUDCHF_LONG = [lay("L", i, round(0.5790 - 0.0004 * i, 5)) for i in range(8)]
+AUDCHF_LONG[0]["virtual_level"] = 0.5755
+AUDCHF_LONG[1]["virtual_level"] = 0.5751
+# B NZDCHF: 5 long, below cap, no bid: no rolls count, no virtual
+NZDCHF_B_LONG = [lay("L", i, round(0.4700 - 0.0003 * i, 5)) for i in range(5)]
 # A EURGBP: 8 long, no lattice on A
 A_EURGBP_LONG = [lay("L", i, round(0.8540 - 0.0003 * i, 5)) for i in range(8)]
 
@@ -123,7 +129,10 @@ def fixture():
         else:
             fake.set(f"fxmatrix:state:{inst}", plain)
     for inst in pipshed.GRIND_B_INSTANCES:
-        if inst == "GRIND_GBPUSD_OPTB":
+        if inst == "GRIND_NZDCHF_OPTB":
+            fake.set(f"fxmatrix:state:{inst}", state(
+                [o("SELL_LIMIT", 0.4705, "GRIND|OPT|S|L00|ENT")], NZDCHF_B_LONG, long_n=5, short_n=0))
+        elif inst == "GRIND_GBPUSD_OPTB":
             fake.set(f"fxmatrix:state:{inst}", state(
                 [o("BUY_LIMIT", 1.32206, "GRIND|OPT|S|L03|EXT"), o("BUY_LIMIT", 1.32192, "GRIND|OPT|L|L02|ENT"),
                  o("SELL_LIMIT", 1.32392, "GRIND|OPT|S|L04|ENT"), o("SELL_LIMIT", 1.32406, "GRIND|OPT|L|L02|EXT")],
@@ -143,6 +152,10 @@ def fixture():
             fake.set(f"fxmatrix:state:{inst}", state(
                 [o("SELL_LIMIT", 0.8526, "GRIND|OPT|L|L03|EXT"), o("SELL_LIMIT", 0.8521, "GRIND|OPT|S|L00|ENT")],
                 EURGBP_LONG, long_n=8, short_n=0))
+        elif inst == "GRIND_AUDCHF_OPTD":
+            fake.set(f"fxmatrix:state:{inst}", state(
+                [o("BUY_LIMIT", 0.5740, "GRIND|OPT|S|L02|EXT"), o("SELL_LIMIT", 0.5770, "GRIND|OPT|L|L07|EXT")],
+                AUDCHF_LONG, add=4.0, long_n=8, short_n=3))
         elif inst == "GRIND_NZDCHF_OPTD":
             fake.set(f"fxmatrix:state:{inst}", state(
                 [o("SELL_LIMIT", 0.4660, "GRIND|OPT|L|L00|EXT")], NZDCHF_LONG, long_n=8, short_n=0))
@@ -213,6 +226,17 @@ def qt5_virtual_offer(q):
     check("QT5", ok, f"CADCHF C {got}; NZDCHF C {nl}")
 
 
+def qt8_virtual_only_where_it_belongs(q):
+    """Added after the mutation round (two rules survived): a capped lattice
+    side WITH a real bid shows no virtual level (rolls still counted); a
+    lattice side below cap counts no rolls and shows no virtual level."""
+    a = cell(q, "AUDCHF", "D")
+    n = cell(q, "NZDCHF", "B")
+    wa = want(bid=0.574, bid_kind="exit", offer=0.577, offer_kind="exit", rolls_left_long=6)
+    wn = want(offer=0.4705, offer_kind="entry")
+    check("QT8", a == wa and n == wn, f"AUDCHF D {a}; NZDCHF B {n}")
+
+
 NODE = r"""
 const src = require('fs').readFileSync(process.argv[2], 'utf8');
 eval(src + '\n;global.quoteSpan = quoteSpan;');
@@ -272,6 +296,7 @@ def main():
     qt5_virtual_offer(q)
     qt6_page()
     qt7_earlier_tables()
+    qt8_virtual_only_where_it_belongs(q)
     passed = sum(1 for _, ok, _ in results if ok)
     print(f"verify_c115_quotes {passed}/{len(results)}")
     sys.exit(0 if passed == len(results) else 1)

@@ -179,7 +179,8 @@ def qg5_page():
     with open(os.path.join(ROOT, "templates", "dashboard.html"), encoding="utf-8") as f:
         t = f.read()
     fetch_fn = re.search(r"async function fetchFleetStrip\(\).*?\n  \}\n", t, re.S)
-    passes_gaps = bool(fetch_fn) and "renderFleetBooks(data && data.books, data && data.gaps)" in fetch_fn.group(0)
+    # C115 added a third argument (quotes): check that gaps is the second
+    passes_gaps = bool(fetch_fn) and "renderFleetBooks(data && data.books, data && data.gaps" in fetch_fn.group(0)
     caption = re.search(r"quote gap.*?highest.*?bid.*?lowest.*?offer", t, re.S | re.I) is not None
     m = re.search(r"function gapHeat\(.*?\n\s*\}\n", t, re.S)
     heat = None

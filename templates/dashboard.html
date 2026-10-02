@@ -454,6 +454,10 @@
     .fleet-books-caption { color: var(--muted); font-size: 11px; margin-top: 6px; }
     /* C114: the books table and the quote-gap table side by side */
     .fleet-books-grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+    /* C115: best bid / offer: exit = green, entry (L0 or add) = purple, virtual = italic */
+    .q-exit { color: var(--green); }
+    .q-entry { color: #b388ff; }
+    .q-virtual { color: var(--muted); font-style: italic; }
     .fleet-books-grid .tbl-title { color: var(--muted); font-size: 11px; font-weight: 600;
       letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px;
       font-family: var(--font-sans, system-ui, sans-serif); }
@@ -2418,7 +2422,53 @@
     return a > 0 ? 'rgba(0,200,83,' + a + ')' : 'transparent';
   }
 
-  function fleetGapsTable(gaps) {
+  // C115: a price coloured by what it is: an exit (green), an entry (L0 or an
+  // add, purple), or the lattice's next level (italic, "~"); digits 5 or 3.
+  function quoteSpan(price, kind, digits) {
+    if (typeof price !== 'number' || !isFinite(price)) return '';
+    var cls = kind === 'exit' ? 'q-exit' : (kind === 'entry' ? 'q-entry' : (kind === 'virtual' ? 'q-virtual' : ''));
+    return '<span class="' + cls + '">' + (kind === 'virtual' ? '~' : '') + price.toFixed(digits) + '</span>';
+  }
+
+  function fleetQuoteCell(quotes, pair, f) {
+    if (!quotes || !quotes.rows) return null;
+    for (var i = 0; i < quotes.rows.length; i++) {
+      if (quotes.rows[i].pair === pair) return quotes.rows[i].cells[f];
+    }
+    return null;
+  }
+
+  function fleetQuoteSide(price, kind, virtualPrice, rollsLeft, digits, side) {
+    if (price !== null && price !== undefined) return quoteSpan(price, kind, digits);
+    if (virtualPrice !== null && virtualPrice !== undefined) {
+      return '<span title="virtual: the lattice\'s next ' + side + ' level (no order rests; reaching it rolls an exit, ' +
+        rollsLeft + ' roll(s) left)">' + quoteSpan(virtualPrice, 'virtual', digits) + '</span>';
+    }
+    if (rollsLeft === 0) return '<span class="q-virtual" title="at cap with every layer rolled: no roll left">no roll</span>';
+    return '<span class="q-virtual">&ndash;</span>';
+  }
+
+  function fleetQuotesTable(quotes) {
+    if (!quotes || !quotes.rows || !quotes.fleets) return '';
+    var fl = quotes.fleets;
+    var html = '<div><div class="tbl-title">best bid / offer</div><table><tr><th>pair</th>' +
+      fl.map(function (f) { return '<th>' + f + '</th>'; }).join('') + '</tr>';
+    quotes.rows.forEach(function (row) {
+      var digits = row.pair.indexOf('JPY') >= 0 ? 3 : 5;
+      html += '<tr><td class="pair">' + row.pair + '</td>';
+      fl.forEach(function (f) {
+        var c = row.cells[f];
+        if (!c) { html += '<td></td>'; return; }
+        if (!c.live) { html += '<td class="off" title="not reporting">&ndash;</td>'; return; }
+        html += '<td>' + fleetQuoteSide(c.bid, c.bid_kind, c.virtual_bid, c.rolls_left_long, digits, 'buy') + ' / ' +
+          fleetQuoteSide(c.offer, c.offer_kind, c.virtual_offer, c.rolls_left_short, digits, 'sell') + '</td>';
+      });
+      html += '</tr>';
+    });
+    return html + '</table></div>';
+  }
+
+  function fleetGapsTable(gaps, quotes) {
     if (!gaps || !gaps.rows || !gaps.fleets) return '';
     var fl = gaps.fleets;
     var html = '<div><div class="tbl-title">quote gap (pips)</div><table><tr><th>pair</th>' +
@@ -2429,6 +2479,11 @@
         var c = row.cells[f];
         if (!c) { html += '<td></td>'; return; }
         if (!c.live) { html += '<td class="off" title="not reporting">&ndash;</td>'; return; }
+        var q = fleetQuoteCell(quotes, row.pair, f);
+        if ((c.gap_pips === null || c.gap_pips === undefined) && q && q.virtual_gap_pips !== null && q.virtual_gap_pips !== undefined) {
+          html += '<td class="q-virtual" title="to the lattice\'s next level (virtual)">~' + q.virtual_gap_pips.toFixed(1) + '</td>';
+          return;
+        }
         if (c.gap_pips === null || c.gap_pips === undefined) {
           html += '<td class="off" title="one-sided: bid ' + (c.bid === null ? 'none' : c.bid) +
             ', offer ' + (c.offer === null ? 'none' : c.offer) + '">&ndash;</td>';
@@ -2445,7 +2500,7 @@
     return html + '</table></div>';
   }
 
-  function renderFleetBooks(books, gaps) {
+  function renderFleetBooks(books, gaps, quotes) {
     var el = document.getElementById('fleetBooks');
     if (!el) return;
     if (!books || !books.rows || !books.fleets) { el.innerHTML = ''; return; }
@@ -2472,11 +2527,14 @@
       var t = tot[f]; return '<td>' + (t ? signed(t.net) : '') + '</td>'; }).join('') + '</tr>';
     html += '<tr class="tot"><td class="pair">open MTM</td>' + fl.map(function (f) {
       var t = tot[f]; return '<td>' + (t ? money(t.mtm) : '') + '</td>'; }).join('') + '</tr>';
-    html += '</table></div>' + fleetGapsTable(gaps) + '</div>';
+    html += '</table></div>' + fleetGapsTable(gaps, quotes) + fleetQuotesTable(quotes) + '</div>';
     html += '<div class="fleet-books-caption">Open layers long / short per pair and fleet (* = twin; &ndash; = not reporting). ' +
       'Tint: blue = book skewed long, amber = skewed short, stronger = larger net against the cap; clear = balanced. Hover a cell for net and open MTM. ' +
       'Quote gap = the distance from our highest resting bid to our lowest resting offer, in pips: how far the market must move before any of our orders trades ' +
-      '(green, stronger = tighter; &ndash; = one-sided or no resting orders).</div>';
+      '(green, stronger = tighter; &ndash; = one-sided or no resting orders). ' +
+      'Best bid / offer: our resting prices, green = an exit, purple = an entry (L0 or an add); ' +
+      '<i>~italic</i> = the lattice\'s next level on a capped side with no real order there (no order rests; reaching it rolls an exit); ' +
+      '"no roll" = capped with every layer rolled.</div>';
     el.innerHTML = html;
   }
 
@@ -2584,7 +2642,7 @@
       if (!res.ok) throw new Error('fetch failed');
       const data = await res.json();
       renderFleetStrip(data);
-      renderFleetBooks(data && data.books, data && data.gaps);
+      renderFleetBooks(data && data.books, data && data.gaps, data && data.quotes);
     } catch (e) {
       renderFleetStrip(null);
       renderFleetBooks(null);

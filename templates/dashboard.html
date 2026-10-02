@@ -452,6 +452,11 @@
     .fleet-books td.off { color: var(--muted); }
     .fleet-books tr.tot td { font-weight: 600; }
     .fleet-books-caption { color: var(--muted); font-size: 11px; margin-top: 6px; }
+    /* C114: the books table and the quote-gap table side by side */
+    .fleet-books-grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+    .fleet-books-grid .tbl-title { color: var(--muted); font-size: 11px; font-weight: 600;
+      letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px;
+      font-family: var(--font-sans, system-ui, sans-serif); }
     .fleet-sum-pairs summary { cursor: pointer; color: var(--muted); }
     .fleet-sum-pairs .fleet-sum-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
     .fleet-legend {
@@ -2405,14 +2410,50 @@
     return skew > 0 ? 'rgba(41,121,255,' + a + ')' : 'rgba(255,160,0,' + a + ')';
   }
 
-  function renderFleetBooks(books) {
+  // C114: a quote-gap cell is tinted green, stronger as our quote is tighter
+  // around the market: alpha 0.35 x clamp(1 - gap / 20, 0, 1), clear at 20+.
+  function gapHeat(gap) {
+    if (typeof gap !== 'number' || !isFinite(gap)) return 'transparent';
+    var a = Math.round(0.35 * Math.min(1, Math.max(0, 1 - gap / 20)) * 1000) / 1000;
+    return a > 0 ? 'rgba(0,200,83,' + a + ')' : 'transparent';
+  }
+
+  function fleetGapsTable(gaps) {
+    if (!gaps || !gaps.rows || !gaps.fleets) return '';
+    var fl = gaps.fleets;
+    var html = '<div><div class="tbl-title">quote gap (pips)</div><table><tr><th>pair</th>' +
+      fl.map(function (f) { return '<th>' + f + '</th>'; }).join('') + '</tr>';
+    gaps.rows.forEach(function (row) {
+      html += '<tr><td class="pair">' + row.pair + '</td>';
+      fl.forEach(function (f) {
+        var c = row.cells[f];
+        if (!c) { html += '<td></td>'; return; }
+        if (!c.live) { html += '<td class="off" title="not reporting">&ndash;</td>'; return; }
+        if (c.gap_pips === null || c.gap_pips === undefined) {
+          html += '<td class="off" title="one-sided: bid ' + (c.bid === null ? 'none' : c.bid) +
+            ', offer ' + (c.offer === null ? 'none' : c.offer) + '">&ndash;</td>';
+          return;
+        }
+        html += '<td style="background:' + gapHeat(c.gap_pips) + '" title="bid ' + c.bid + ' / offer ' +
+          c.offer + '">' + c.gap_pips.toFixed(1) + '</td>';
+      });
+      html += '</tr>';
+    });
+    var means = gaps.means || {};
+    html += '<tr class="tot"><td class="pair">mean</td>' + fl.map(function (f) {
+      var m = means[f]; return '<td>' + (m && m.gap_pips !== null && m.gap_pips !== undefined ? m.gap_pips.toFixed(1) : '') + '</td>'; }).join('') + '</tr>';
+    return html + '</table></div>';
+  }
+
+  function renderFleetBooks(books, gaps) {
     var el = document.getElementById('fleetBooks');
     if (!el) return;
     if (!books || !books.rows || !books.fleets) { el.innerHTML = ''; return; }
     var fl = books.fleets;
     var signed = function (v) { return (v > 0 ? '+' : '') + v; };
     var money = function (v) { return v === null || v === undefined ? '--' : (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2); };
-    var html = '<table><tr><th>pair</th>' + fl.map(function (f) { return '<th>' + f + '</th>'; }).join('') + '</tr>';
+    var html = '<div class="fleet-books-grid"><div><div class="tbl-title">open layers long / short</div>' +
+      '<table><tr><th>pair</th>' + fl.map(function (f) { return '<th>' + f + '</th>'; }).join('') + '</tr>';
     books.rows.forEach(function (row) {
       html += '<tr><td class="pair">' + row.pair + '</td>';
       fl.forEach(function (f) {
@@ -2431,8 +2472,11 @@
       var t = tot[f]; return '<td>' + (t ? signed(t.net) : '') + '</td>'; }).join('') + '</tr>';
     html += '<tr class="tot"><td class="pair">open MTM</td>' + fl.map(function (f) {
       var t = tot[f]; return '<td>' + (t ? money(t.mtm) : '') + '</td>'; }).join('') + '</tr>';
-    html += '</table><div class="fleet-books-caption">Open layers long / short per pair and fleet (* = twin; &ndash; = not reporting). ' +
-      'Tint: blue = book skewed long, amber = skewed short, stronger = larger net against the cap; clear = balanced. Hover a cell for net and open MTM.</div>';
+    html += '</table></div>' + fleetGapsTable(gaps) + '</div>';
+    html += '<div class="fleet-books-caption">Open layers long / short per pair and fleet (* = twin; &ndash; = not reporting). ' +
+      'Tint: blue = book skewed long, amber = skewed short, stronger = larger net against the cap; clear = balanced. Hover a cell for net and open MTM. ' +
+      'Quote gap = the distance from our highest resting bid to our lowest resting offer, in pips: how far the market must move before any of our orders trades ' +
+      '(green, stronger = tighter; &ndash; = one-sided or no resting orders).</div>';
     el.innerHTML = html;
   }
 
@@ -2540,7 +2584,7 @@
       if (!res.ok) throw new Error('fetch failed');
       const data = await res.json();
       renderFleetStrip(data);
-      renderFleetBooks(data && data.books);
+      renderFleetBooks(data && data.books, data && data.gaps);
     } catch (e) {
       renderFleetStrip(null);
       renderFleetBooks(null);

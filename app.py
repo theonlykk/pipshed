@@ -1537,6 +1537,63 @@ def _fleet_books(cards_by_fleet):
     }
 
 
+def _fleet_gap_pip(pair):
+    return 0.01 if "JPY" in pair else 0.0001
+
+
+def _fleet_gap_cell(pair, card):
+    """C114: our own quote around the market: the highest resting BUY_LIMIT
+    and the lowest resting SELL_LIMIT in the broker book, and the gap in
+    pips. Positions never count."""
+    if not card or card.get("connection") != "live":
+        return {"live": False}
+    book = card.get("book") if isinstance(card.get("book"), dict) else {}
+    bids, offers = [], []
+    for o in book.get("orders") or []:
+        price = o.get("price") if isinstance(o, dict) else None
+        if not isinstance(price, (int, float)) or isinstance(price, bool):
+            continue
+        if o.get("type") == "BUY_LIMIT":
+            bids.append(float(price))
+        elif o.get("type") == "SELL_LIMIT":
+            offers.append(float(price))
+    bid = max(bids) if bids else None
+    offer = min(offers) if offers else None
+    gap = None
+    if bid is not None and offer is not None:
+        gap = round((offer - bid) / _fleet_gap_pip(pair), 1)
+    return {"live": True, "bid": bid, "offer": offer, "gap_pips": gap}
+
+
+def _fleet_gaps(cards_by_fleet):
+    """C114: the quote gap per pair and fleet, in the books table's order."""
+    letters = [e["letter"] for e in FLEET_STRIP if not e.get("placeholder")]
+    order = []
+    cells = {}
+    for entry in FLEET_STRIP:
+        if entry.get("placeholder"):
+            continue
+        letter = entry["letter"]
+        for inst in entry["instances"]:
+            pair = _fleet_book_pair(inst)
+            if pair not in cells:
+                order.append(pair)
+                cells[pair] = {x: None for x in letters}
+            cells[pair][letter] = _fleet_gap_cell(
+                pair.rstrip("*"), cards_by_fleet.get(letter, {}).get(inst))
+    means = {}
+    for letter in letters:
+        vals = [cells[p][letter]["gap_pips"] for p in order
+                if cells[p][letter] and cells[p][letter].get("gap_pips") is not None]
+        means[letter] = {"gap_pips": round(sum(vals) / len(vals), 1) if vals else None,
+                         "n": len(vals)}
+    return {
+        "fleets": letters,
+        "rows": [{"pair": p, "cells": cells[p]} for p in order],
+        "means": means,
+    }
+
+
 def _build_fleet_strip_payload():
     import ejection_view as ev
     from ftmo_daily import ftmo_day_of_utc
@@ -1590,6 +1647,7 @@ def _build_fleet_strip_payload():
         "ftmo_day": ftmo_day_iso,
         "fleets": fleets_out,
         "books": _fleet_books(cards_by_fleet),
+        "gaps": _fleet_gaps(cards_by_fleet),
     }
 
 

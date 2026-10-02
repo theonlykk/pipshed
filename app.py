@@ -131,18 +131,18 @@ GRIND_D_INSTANCES = [
     "GRIND_NZDCAD_ALTD",
 ]
 
+# Cycle 3 (FTMO 1514731800) runs the seven-pair ring since 2 Oct 2026
+# (fxmatrix geometry-cycle3 A7, after FTMO's hyperactivity warning): each
+# currency exactly twice. Retired: AUDNZD_ALT, NZDCAD_ALT, AUDCAD_OPT,
+# NZDCHF_OPT.
 GRIND_A_STRIP_INSTANCES = [
     "GRIND_GBPUSD_OPT",
     "GRIND_EURUSD_OPT",
     "GRIND_EURGBP_OPT",
-    "GRIND_AUDCAD_OPT",
     "GRIND_AUDCHF_OPT",
     "GRIND_CADCHF_OPT",
-    "GRIND_NZDCHF_OPT",
     "GRIND_NZDCAD_OPT",
     "GRIND_AUDNZD_OPT",
-    "GRIND_AUDNZD_ALT",
-    "GRIND_NZDCAD_ALT",
 ]
 
 FLEET_STRIP = [

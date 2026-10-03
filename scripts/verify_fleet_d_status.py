@@ -278,7 +278,9 @@ def _strip_d(fake):
 def check_fd10():
     import app as pipshed
     entry = next(e for e in pipshed.FLEET_STRIP if e["letter"] == "D")
-    if entry.get("instances") != GRIND_D_INSTANCES or entry.get("url") != "https://linuxd.pipshed.com":
+    # C119: D's strip is its nine _OPT instances (the twins retired)
+    if entry.get("instances") != [i for i in GRIND_D_INSTANCES if "_ALT" not in i] \
+            or entry.get("url") != "https://linuxd.pipshed.com":
         raise AssertionError(f"D strip entry: {entry.get('url')}, {entry.get('instances')}")
     if entry.get("placeholder") or entry.get("cycle_start") != "2026-10-01":
         raise AssertionError(f"attached 1 Oct: placeholder off, cycle_start 2026-10-01, got "

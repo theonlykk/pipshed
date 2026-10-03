@@ -91,14 +91,15 @@ def full_fixture(api_of=lambda i: 500 + 40 * i, bk=lambda i: book(3, 2, 2)):
 
 
 def check_sl1():
-    # 11 instances x (3 positions + 4 orders) = 77; resting non-EXT = 11 x 2 = 22;
-    # guard total = 77 + 22 = 99
+    # C119: the strip's 9 instances (twins retired; their heartbeats ignored)
+    # x (3 positions + 4 orders) = 63; orders 36; resting non-EXT = 9 x 2 = 18;
+    # guard total = 63 + 18 = 81
     b = fleet(strip(full_fixture()), "B").get("book") or {}
-    want = {"orders": 44, "slots": 77, "slot_limit": 200, "guard_total": 99, "guard_limit": 194}
+    want = {"orders": 36, "slots": 63, "slot_limit": 200, "guard_total": 81, "guard_limit": 194}
     got = {k: b.get(k) for k in want}
     if got != want:
         raise AssertionError(f"book {got} != {want}")
-    return "book 77/200 and guard 99/194 from the heartbeat books"
+    return "book 63/200 and guard 81/194 from the heartbeat books (nine)"
 
 
 def check_sl2():
@@ -121,12 +122,12 @@ def check_sl3():
 
 
 def check_sl4():
-    # api_count 500, 540, ..., 900: one shared counter -> the max, 900
+    # api_count 500, 540, ..., 820 over the strip's nine (C119): the max, 820
     api = fleet(strip(full_fixture()), "B").get("api")
-    want = {"count": 900, "limit": 2000, "soft_warn": 1800, "entry_stop": 1900}
+    want = {"count": 820, "limit": 2000, "soft_warn": 1800, "entry_stop": 1900}
     if api != want:
         raise AssertionError(f"api {api} != {want}")
-    return "API = max of the shared counter (900) with limit 2000, warn 1800, stop 1900"
+    return "API = max of the shared counter (820) with limit 2000, warn 1800, stop 1900"
 
 
 def check_sl5():

@@ -104,9 +104,11 @@ B_BOOK = {
     "GRIND_NZDCAD_OPTB": (2, 6, -10.92),
     "GRIND_NZDCHF_OPTB": (8, 6, -35.79),
 }
-# B totals by hand: long 3+5+1+2+6+8+8+3+3+2+8 = 49; short 6+6+7+7+7+1+3+6+5+6+6 = 60;
-# net -11; mtm -17.24-20.58-12.04-8.54-28.43-33.26-30.99-17.69-10.74-10.92-35.79 = -226.22
-B_TOTALS = {"long": 49, "short": 60, "net": -11, "mtm": -226.22, "live": 11}
+# B totals by hand over the STRIP's nine (C119, 3 Oct: the twins AUDNZD_ALTB and
+# NZDCAD_ALTB retired; their heartbeats above are ignored):
+# long 3+5+2+6+8+8+3+2+8 = 45; short 6+6+7+7+1+3+6+6+6 = 48; net -3;
+# mtm -17.24-20.58-8.54-28.43-33.26-30.99-17.69-10.92-35.79 = -203.44
+B_TOTALS = {"long": 45, "short": 48, "net": -3, "mtm": -203.44, "live": 9}
 
 
 def fixture():
@@ -153,7 +155,7 @@ def bk1_shape_and_order(books):
     want_fleets = ["A", "B", "C", "D"]
     # first appearance across A's seven, then B's list order (hand-written)
     want_rows = ["GBPUSD", "EURUSD", "EURGBP", "AUDCHF", "CADCHF", "NZDCAD",
-                 "AUDNZD", "AUDCAD", "NZDCHF", "AUDNZD*", "NZDCAD*"]
+                 "AUDNZD", "AUDCAD", "NZDCHF"]   # C119: no twin rows
     if not books:
         check("BK1", False, "no books in the strip response")
         return
@@ -175,7 +177,8 @@ def bk2_cells_by_hand(books):
         return
     want = {
         ("EURUSD", "B"): {"live": True, "long": 8, "short": 3, "net": 5, "mtm": -30.99, "skew": 0.625},
-        ("NZDCAD*", "B"): {"live": True, "long": 3, "short": 5, "net": -2, "mtm": -10.74, "skew": -0.25},
+        # C119: the twin row is gone; NZDCAD_OPTB 2 / 6 -> net -4, skew -4 / 8
+        ("NZDCAD", "B"): {"live": True, "long": 2, "short": 6, "net": -4, "mtm": -10.92, "skew": -0.5},
         ("NZDCHF", "B"): {"live": True, "long": 8, "short": 6, "net": 2, "mtm": -35.79, "skew": 0.25},
         # cap 10: 8 / 10
         ("EURGBP", "D"): {"live": True, "long": 8, "short": 0, "net": 8, "mtm": -11.91, "skew": 0.8},
@@ -197,8 +200,8 @@ def bk3_absent_and_not_live(books):
         bad.append(f"C NZDCHF not reporting -> {_cell(books, 'NZDCHF', 'C')}")
     if _cell(books, "AUDCAD", "A") is not None:
         bad.append(f"A has no AUDCAD -> {_cell(books, 'AUDCAD', 'A')}")
-    if _cell(books, "NZDCAD*", "A") is not None:
-        bad.append(f"A has no twin -> {_cell(books, 'NZDCAD*', 'A')}")
+    if _cell(books, "NZDCAD*", "B") != "NO ROW":
+        bad.append(f"C119: the retired twin has no row -> {_cell(books, 'NZDCAD*', 'B')}")
     check("BK3", not bad, "; ".join(bad) if bad else "absent = null, not reporting = live false")
 
 
@@ -207,8 +210,9 @@ def bk4_totals(books):
         check("BK4", False, "no books")
         return
     t = books.get("totals", {})
-    # C: 10 live of 11, each 2/2/-0.5 -> long 20, short 20, net 0, mtm -5.0
-    want_c = {"long": 20, "short": 20, "net": 0, "mtm": -5.0, "live": 10}
+    # C: the strip's nine (C119), NZDCHF not reporting -> 8 live, each 2/2/-0.5
+    # -> long 16, short 16, net 0, mtm -4.0
+    want_c = {"long": 16, "short": 16, "net": 0, "mtm": -4.0, "live": 8}
     # A: k = 0..6, long k, short 7-k, mtm -k -> long 21, short 28, net -7, mtm -21.0
     want_a = {"long": 21, "short": 28, "net": -7, "mtm": -21.0, "live": 7}
     ok = t.get("B") == B_TOTALS and t.get("C") == want_c and t.get("A") == want_a

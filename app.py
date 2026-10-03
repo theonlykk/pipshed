@@ -134,7 +134,9 @@ GRIND_D_INSTANCES = [
 # Cycle 3 (FTMO 1514731800) runs the seven-pair ring since 2 Oct 2026
 # (fxmatrix geometry-cycle3 A7, after FTMO's hyperactivity warning): each
 # currency exactly twice. Retired: AUDNZD_ALT, NZDCAD_ALT, AUDCAD_OPT,
-# NZDCHF_OPT.
+# NZDCHF_OPT. C119: the six IC twins retire at the Monday build (5 Oct,
+# fxmatrix monday-build-2026-10-05): one instance per pair from compass
+# round 2.
 # C108: instances taken out of service. Their 24 h critical-feed rows are
 # history ("resolved: instance retired") whatever their level or code: a
 # retired instance never runs again, so no other rule could clear them.
@@ -143,6 +145,12 @@ GRIND_RETIRED_INSTANCES = frozenset({
     "GRIND_NZDCAD_ALT",
     "GRIND_AUDCAD_OPT",
     "GRIND_NZDCHF_OPT",
+    "GRIND_AUDNZD_ALTB",
+    "GRIND_NZDCAD_ALTB",
+    "GRIND_AUDNZD_ALTC",
+    "GRIND_NZDCAD_ALTC",
+    "GRIND_AUDNZD_ALTD",
+    "GRIND_NZDCAD_ALTD",
 })
 RETIRED_RESOLVED_NOTE = "resolved: instance retired"
 
@@ -155,6 +163,12 @@ GRIND_A_STRIP_INSTANCES = [
     "GRIND_NZDCAD_OPT",
     "GRIND_AUDNZD_OPT",
 ]
+
+# C119: the strip shows each IC fleet's nine _OPT instances; the fleet's own
+# page keeps its full list (a retired tile says CONNECTION LOST, as on A).
+GRIND_B_STRIP_INSTANCES = [i for i in GRIND_B_INSTANCES if i not in GRIND_RETIRED_INSTANCES]
+GRIND_C_STRIP_INSTANCES = [i for i in GRIND_C_INSTANCES if i not in GRIND_RETIRED_INSTANCES]
+GRIND_D_STRIP_INSTANCES = [i for i in GRIND_D_INSTANCES if i not in GRIND_RETIRED_INSTANCES]
 
 FLEET_STRIP = [
     {
@@ -175,7 +189,7 @@ FLEET_STRIP = [
         "name": "Fleet B (IC)",
         "broker": "IC Markets",
         "url": "https://linux.pipshed.com",
-        "instances": GRIND_B_INSTANCES,
+        "instances": GRIND_B_STRIP_INSTANCES,
         "lattice": True,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": "2026-09-24",
@@ -187,7 +201,7 @@ FLEET_STRIP = [
         "name": "Fleet C (IC)",
         "broker": "IC Markets",
         "url": "https://linuxc.pipshed.com",
-        "instances": GRIND_C_INSTANCES,
+        "instances": GRIND_C_STRIP_INSTANCES,
         "lattice": True,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": "2026-09-28",
@@ -199,7 +213,7 @@ FLEET_STRIP = [
         "name": "Fleet D (IC)",
         "broker": "IC Markets",
         "url": "https://linuxd.pipshed.com",
-        "instances": GRIND_D_INSTANCES,
+        "instances": GRIND_D_STRIP_INSTANCES,
         "lattice": True,
         "daily_loss_limit_usd": 500.0,
         "cycle_start": "2026-10-01",

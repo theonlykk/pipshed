@@ -29,7 +29,10 @@ _spec.loader.exec_module(fs)
 
 TOKEN = fs.TOKEN
 NOTE = "resolved: instance retired"
-RETIRED = {"GRIND_AUDNZD_ALT", "GRIND_NZDCAD_ALT", "GRIND_AUDCAD_OPT", "GRIND_NZDCHF_OPT"}
+RETIRED = {"GRIND_AUDNZD_ALT", "GRIND_NZDCAD_ALT", "GRIND_AUDCAD_OPT", "GRIND_NZDCHF_OPT",
+           # C119 (3 Oct): the six IC twins retire at the Monday build
+           "GRIND_AUDNZD_ALTB", "GRIND_NZDCAD_ALTB", "GRIND_AUDNZD_ALTC",
+           "GRIND_NZDCAD_ALTC", "GRIND_AUDNZD_ALTD", "GRIND_NZDCAD_ALTD"}
 
 
 def _row(inst, level, code):

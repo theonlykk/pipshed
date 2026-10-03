@@ -326,8 +326,9 @@ def check_fs3():
     if d.get("url") != "https://linuxd.pipshed.com":
         raise AssertionError(f"D url expected linuxd, got {d.get('url')}")
     health = d.get("health") or {}
-    if health.get("instances_total") != 11 or health.get("instances_live") != 0:
-        raise AssertionError(f"D counts expected 11/0, got {health}")
+    # C119: D's strip is its nine _OPT instances (the twins retired)
+    if health.get("instances_total") != 9 or health.get("instances_live") != 0:
+        raise AssertionError(f"D counts expected 9/0, got {health}")
     if d.get("badge") != "NO CONNECTION":
         raise AssertionError(f"D badge with no heartbeats: NO CONNECTION, got {d.get('badge')}")
     if (d.get("cycle") or {}).get("start_date") != "2026-10-01":
@@ -335,8 +336,8 @@ def check_fs3():
     for inst in GRIND_D_INSTANCES:
         fake.set(f"fxmatrix:state:{inst}", HB(30, account_login=53077984))
     d = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "D")
-    if d.get("badge") != "LIVE" or (d.get("health") or {}).get("instances_live") != 11:
-        raise AssertionError(f"D with 11 heartbeats: LIVE 11, got {d.get('badge')}, {d.get('health')}")
+    if d.get("badge") != "LIVE" or (d.get("health") or {}).get("instances_live") != 9:
+        raise AssertionError(f"D with all heartbeats: LIVE 9 (strip), got {d.get('badge')}, {d.get('health')}")
     return "D live card (attached 1 Oct)"
 
 
@@ -366,21 +367,24 @@ def check_fs5():
         pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "B"
     )
     health = b.get("health") or {}
-    if health.get("instances_live") != 10:
-        raise AssertionError(f"instances_live expected 10, got {health.get('instances_live')}")
+    # C119: B's strip is nine (twins retired); GBPUSD silent -> 8 live
+    if health.get("instances_live") != 8:
+        raise AssertionError(f"instances_live expected 8, got {health.get('instances_live')}")
     halted = health.get("halted") or []
     if halted != [{"instance_id": "GRIND_EURUSD_OPTB", "halt_reason": "I6_LONG"}]:
         raise AssertionError(f"halted mismatch: {halted}")
     if b.get("status") != "red":
         raise AssertionError(f"status expected red, got {b.get('status')}")
     money = b.get("money") or {}
-    if money.get("open_mtm") != -15.00:
-        raise AssertionError(f"open_mtm expected -15.00, got {money.get('open_mtm')}")
+    # 8 live x -1.50
+    if money.get("open_mtm") != -12.00:
+        raise AssertionError(f"open_mtm expected -12.00, got {money.get('open_mtm')}")
     risk = b.get("risk") or {}
-    if risk.get("open_layers_long") != 14:
-        raise AssertionError(f"open_layers_long expected 14, got {risk.get('open_layers_long')}")
-    if risk.get("open_layers_short") != 16:
-        raise AssertionError(f"open_layers_short expected 16, got {risk.get('open_layers_short')}")
+    # long: AUDCAD 5 + seven others x 1 = 12; short: NZDCHF 7 + seven others x 1 = 14
+    if risk.get("open_layers_long") != 12:
+        raise AssertionError(f"open_layers_long expected 12, got {risk.get('open_layers_long')}")
+    if risk.get("open_layers_short") != 14:
+        raise AssertionError(f"open_layers_short expected 14, got {risk.get('open_layers_short')}")
     age = health.get("oldest_heartbeat_age_s")
     if age is None or age < 29 or age > 32:
         raise AssertionError(f"oldest age expected 29..32, got {age}")
@@ -453,7 +457,7 @@ def check_fs9():
 
     fake = FakeRedis()
     for inst in GRIND_C_INSTANCES:
-        if inst == "GRIND_NZDCAD_ALTC":
+        if inst == "GRIND_NZDCAD_OPTC":   # C119: a strip instance (the twin retired)
             fake.set(f"fxmatrix:state:{inst}", HB(90))
         else:
             fake.set(f"fxmatrix:state:{inst}", HB(30))
@@ -474,7 +478,7 @@ def check_fs10():
 
     fake = FakeRedis()
     for inst in GRIND_C_INSTANCES:
-        if inst == "GRIND_NZDCAD_ALTC":
+        if inst == "GRIND_NZDCAD_OPTC":   # C119: a strip instance (the twin retired)
             fake.set(f"fxmatrix:state:{inst}", HB(200))
         else:
             fake.set(f"fxmatrix:state:{inst}", HB(30))
@@ -821,14 +825,16 @@ def check_fs24():
     book = _fleet_by_letter(
         pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "B"
     ).get("book") or {}
-    if book.get("positions") != 20:
-        raise AssertionError(f"positions expected 20, got {book.get('positions')}")
+    # C119: 8 live strip instances x 2 positions
+    if book.get("positions") != 16:
+        raise AssertionError(f"positions expected 16, got {book.get('positions')}")
     if book.get("pairs") != 8:
         raise AssertionError(f"pairs expected 8, got {book.get('pairs')}")
-    if book.get("open_mtm_book") != -15.00:
-        raise AssertionError(f"open_mtm_book expected -15.00, got {book.get('open_mtm_book')}")
-    if book.get("financing") != -85.00:
-        raise AssertionError(f"financing expected -85.00, got {book.get('financing')}")
+    # 16 x (-1.0, -0.5 per instance) = 8 x -1.5 = -12.00; financing 9950 - 10050 + 12 = -88.00
+    if book.get("open_mtm_book") != -12.00:
+        raise AssertionError(f"open_mtm_book expected -12.00, got {book.get('open_mtm_book')}")
+    if book.get("financing") != -88.00:
+        raise AssertionError(f"financing expected -88.00, got {book.get('financing')}")
     return "book stats FB2"
 
 

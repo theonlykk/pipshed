@@ -1643,6 +1643,16 @@ def _fleet_side_next_level(layers, is_long, add_pips, pip, digits):
     return round(level, digits), unrolled
 
 
+def _fleet_side_add(data, is_long, fallback):
+    """C123: a side's own add from the heartbeat (add_pips_long / add_pips_short,
+    sent since v2.0) when it is a number > 0; otherwise the heartbeat's add_pips
+    (the long side's resolved add), as C115 did."""
+    v = data.get("add_pips_long" if is_long else "add_pips_short") if isinstance(data, dict) else None
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+        return float(v)
+    return fallback
+
+
 def _fleet_quote_cell(pair, card, raw_payload, lattice):
     """C115: our best bid and offer (with their kind), and the lattice's next
     level where a capped side has no real order."""
@@ -1687,7 +1697,8 @@ def _fleet_quote_cell(pair, card, raw_payload, lattice):
         side_layers = [l for l in layers if isinstance(l, dict) and l.get("side") == letter]
         if len(side_layers) < cap:
             continue
-        level, unrolled = _fleet_side_next_level(side_layers, is_long, add, pip, digits)
+        side_add = _fleet_side_add(data, is_long, add)
+        level, unrolled = _fleet_side_next_level(side_layers, is_long, side_add, pip, digits)
         if is_long:
             cell["rolls_left_long"] = unrolled
             if cell["bid"] is None and unrolled > 0:

@@ -949,6 +949,10 @@ _CRITICAL_RESOLVED_WHEN_RUNNING = _FLEET_STRIP_HALT_CODES | frozenset({"DUPLICAT
 # (depth == max_layers and every layer rolled: a long's exit target below its
 # entry, a short's above), judged from the live heartbeat.
 ROLL_STRANDED_RESOLVED_NOTE = "resolved: no side fully rolled at cap"
+# C131: with re-roll ON a side fully rolled at cap is normal; the archive's
+# critical build marks a ROLL_STRANDED row "rerolled_after": true when every
+# stranded side re-rolled since (ftmo_daily.stranded_rerolled).
+ROLL_STRANDED_REROLLED_NOTE = "resolved: re-rolled since"
 
 
 def _roll_stranded_cleared(raw_payload):
@@ -1136,6 +1140,10 @@ def _fleet_strip_build_alerts(
                     and inst in recovered):
                 level = "resolved"
                 detail += ", resolved: instance running again"
+            elif (level == "amber" and row.get("code") == "ROLL_STRANDED"
+                    and row.get("rerolled_after") is True):
+                level = "resolved"
+                detail += ", " + ROLL_STRANDED_REROLLED_NOTE
             elif (level == "amber" and row.get("code") == "ROLL_STRANDED"
                     and (cards.get(inst) or {}).get("connection") == "live"
                     and _roll_stranded_cleared(raw_by_inst.get(inst))):
@@ -3593,7 +3601,10 @@ def _critical_mark_resolved(payload):
             row["resolved_note"] = RETIRED_RESOLVED_NOTE
             continue
         if row.get("level") == "WARN" and row.get("code") == "ROLL_STRANDED":
-            if _roll_stranded_cleared(r.get(f"fxmatrix:state:{inst}")):
+            if row.get("rerolled_after") is True:
+                row["resolved"] = True
+                row["resolved_note"] = ROLL_STRANDED_REROLLED_NOTE
+            elif _roll_stranded_cleared(r.get(f"fxmatrix:state:{inst}")):
                 row["resolved"] = True
                 row["resolved_note"] = ROLL_STRANDED_RESOLVED_NOTE
             continue

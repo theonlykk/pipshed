@@ -312,6 +312,35 @@ def released_quarantines(rows):
     return released
 
 
+def stranded_rerolled(rows):
+    """C131: instance ids whose ROLL_STRANDED episode is over by a re-roll.
+    rows: (instance_id, side, code, received_at) with code ROLL_STRANDED (side
+    from `reason`) or ROLL_ACCEPTED with "reroll": true (side from detail);
+    anything else is ignored. An instance counts when EVERY side that raised
+    ROLL_STRANDED has a re-roll on the same side received strictly after
+    that side's last ROLL_STRANDED."""
+    last_stranded, last_reroll = {}, {}
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) != 4:
+            continue
+        inst, side, code, at = row
+        if not inst or side not in ("L", "S") or at is None:
+            continue
+        book = last_stranded if code == "ROLL_STRANDED" else (
+            last_reroll if code == "ROLL_ACCEPTED" else None)
+        if book is None:
+            continue
+        key = (inst, side)
+        if key not in book or at > book[key]:
+            book[key] = at
+    by_inst = {}
+    for (inst, side), at in last_stranded.items():
+        later = last_reroll.get((inst, side))
+        ok = later is not None and later > at
+        by_inst[inst] = by_inst.get(inst, True) and ok
+    return {inst for inst, ok in by_inst.items() if ok}
+
+
 def critical_groups(rows, now):
     released = released_quarantines(rows)
     filtered = []

@@ -20,6 +20,8 @@ and /critical show such a row resolved with the note
 
 Tests first. Predicted at the tests-only commit: RR1, RR2, RR3, RR4, RR5
 and RR8 FAIL; RR6 and RR7 are guards that pass in both states.
+RR9 and RR10 were added with the fix for the two survivors of its
+thirteen-mutation round (side check dropped; the 24 h window widened).
 
     python scripts/verify_c131_reroll_resolved.py   (RR8 needs VERIFY_DATABASE_URL)
 """
@@ -265,8 +267,59 @@ def check_rr8():
     return "on PostgreSQL: reroll true counts; reroll false and a re-roll older than 24 h do not"
 
 
+# --------------------------------------------- mutation-round survivors
+
+def check_rr9():
+    """Survivor (side check dropped): events with no side never count."""
+    import ftmo_daily as fd
+    rows = [(INST, None, "ROLL_STRANDED", _t(0)), (INST, None, "ROLL_ACCEPTED", _t(5)),
+            ("GRIND_CADCHF_OPTD", "", "ROLL_STRANDED", _t(0)),
+            ("GRIND_CADCHF_OPTD", "", "ROLL_ACCEPTED", _t(5))]
+    got = fd.stranded_rerolled(rows)
+    if got != set():
+        raise AssertionError(f"no side, no verdict: expected an empty set, got {got}")
+    return "a ROLL_STRANDED or re-roll without a side is ignored"
+
+
+def check_rr10():
+    """Survivor (window widened): a ROLL_STRANDED older than 24 h is not counted."""
+    if not URL:
+        raise AssertionError("VERIFY_DATABASE_URL is not set (scratch database only)")
+    import psycopg2
+    import archive_worker as aw
+    conn = psycopg2.connect(URL)
+    conn.autocommit = True
+    now = datetime.now(timezone.utc)
+    inst = "GRIND_EURGBP_OPTD"
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.ea_events')")
+        if cur.fetchone()[0] is None:
+            with open(os.path.join(ROOT, "migrations", "001_archive_phase1.sql")) as f:
+                cur.execute(f.read())
+        cur.execute("DELETE FROM ea_events")
+        rows = [  # minutes ago, level, code, reason, detail
+            (60 * 30, "WARN", "ROLL_STRANDED", "L", {"level": 0.85}),     # outside 24 h
+            (30, "WARN", "ROLL_STRANDED", "S", {"level": 0.86}),
+            (20, "INFO", "ROLL_ACCEPTED", "", {"side": "S", "reroll": True}),
+        ]
+        for seq, (mins, level, code, reason, detail) in enumerate(rows, 1):
+            cur.execute(
+                "INSERT INTO ea_events (instance_id, magic, session_id, seq, ea_time_ms,"
+                " received_at, level, code, reason, ticket, detail)"
+                " VALUES (%s, 1, 's', %s, 0, %s, %s, %s, %s, 0, %s)",
+                (inst, seq, now - timedelta(minutes=mins), level, code, reason, json.dumps(detail)))
+    payload = aw.build_critical_list(conn)
+    conn.close()
+    got = [r.get("rerolled_after") for r in payload["rows"]
+           if r["instance_id"] == inst and r["code"] == "ROLL_STRANDED"]
+    if got != [True]:
+        raise AssertionError(f"only the side stranded inside 24 h must re-roll: expected [True], got {got}")
+    return "a long side stranded 30 h ago does not hold the alert amber"
+
+
 CHECKS = [("RR1", check_rr1), ("RR2", check_rr2), ("RR3", check_rr3), ("RR4", check_rr4),
-          ("RR5", check_rr5), ("RR6", check_rr6), ("RR7", check_rr7), ("RR8", check_rr8)]
+          ("RR5", check_rr5), ("RR6", check_rr6), ("RR7", check_rr7), ("RR8", check_rr8),
+          ("RR9", check_rr9), ("RR10", check_rr10)]
 
 
 def main():

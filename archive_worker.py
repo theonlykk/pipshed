@@ -160,6 +160,18 @@ WHERE received_at > now() - interval '24 hours'
   AND (level IN ('CRITICAL', 'WARN') OR code = 'QUARANTINE_RELEASE')
 """
 
+# C131: each side's ROLL_STRANDED (side in `reason`) and each re-roll
+# (ROLL_ACCEPTED with detail "reroll": true, side in detail), last 24 h.
+REROLL_EVENTS_SQL = """
+SELECT instance_id,
+       CASE WHEN code = 'ROLL_STRANDED' THEN reason ELSE detail->>'side' END,
+       code, received_at
+FROM ea_events
+WHERE received_at > now() - interval '24 hours'
+  AND (code = 'ROLL_STRANDED'
+       OR (code = 'ROLL_ACCEPTED' AND detail->>'reroll' = 'true'))
+"""
+
 
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
@@ -473,6 +485,10 @@ def try_daily_build(conn, redis_client, force=False):
 
 
 def build_critical_list(conn):
+    # C131 first (the C80 MQ6 test double keeps only the last query's SQL)
+    with conn.cursor() as cur:
+        cur.execute(REROLL_EVENTS_SQL)
+        rerolled = ftmo_daily.stranded_rerolled(cur.fetchall())
     with conn.cursor() as cur:
         cur.execute(CRITICAL_EVENTS_SQL)
         rows = cur.fetchall()
@@ -480,14 +496,17 @@ def build_critical_list(conn):
     released = len(ftmo_daily.released_quarantines(rows))
     public = []
     for g in groups:
-        public.append({
+        row = {
             "instance_id": g["instance_id"],
             "level": g["level"],
             "code": g["code"],
             "count": g["count"],
             "first_at": daily_format_value(g["first_at"]),
             "last_at": daily_format_value(g["last_at"]),
-        })
+        }
+        if g["code"] == "ROLL_STRANDED":
+            row["rerolled_after"] = g["instance_id"] in rerolled
+        public.append(row)
     return {"generated_at": utc_now_iso(), "rows": public,
             "quarantines_released_24h": released}
 

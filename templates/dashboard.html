@@ -458,6 +458,9 @@
     .q-exit { color: var(--green); }
     .q-entry { color: #b388ff; }
     .q-virtual { color: var(--muted); font-style: italic; }
+    /* C129: geometry per pair and fleet; amber = differs from fleet B (the anchor) */
+    .g-diff { color: #ffb300; font-weight: 600; }
+    #fleetGeometry { margin-top: 12px; }
     .fleet-books-grid .tbl-title { color: var(--muted); font-size: 11px; font-weight: 600;
       letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px;
       font-family: var(--font-sans, system-ui, sans-serif); }
@@ -1047,6 +1050,7 @@
 
 <div id="fleetStrip" class="fleet-strip"></div>
 <div id="fleetBooks" class="fleet-books"></div>
+<div id="fleetGeometry" class="fleet-books"></div>
 <details class="fleet-legend">
   <summary>How to read the fleet alerts (red means act, amber means look, grey means resolved)</summary>
   <p>Each banner line is <code>WHAT PAIR SLOT: detail</code>. Slot OPT/ALT = cycle 3, OPTB/ALTB = Fleet B, OPTC/ALTC = Fleet C. "x2, last 21:05Z" = twice in the last 24 h, latest at 21:05 UTC.</p>
@@ -2538,6 +2542,55 @@
     el.innerHTML = html;
   }
 
+  // C129: a number as the EA set it (9, 2.5): no trailing ".0".
+  function geoNum(x) {
+    return (typeof x === 'number' && isFinite(x)) ? String(x) : '?';
+  }
+
+  // C129: "W<width> A<add> X<exit> c<cap>"; a side pair as "L/S" only where the
+  // sides differ; a part that differs from the anchor (fleet B) in amber.
+  function geoHtml(c) {
+    var vs = (c && c.vs_anchor) || [];
+    var pair = function (arr) {
+      if (!arr) return '?';
+      return arr[0] === arr[1] ? geoNum(arr[0]) : geoNum(arr[0]) + '/' + geoNum(arr[1]);
+    };
+    var part = function (text, keys) {
+      var diff = keys.some(function (k) { return vs.indexOf(k) >= 0; });
+      return diff ? '<span class="g-diff">' + text + '</span>' : text;
+    };
+    return [
+      part('W' + pair(c.width), ['width_long', 'width_short']),
+      part('A' + pair(c.add), ['add_long', 'add_short']),
+      part('X' + pair(c.exit), ['exit_long', 'exit_short']),
+      part('c' + geoNum(c.cap), ['cap'])
+    ].join(' ');
+  }
+
+  function renderFleetGeometry(geo) {
+    var el = document.getElementById('fleetGeometry');
+    if (!el) return;
+    if (!geo || !geo.rows || !geo.fleets) { el.innerHTML = ''; return; }
+    var fl = geo.fleets;
+    var html = '<div class="fleet-books-grid"><div><div class="tbl-title">geometry</div><table><tr><th>pair</th>' +
+      fl.map(function (f) { return '<th>' + f + '</th>'; }).join('') + '</tr>';
+    geo.rows.forEach(function (row) {
+      html += '<tr><td class="pair">' + row.pair + '</td>';
+      fl.forEach(function (f) {
+        var c = row.cells[f];
+        if (!c) { html += '<td></td>'; return; }
+        if (!c.live) { html += '<td class="off" title="not reporting">&ndash;</td>'; return; }
+        html += '<td>' + geoHtml(c) + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</table></div></div>';
+    html += '<div class="fleet-books-caption">Geometry from each instance\'s heartbeat: W = width, A = add, X = exit (pips; ' +
+      'shown long/short only where the two sides differ), c = cap. <span class="g-diff">Amber</span> = differs from fleet ' +
+      (geo.anchor || 'B') + ' (the anchor): the probe. S (= W + 1 on IC) and the deadband are not in the heartbeat.</div>';
+    el.innerHTML = html;
+  }
+
   function renderFleetStrip(payload) {
     var el = document.getElementById('fleetStrip');
     if (!el) return;
@@ -2643,9 +2696,11 @@
       const data = await res.json();
       renderFleetStrip(data);
       renderFleetBooks(data && data.books, data && data.gaps, data && data.quotes);
+      renderFleetGeometry(data && data.geometry);
     } catch (e) {
       renderFleetStrip(null);
       renderFleetBooks(null);
+      renderFleetGeometry(null);
     }
   }
 

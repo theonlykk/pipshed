@@ -1726,6 +1726,79 @@ def _fleet_quotes(cards_by_fleet, raw_by_fleet):
     return {"fleets": letters, "rows": [{"pair": p, "cells": cells[p]} for p in order]}
 
 
+FLEET_GEO_ANCHOR = "B"
+FLEET_GEO_KEYS = ("cap", "width_long", "width_short", "add_long", "add_short", "exit_long", "exit_short")
+
+
+def _fleet_geo_num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _fleet_geo_cell(card, raw_payload):
+    """C129: cap and width / add / exit per side of one instance: the heartbeat's
+    v2.0 per-side keys when a number > 0, else the card's base value."""
+    if not card or card.get("connection") != "live":
+        return {"live": False}
+    try:
+        data = json.loads(raw_payload) if raw_payload else {}
+    except (TypeError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    cell = {"live": True, "cap": card.get("max_layers")}
+    for k in ("width", "add", "exit"):
+        base = card.get(k + "_pips")
+        pair = []
+        for side in ("long", "short"):
+            v = data.get("%s_pips_%s" % (k, side))
+            if not (_fleet_geo_num(v) and v > 0):
+                v = base
+            pair.append(round(float(v), 2) if _fleet_geo_num(v) else None)
+        cell[k] = pair
+    return cell
+
+
+def _fleet_geo_flat(cell):
+    return {"cap": cell.get("cap"),
+            "width_long": cell["width"][0], "width_short": cell["width"][1],
+            "add_long": cell["add"][0], "add_short": cell["add"][1],
+            "exit_long": cell["exit"][0], "exit_short": cell["exit"][1]}
+
+
+def _fleet_geometry(cards_by_fleet, raw_by_fleet):
+    """C129: the geometry per pair and fleet, in the books table's order, each
+    live cell marked with the keys that differ from the anchor (fleet B)."""
+    entries = [e for e in FLEET_STRIP if not e.get("placeholder")]
+    letters = [e["letter"] for e in entries]
+    order = []
+    cells = {}
+    for entry in entries:
+        letter = entry["letter"]
+        for inst in entry["instances"]:
+            pair = _fleet_book_pair(inst)
+            if pair not in cells:
+                order.append(pair)
+                cells[pair] = {x: None for x in letters}
+            cells[pair][letter] = _fleet_geo_cell(
+                cards_by_fleet.get(letter, {}).get(inst), raw_by_fleet.get(letter, {}).get(inst))
+    for pair in order:
+        anchor = cells[pair].get(FLEET_GEO_ANCHOR)
+        a = _fleet_geo_flat(anchor) if anchor and anchor.get("live") else None
+        for letter in letters:
+            c = cells[pair][letter]
+            if not c or not c.get("live"):
+                continue
+            if letter == FLEET_GEO_ANCHOR:
+                c["vs_anchor"] = []
+            elif a is None:
+                c["vs_anchor"] = None
+            else:
+                f = _fleet_geo_flat(c)
+                c["vs_anchor"] = sorted(k for k in FLEET_GEO_KEYS if f[k] != a[k])
+    return {"fleets": letters, "anchor": FLEET_GEO_ANCHOR,
+            "rows": [{"pair": p, "cells": cells[p]} for p in order]}
+
+
 def _build_fleet_strip_payload():
     import ejection_view as ev
     from ftmo_daily import ftmo_day_of_utc
@@ -1781,6 +1854,7 @@ def _build_fleet_strip_payload():
         "books": _fleet_books(cards_by_fleet),
         "gaps": _fleet_gaps(cards_by_fleet),
         "quotes": _fleet_quotes(cards_by_fleet, raw_by_fleet),
+        "geometry": _fleet_geometry(cards_by_fleet, raw_by_fleet),
     }
 
 

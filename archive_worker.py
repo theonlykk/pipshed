@@ -18,6 +18,7 @@ import redis
 from psycopg2.extras import Json
 
 import ftmo_daily
+import sr_table
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +40,8 @@ ARCHIVE_CRITICAL_KEY = "fxmatrix:critical:last24h"
 ARCHIVE_CRITICAL_LAST_BUILD = "fxmatrix:critical:last_build"
 ARCHIVE_EJECTION_KEY = "fxmatrix:ejection:view"
 ARCHIVE_EJECTION_LAST_BUILD = "fxmatrix:ejection:last_build"
+ARCHIVE_SR_LAST_BUILD = "fxmatrix:sr:last_build"
+ARCHIVE_SNAPSHOT_LAST = "fxmatrix:snapshots:last_write"
 
 BATCH_MAX = 500
 HEARTBEAT_INTERVAL_SECONDS = 10
@@ -48,6 +51,9 @@ CARRY_BUILD_INTERVAL = timedelta(hours=1)
 DAILY_BUILD_INTERVAL = timedelta(hours=1)
 CRITICAL_BUILD_INTERVAL = timedelta(seconds=60)
 EJECTION_BUILD_INTERVAL = timedelta(seconds=60)
+SR_BUILD_INTERVAL = timedelta(seconds=60)
+SNAPSHOT_INTERVAL = timedelta(seconds=60)
+SNAPSHOT_MAX_HEARTBEAT_AGE_S = 120
 BACKOFF_MAX_SECONDS = 30
 
 CARRY_SQL = """
@@ -1012,6 +1018,251 @@ def connect_with_retry(conn_factory, sleep_fn, state):
             attempt += 1
 
 
+
+# ---------------------------------------------------------------- C137
+
+SR_SCALPS_SQL = """
+SELECT instance_id, direction, entry_price, exit_price, gross_pnl, close_time_broker,
+       broker_utc_offset_s, account_login, rolled, ejected, received_at
+FROM scalp_history
+WHERE received_at >= %s
+"""
+
+SR_ROLLS_SQL = """
+SELECT instance_id, detail->>'side', received_at
+FROM ea_events
+WHERE code = 'ROLL_ACCEPTED' AND received_at >= %s
+"""
+
+
+def build_sr_table(conn, now=None):
+    """C137: S, R, E, rolls started and pips per instance, side and window
+    (sr_table.aggregate) from scalp_history and ROLL_ACCEPTED. A close is
+    dated by its broker time minus the broker offset, or by received_at when
+    the offset is missing."""
+    now = now or datetime.now(timezone.utc)
+    bounds = sr_table.windows_for(now)
+    # a row is received after it closes, so received_at >= the earliest window start
+    # keeps every close that can fall in a window
+    since = min([bounds["d5"][0]] + list(sr_table.REGIME_START_BY_ACCOUNT.values()))
+    rows = []
+    with conn.cursor() as cur:
+        cur.execute(SR_SCALPS_SQL, (since,))
+        for (inst, direction, entry, exit_price, gross, ctb, offset, acc, rolled, ejected,
+             received_at) in cur.fetchall():
+            t = ftmo_daily._scalp_utc_close(ctb, offset) if offset is not None else None
+            if t is None and received_at is not None:
+                t = received_at if received_at.tzinfo else received_at.replace(tzinfo=timezone.utc)
+            rows.append({"instance_id": inst, "direction": direction,
+                         "entry_price": float(entry) if entry is not None else None,
+                         "exit_price": float(exit_price) if exit_price is not None else None,
+                         "gross_pnl": float(gross) if gross is not None else None,
+                         "close_utc": t, "account_login": acc,
+                         "rolled": rolled, "ejected": ejected})
+    with conn.cursor() as cur:
+        cur.execute(SR_ROLLS_SQL, (since,))
+        rolls = []
+        for inst, side, received_at in cur.fetchall():
+            if received_at is not None and received_at.tzinfo is None:
+                received_at = received_at.replace(tzinfo=timezone.utc)
+            rolls.append((inst, side, received_at))
+    payload = sr_table.aggregate(rows, rolls, now)
+    payload["built_at"] = utc_now_iso()
+    return payload
+
+
+def _due(redis_client, key, interval):
+    last_raw = redis_client.get(key)
+    if not last_raw:
+        return True
+    try:
+        last_run = datetime.fromisoformat(last_raw)
+    except (TypeError, ValueError):
+        return True
+    if last_run.tzinfo is None:
+        last_run = last_run.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - last_run >= interval
+
+
+def run_sr_build_if_due(conn, redis_client, force=False):
+    if not force and not _due(redis_client, ARCHIVE_SR_LAST_BUILD, SR_BUILD_INTERVAL):
+        return None
+    payload = build_sr_table(conn)
+    redis_client.set(sr_table.SR_TABLE_KEY, json.dumps(payload))
+    redis_client.set(ARCHIVE_SR_LAST_BUILD, utc_now_iso())
+    return payload
+
+
+def try_sr_build(conn, redis_client, force=False):
+    try:
+        return run_sr_build_if_due(conn, redis_client, force=force)
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log.warning("sr table build failed: %s", exc)
+        return None
+
+
+SNAPSHOT_COLUMNS = (
+    "snapped_at", "instance_id", "account_login", "heartbeat_at", "balance", "equity",
+    "net_mtm", "mtm_long", "mtm_short", "layers_long", "layers_short", "api_count",
+    "halted", "quarantined", "entry_stopped", "max_layers",
+    "width_long", "width_short", "add_long", "add_short", "exit_long", "exit_short",
+    "closes_since_init", "fills",
+)
+
+SNAPSHOT_INSERT_SQL = (
+    "INSERT INTO state_snapshots (" + ", ".join(SNAPSHOT_COLUMNS) + ") VALUES ("
+    + ", ".join(f"%({c})s" for c in SNAPSHOT_COLUMNS) + ") ON CONFLICT (instance_id, snapped_at) DO NOTHING"
+)
+
+
+def _snap_num(data, key):
+    v = data.get(key)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _snap_int(data, key):
+    v = data.get(key)
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _snap_bool(data, key):
+    v = data.get(key)
+    return v if isinstance(v, bool) else None
+
+
+def _snap_side(data, key, side):
+    v = data.get(f"{key}_pips_{side}")
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+        return float(v)
+    return _snap_num(data, f"{key}_pips")
+
+
+def snapshot_row_from_state(instance_id, raw, now):
+    """C137: one state_snapshots row from a heartbeat, or None when the
+    heartbeat is unusable or older than SNAPSHOT_MAX_HEARTBEAT_AGE_S."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    rec = data.get("_received_at")
+    try:
+        hb_at = datetime.fromisoformat(str(rec).replace("Z", "+00:00")) if rec else None
+    except ValueError:
+        hb_at = None
+    if hb_at is None:
+        return None
+    if hb_at.tzinfo is None:
+        hb_at = hb_at.replace(tzinfo=timezone.utc)
+    if (now - hb_at).total_seconds() > SNAPSHOT_MAX_HEARTBEAT_AGE_S:
+        return None
+    mtm_long = mtm_short = None
+    book = data.get("book")
+    positions = book.get("positions") if isinstance(book, dict) else None
+    if isinstance(positions, list):
+        sums = {"L": 0.0, "S": 0.0}
+        for pos in positions:
+            if not isinstance(pos, dict):
+                continue
+            parts = str(pos.get("comment") or "").split("|")
+            profit = pos.get("profit")
+            if len(parts) >= 5 and parts[0] == "GRIND" and parts[2] in sums \
+                    and isinstance(profit, (int, float)) and not isinstance(profit, bool):
+                sums[parts[2]] += float(profit)
+        mtm_long, mtm_short = round(sums["L"], 2) + 0.0, round(sums["S"], 2) + 0.0
+    acc = _snap_int(data, "account_login")
+    return {
+        "snapped_at": now.replace(second=0, microsecond=0),
+        "instance_id": instance_id,
+        "account_login": acc,
+        "heartbeat_at": hb_at,
+        "balance": _snap_num(data, "account_balance"),
+        "equity": _snap_num(data, "account_equity"),
+        "net_mtm": _snap_num(data, "net_mtm"),
+        "mtm_long": mtm_long,
+        "mtm_short": mtm_short,
+        "layers_long": _snap_int(data, "open_layers_long"),
+        "layers_short": _snap_int(data, "open_layers_short"),
+        "api_count": _snap_int(data, "api_count"),
+        "halted": _snap_bool(data, "halted"),
+        "quarantined": _snap_bool(data, "quarantined"),
+        "entry_stopped": _snap_bool(data, "entry_stopped"),
+        "max_layers": _snap_int(data, "max_layers"),
+        "width_long": _snap_side(data, "width", "long"),
+        "width_short": _snap_side(data, "width", "short"),
+        "add_long": _snap_side(data, "add", "long"),
+        "add_short": _snap_side(data, "add", "short"),
+        "exit_long": _snap_side(data, "exit", "long"),
+        "exit_short": _snap_side(data, "exit", "short"),
+        "closes_since_init": _snap_int(data, "scalps"),
+        "fills": _snap_int(data, "fills"),
+    }
+
+
+STATE_KEY_PREFIX = "fxmatrix:state:"
+
+
+def write_state_snapshots(conn, redis_client, now=None):
+    """C137: one row per instance with a fresh heartbeat; returns the rows
+    written, or None when state_snapshots does not exist yet (migration 005
+    not run: logged, not an error)."""
+    now = now or datetime.now(timezone.utc)
+    keys = sorted(redis_client.scan_iter(match=STATE_KEY_PREFIX + "*", count=200))
+    keys = [k for k in keys if k.startswith(STATE_KEY_PREFIX)]
+    raws = redis_client.mget(keys) if keys else []
+    rows = []
+    for key, raw in zip(keys, raws):
+        row = snapshot_row_from_state(key[len(STATE_KEY_PREFIX):], raw, now)
+        if row is not None:
+            rows.append(row)
+    written = 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.state_snapshots')")
+            if cur.fetchone()[0] is None:
+                log.info("state_snapshots missing (run db_migrate.py for 005): snapshot skipped")
+                conn.commit()
+                return None
+            for row in rows:
+                cur.execute(SNAPSHOT_INSERT_SQL, row)
+                written += cur.rowcount
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    return written
+
+
+def try_snapshot_write(conn, redis_client, force=False):
+    try:
+        if not force and not _due(redis_client, ARCHIVE_SNAPSHOT_LAST, SNAPSHOT_INTERVAL):
+            return None
+        written = write_state_snapshots(conn, redis_client)
+        redis_client.set(ARCHIVE_SNAPSHOT_LAST, utc_now_iso())
+        return written
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log.warning("state snapshot write failed: %s", exc)
+        return None
+
+
 def worker_loop(redis_client, conn_factory, sleep_fn=None):
     if sleep_fn is None:
         sleep_fn = time.sleep
@@ -1026,6 +1277,8 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
     try_daily_build(conn, redis_client, force=True)
     try_critical_build(conn, redis_client, force=True)
     try_ejection_build(conn, redis_client, force=True)
+    try_sr_build(conn, redis_client, force=True)
+    try_snapshot_write(conn, redis_client, force=True)
     redis_backoff = 0
     last_heartbeat = 0.0
 
@@ -1053,6 +1306,8 @@ def worker_loop(redis_client, conn_factory, sleep_fn=None):
                 try_daily_build(conn, redis_client, force=False)
                 try_critical_build(conn, redis_client, force=False)
                 try_ejection_build(conn, redis_client, force=False)
+                try_sr_build(conn, redis_client, force=False)
+                try_snapshot_write(conn, redis_client, force=False)
             except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
                 state["last_error"] = str(exc)
                 try:

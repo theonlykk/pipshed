@@ -39,7 +39,11 @@ not Redis; the header names the part before any fix).
 Tests first. Predicted at the tests-only commit: ST1-ST13 FAIL (the module,
 the worker build, the strip key, the page, the export, A's config, the
 timing header and the C136 label do not exist); ST14 is a guard that
-passes in both states.
+passes in both states. ST15-ST18 were added with the code for the five
+survivors of its 32-mutation round (a side-less ROLL_ACCEPTED counted; the
+broker offset's sign; the summary's time not recorded; the commission from
+the archive's account only; and, in verify_c137_snapshots SN8, a non-GRIND
+comment counted in the MTM).
 
     python scripts/verify_c137_sr_table.py   (ST6, ST7 need VERIFY_DATABASE_URL)
 """
@@ -567,10 +571,101 @@ def check_st14():
     return "the strip, books, quote gap, geometry, per-side add and D commission suites still pass"
 
 
+# --------------------------------------------- mutation-round survivors
+
+def _sides_of(payload):
+    return {inst: sorted(str(k) for k in (v.get("sides") or {})) for inst, v in
+            (payload.get("instances") or {}).items()
+            if any(any(c.get(k) for k in ("S", "R", "E", "rolls_started")) for side in (v.get("sides") or {}).values()
+                   for c in side.values())}
+
+
+def check_st15():
+    """Survivor (a side-less ROLL_ACCEPTED or close made a side): only L and S
+    sides exist, and only where the fixture has them."""
+    import sr_table as st
+    want = {inst: sorted(sides) for inst, sides in WANT.items()}
+    rolls = pure_rolls() + [("GRIND_GBPUSD_OPTB", None, T("2026-10-08 06:00:00")),
+                            ("GRIND_GBPUSD_OPTB", "", T("2026-10-08 06:00:00"))]
+    rows = pure_rows() + [dict(pure_rows()[0], direction="FLAT")]
+    got = _sides_of(st.aggregate(rows, rolls, NOW))
+    if got != want:
+        raise AssertionError(f"sides with any count: expected {want}, got {got}")
+    b = st.aggregate(rows, rolls, NOW)["instances"]["GRIND_GBPUSD_OPTB"]["sides"]
+    if b["L"]["today"]["rolls_started"] != 1 or b["L"]["today"]["S"] != 4:
+        raise AssertionError(f"side-less rows must not count on L: {b['L']['today']}")
+    return "side-less ROLL_ACCEPTED rows and closes without a direction make no side and count nowhere"
+
+
+def check_st16():
+    """Survivor (broker offset added instead of subtracted): a close at 20:30Z
+    on 7 Oct (broker 23:30) belongs to the FTMO day 7 Oct, not today; with the
+    sign reversed it would read 02:30Z on 8 Oct, today."""
+    if not URL:
+        raise AssertionError("VERIFY_DATABASE_URL is not set (scratch database only)")
+    import archive_worker as aw
+    conn = _pg()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scalp_history (instance_id, instrument, direction, entry_price,"
+            " exit_price, gross_pnl, close_time_broker, source, received_at, ejected,"
+            " broker_utc_offset_s, account_login, rolled)"
+            " VALUES ('GRIND_EURGBP_OPTB', 'EURGBP', 'SHORT', 0.8700, 0.8695, 0.66,"
+            " '2026-10-07 23:30:00', 'ea', %s, false, 10800, %s, false)",
+            (T("2026-10-07 20:30:02"), B_ACC))
+    payload = aw.build_sr_table(conn, now=NOW)
+    conn.close()
+    cell = payload["instances"]["GRIND_EURGBP_OPTB"]["sides"]["S"]
+    got = (cell["today"]["S"], cell["d5"]["S"], cell["cycle"]["S"], cell["d5"]["scalp_pips"])
+    if got != (0, 1, 1, 5.0):
+        raise AssertionError(f"broker 23:30 at GMT+3 = 20:30Z, FTMO day 7 Oct: expected (0, 1, 1, 5.0), got {got}")
+    return "a close's UTC time is its broker time minus the offset (20:30Z is yesterday's FTMO day)"
+
+
+def check_st17():
+    """Survivor (the summary's time not recorded): the header's summary part
+    measures _fleet_strip_summary (each call held 5 ms here, four fleets)."""
+    import time as _time
+    import app as pipshed
+    pipshed.r = _strip_fixture()
+    orig = pipshed._fleet_strip_summary
+
+    def slow(*a, **kw):
+        _time.sleep(0.005)
+        return orig(*a, **kw)
+
+    pipshed._fleet_strip_summary = slow
+    try:
+        res = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets/4")
+    finally:
+        pipshed._fleet_strip_summary = orig
+    parts = dict((b[0].strip(), float(b[1].strip()[4:])) for b in
+                 (item.split(";") for item in (res.headers.get("Server-Timing") or "").split(",")) if len(b) == 2)
+    if not (parts.get("summary", 0) >= 20.0 and parts.get("cards", 0) >= parts.get("summary", 0)
+            and parts.get("total", 0) >= parts.get("cards", 0)):
+        raise AssertionError(f"summary >= 20 ms inside cards inside total: {parts}")
+    return "summary (>= 4 x 5 ms) is timed inside cards, cards inside total"
+
+
+def check_st18():
+    """Survivor (the rate from the archive's account only): the live heartbeat's
+    account decides the commission; the archive's newest close is the fallback
+    (an account switch before the first close on the new account)."""
+    import app as pipshed
+    got = (pipshed._sr_account(json.dumps({"account_login": 53077984}), 1514731800),
+           pipshed._sr_account(json.dumps({"account_login": True}), 1514731800),
+           pipshed._sr_account(None, 53066709),
+           pipshed._sr_account("not json", None))
+    if got != (53077984, 1514731800, 53066709, None):
+        raise AssertionError(f"heartbeat account first, then the archive's: got {got}")
+    return "the heartbeat's account decides the rate; the archive's is the fallback"
+
+
 CHECKS = [("ST1", check_st1), ("ST2", check_st2), ("ST3", check_st3), ("ST4", check_st4),
           ("ST5", check_st5), ("ST6", check_st6), ("ST7", check_st7), ("ST8", check_st8),
           ("ST9", check_st9), ("ST10", check_st10), ("ST11", check_st11), ("ST12", check_st12),
-          ("ST13", check_st13), ("ST14", check_st14)]
+          ("ST13", check_st13), ("ST14", check_st14), ("ST15", check_st15), ("ST16", check_st16),
+          ("ST17", check_st17), ("ST18", check_st18)]
 
 
 def main():

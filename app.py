@@ -32,10 +32,13 @@ import hmac
 import json
 import logging
 import os
+import threading
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import redis
+import sr_table
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -173,14 +176,16 @@ GRIND_D_STRIP_INSTANCES = [i for i in GRIND_D_INSTANCES if i not in GRIND_RETIRE
 FLEET_STRIP = [
     {
         "letter": "A",
-        "name": "Cycle 3 (FTMO)",
+        # C137: since 7 Oct 22:08Z FTMO 1514878887 runs the IC strategy (lattice,
+        # re-roll, roll gate 0) static at B's round-2 anchor; cycle 3 (1514731800,
+        # ADR-157 ejection, no lattice) retired 21:23Z. Same seven ids and magics.
+        "name": "FTMO-IC 1514878887",
         "broker": "FTMO",
         "url": "https://pipshed.com",
         "instances": GRIND_A_STRIP_INSTANCES,
-        # C115: cycle 3 runs ADR-157 ejection, not the ADR-162 lattice
-        "lattice": False,
+        "lattice": True,
         "daily_loss_limit_usd": 500.0,
-        "cycle_start": "2026-09-24",
+        "cycle_start": "2026-10-08",
         "start_balance": 10000.0,
         "placeholder": False,
     },
@@ -1433,7 +1438,9 @@ def _fleet_strip_live_card(
     )
     if isinstance(cycle, dict):
         cycle["start_balance"] = entry.get("start_balance")
+    t_sum = time.perf_counter()
     summary = _fleet_strip_summary(entry, instances, cards)
+    _strip_timing_add("summary", time.perf_counter() - t_sum)
     badge = _fleet_strip_badge(instances_live, instances_total, False)
     alerts = _fleet_strip_build_alerts(
         instances=instances,
@@ -1818,21 +1825,32 @@ def _fleet_geometry(cards_by_fleet, raw_by_fleet):
             "rows": [{"pair": p, "cells": cells[p]} for p in order]}
 
 
-def _build_fleet_strip_payload():
-    import ejection_view as ev
-    from ftmo_daily import ftmo_day_of_utc
+# C137: the strip's build time by part, for the Server-Timing header of the
+# fleets response (per thread: gunicorn runs threads in each worker).
+_STRIP_TIMING = threading.local()
 
-    now_dt = datetime.now(ZoneInfo("UTC"))
-    ftmo_day_iso = ftmo_day_of_utc(now_dt).isoformat()
-    daily_rows = _load_daily_table_rows()
-    critical_rows, critical_ok = _load_critical_rows()
 
-    views_by_letter = ev.ejection_views_for_fleets(r, FLEET_STRIP, hours=24)
-    closed_unavailable = views_by_letter is None
+def _strip_timing_reset():
+    _STRIP_TIMING.parts = {}
 
+
+def _strip_timing_add(name, seconds):
+    parts = getattr(_STRIP_TIMING, "parts", None)
+    if parts is None:
+        parts = _STRIP_TIMING.parts = {}
+    parts[name] = parts.get(name, 0.0) + seconds * 1000.0
+
+
+def _strip_timing_header():
+    parts = getattr(_STRIP_TIMING, "parts", None) or {}
+    return ", ".join(f"{k};dur={v:.1f}" for k, v in parts.items())
+
+
+def _strip_states(entries):
+    """(cards_by_fleet, raw_by_fleet) for the strip's instances."""
     cards_by_fleet = {}
     raw_by_fleet = {}
-    for entry in FLEET_STRIP:
+    for entry in entries:
         if entry.get("placeholder"):
             continue
         letter = entry["letter"]
@@ -1844,7 +1862,35 @@ def _build_fleet_strip_payload():
             cards[inst] = _summarize_grind_instance_state(inst, raw_grind)
         cards_by_fleet[letter] = cards
         raw_by_fleet[letter] = raw_map
+    return cards_by_fleet, raw_by_fleet
 
+
+def _build_fleet_strip_payload():
+    import ejection_view as ev
+    from ftmo_daily import ftmo_day_of_utc
+
+    _strip_timing_reset()
+    t_all = time.perf_counter()
+    now_dt = datetime.now(ZoneInfo("UTC"))
+    ftmo_day_iso = ftmo_day_of_utc(now_dt).isoformat()
+    t = time.perf_counter()
+    daily_rows = _load_daily_table_rows()
+    _strip_timing_add("daily", time.perf_counter() - t)
+    t = time.perf_counter()
+    critical_rows, critical_ok = _load_critical_rows()
+    _strip_timing_add("critical", time.perf_counter() - t)
+
+    t = time.perf_counter()
+    views_by_letter = ev.ejection_views_for_fleets(r, FLEET_STRIP, hours=24)
+    closed_unavailable = views_by_letter is None
+    _strip_timing_add("ejection", time.perf_counter() - t)
+
+    t = time.perf_counter()
+    cards_by_fleet, raw_by_fleet = _strip_states(FLEET_STRIP)
+    _strip_timing_add("states", time.perf_counter() - t)
+
+    t = time.perf_counter()
+    _strip_timing_add("summary", 0.0)
     fleets_out = []
     for entry in FLEET_STRIP:
         if entry.get("placeholder"):
@@ -1865,16 +1911,148 @@ def _build_fleet_strip_payload():
                 critical_ok,
             )
         )
+    _strip_timing_add("cards", time.perf_counter() - t)
+
+    t = time.perf_counter()
+    books = _fleet_books(cards_by_fleet)
+    gaps = _fleet_gaps(cards_by_fleet)
+    quotes = _fleet_quotes(cards_by_fleet, raw_by_fleet)
+    geometry = _fleet_geometry(cards_by_fleet, raw_by_fleet)
+    _strip_timing_add("tables", time.perf_counter() - t)
+
+    t = time.perf_counter()
+    scalps_per_roll = _fleet_scalps_per_roll(cards_by_fleet, raw_by_fleet, now_dt)
+    _strip_timing_add("sr", time.perf_counter() - t)
+    _strip_timing_add("total", time.perf_counter() - t_all)
 
     return {
         "generated_at": now_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ftmo_day": ftmo_day_iso,
         "fleets": fleets_out,
-        "books": _fleet_books(cards_by_fleet),
-        "gaps": _fleet_gaps(cards_by_fleet),
-        "quotes": _fleet_quotes(cards_by_fleet, raw_by_fleet),
-        "geometry": _fleet_geometry(cards_by_fleet, raw_by_fleet),
+        "books": books,
+        "gaps": gaps,
+        "quotes": quotes,
+        "geometry": geometry,
+        "scalps_per_roll": scalps_per_roll,
     }
+
+
+# C137: the "Scalps per roll" table (fxmatrix docs/research/scalps-per-roll.md).
+SR_WINDOWS = sr_table.WINDOWS
+SR_CSV_COLUMNS = ("fleet", "pair", "instance_id", "side", "window", "S", "R", "E",
+                  "rolls_started", "sr", "k_star", "k_star_gross", "k_actual", "edge",
+                  "realised_pips", "c_pips", "grey", "cap", "add", "exit")
+
+
+def _sr_load(now_dt):
+    """The worker's table (sr_table.aggregate + built_at), or None when it is
+    missing, unreadable or older than SR_TABLE_MAX_AGE_S."""
+    try:
+        raw = r.get(sr_table.SR_TABLE_KEY)
+    except redis.exceptions.ConnectionError:
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        built = datetime.fromisoformat(str(data.get("built_at")).replace("Z", "+00:00"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if built.tzinfo is None:
+        built = built.replace(tzinfo=ZoneInfo("UTC"))
+    if (now_dt - built).total_seconds() > sr_table.SR_TABLE_MAX_AGE_S:
+        return None
+    return data
+
+
+def _sr_side_geometry(card, raw_payload, side_index):
+    cell = _fleet_geo_cell(card, raw_payload)
+    if not cell.get("live"):
+        return None
+    cap = cell.get("cap")
+    add = cell["add"][side_index]
+    exit_ = cell["exit"][side_index]
+    if not _fleet_geo_num(cap) or add is None or exit_ is None:
+        return None
+    return {"cap": int(cap), "add": add, "exit": exit_}
+
+
+def _sr_account(raw_payload, fallback):
+    try:
+        data = json.loads(raw_payload) if raw_payload else {}
+    except (TypeError, ValueError):
+        data = {}
+    acc = data.get("account_login") if isinstance(data, dict) else None
+    if _fleet_geo_num(acc):
+        return int(acc)
+    return fallback
+
+
+def _fleet_scalps_per_roll(cards_by_fleet, raw_by_fleet, now_dt):
+    """C137: per fleet, one row per strip instance and side with the three
+    windows, from the worker's counts and the live per-side geometry."""
+    entries = [e for e in FLEET_STRIP if not e.get("placeholder")]
+    letters = [e["letter"] for e in entries]
+    data = _sr_load(now_dt)
+    if data is None:
+        return {"available": False, "fleets": letters, "rows": {}, "windows": None, "built_at": None}
+    instances = data.get("instances") or {}
+    rows = {}
+    for entry in entries:
+        letter = entry["letter"]
+        out = []
+        for inst in entry["instances"]:
+            info = instances.get(inst) or {}
+            card = cards_by_fleet.get(letter, {}).get(inst)
+            raw = raw_by_fleet.get(letter, {}).get(inst)
+            acc = _sr_account(raw, info.get("account_login"))
+            rate = sr_table.COMMISSION_PER_CLOSE_BY_ACCOUNT.get(acc) if acc is not None else None
+            pvs = info.get("pip_value") or {}
+            for idx, side in enumerate(("L", "S")):
+                geo = _sr_side_geometry(card, raw, idx)
+                row = {"pair": _fleet_book_pair(inst), "instance_id": inst, "side": side,
+                       "geometry": geo}
+                side_stats = (info.get("sides") or {}).get(side) or {}
+                for win in SR_WINDOWS:
+                    pv = pvs.get(win)
+                    if pv is None:
+                        pv = next((pvs.get(w) for w in ("d5", "cycle", "today") if pvs.get(w)), None)
+                    row[win] = sr_table.side_row(
+                        side_stats.get(win),
+                        geo["cap"] if geo else None, geo["add"] if geo else None,
+                        geo["exit"] if geo else None, rate, pv)
+                out.append(row)
+        rows[letter] = out
+    return {"available": True, "fleets": letters, "rows": rows,
+            "windows": data.get("windows"), "built_at": data.get("built_at")}
+
+
+def _sr_csv_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _sr_csv(table, fleet=None, instance=None, window=None):
+    lines = [",".join(SR_CSV_COLUMNS)]
+    for letter in table.get("fleets") or []:
+        if fleet and letter != fleet:
+            continue
+        for row in (table.get("rows") or {}).get(letter) or []:
+            if instance and row["instance_id"] != instance:
+                continue
+            geo = row.get("geometry") or {}
+            for win in SR_WINDOWS:
+                if window and win != window:
+                    continue
+                cell = row.get(win) or {}
+                vals = [letter, row["pair"], row["instance_id"], row["side"], win]
+                vals += [cell.get(k) for k in SR_CSV_COLUMNS[5:17]]
+                vals += [geo.get("cap"), geo.get("add"), geo.get("exit")]
+                lines.append(",".join(_sr_csv_cell(v) for v in vals))
+    return "\n".join(lines) + "\n"
 
 
 # Ring membership — one edit here adds a ring everywhere downstream.
@@ -2706,15 +2884,9 @@ def _pip_multiplier_for_prices(*prices):
     return 10000
 
 
-# Commission per closed layer (two IN deals), measured on the broker ledger
-# 26-28 Sep (639 IN deals): FTMO 0.03 + 0.03, IC Markets 0.04 + 0.04.
-# An account not listed here is reported as unknown, never guessed.
-COMMISSION_PER_CLOSE_BY_ACCOUNT = {
-    1514731800: 0.06,   # FTMO cycle 3
-    53066709: 0.08,     # IC Fleet B (box 1)
-    53071896: 0.08,     # IC Fleet C (box 2)
-    53077984: 0.08,     # IC Fleet D (wine-d): same Raw account type, checked on its ledger
-}
+# Commission per closed layer: one table, in sr_table (C137 adds FTMO
+# 1514878887); an account not listed is reported as unknown, never guessed.
+COMMISSION_PER_CLOSE_BY_ACCOUNT = sr_table.COMMISSION_PER_CLOSE_BY_ACCOUNT
 
 
 def _scalp_signed_pips(record):
@@ -3449,9 +3621,49 @@ def public_fleet_strip(token, _ignored):
     try:
         payload = _build_fleet_strip_payload()
         response = jsonify(payload)
+        response.headers["Server-Timing"] = _strip_timing_header()
         return _apply_no_cache_headers(response), 200
     except Exception:
         app.logger.exception("public_fleet_strip failed")
+        response = jsonify({"error": "internal error"})
+        return _apply_no_cache_headers(response), 500
+
+
+@app.route(
+    "/api/g/<token>/sr",
+    methods=["GET"],
+    defaults={"_ignored": None},
+    strict_slashes=False,
+)
+@app.route(
+    "/api/g/<token>/sr/<path:_ignored>",
+    methods=["GET"],
+    strict_slashes=False,
+)
+def public_sr_table(token, _ignored):
+    """C137: the Scalps per roll table as JSON, or CSV with ?format=csv;
+    filters fleet=, instance=, window= (CSV)."""
+    if token != PUBLIC_GRIND_STATUS_TOKEN:
+        return jsonify({"error": "not found"}), 404
+    try:
+        now_dt = datetime.now(ZoneInfo("UTC"))
+        cards_by_fleet, raw_by_fleet = _strip_states(FLEET_STRIP)
+        table = _fleet_scalps_per_roll(cards_by_fleet, raw_by_fleet, now_dt)
+        fleet = request.args.get("fleet") or None
+        instance = request.args.get("instance") or None
+        window = request.args.get("window") or None
+        if (request.args.get("format") or "").lower() == "csv":
+            response = Response(_sr_csv(table, fleet, instance, window), mimetype="text/csv")
+            return _apply_no_cache_headers(response), 200
+        if fleet:
+            table = dict(table, rows={k: v for k, v in (table.get("rows") or {}).items() if k == fleet})
+        if instance:
+            table = dict(table, rows={k: [x for x in v if x["instance_id"] == instance]
+                                      for k, v in (table.get("rows") or {}).items()})
+        response = jsonify(table)
+        return _apply_no_cache_headers(response), 200
+    except Exception:
+        app.logger.exception("public_sr_table failed")
         response = jsonify({"error": "internal error"})
         return _apply_no_cache_headers(response), 500
 

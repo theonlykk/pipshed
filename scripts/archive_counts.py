@@ -28,6 +28,10 @@ Options:
     --export-archive EVERY row of config_events, ea_events, fill_logs and
                      scalp_history as JSON lines (C83: the offline copy of the
                      trade history; no day window, all codes); honours --instance
+    --export-snapshots  C137: state_snapshots rows (one per instance per minute)
+                     with snapped_at in [--from, --to) (ISO UTC, e.g.
+                     2026-10-08T00:00Z) as JSON lines (a _meta line first), or
+                     CSV with --csv; honours --instance
 Never prints the connection string. Opens a read-only session.
 """
 import argparse
@@ -85,6 +89,49 @@ def export_archive(cur, instance):
             rec = {"table": table}
             rec.update(dict(zip(cols, row)))
             print(json.dumps(rec, default=str))
+
+
+SNAPSHOT_EXPORT_COLUMNS = (
+    "snapped_at", "instance_id", "account_login", "heartbeat_at", "balance", "equity",
+    "net_mtm", "mtm_long", "mtm_short", "layers_long", "layers_short", "api_count",
+    "halted", "quarantined", "entry_stopped", "max_layers",
+    "width_long", "width_short", "add_long", "add_short", "exit_long", "exit_short",
+    "closes_since_init", "fills",
+)
+
+
+def _csv_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value)
+    if any(ch in text for ch in ',"\n'):
+        text = '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def export_snapshots(cur, start, end, instance, as_csv):
+    """C137: state_snapshots in [start, end), oldest first."""
+    cur.execute("SET TIME ZONE 'UTC'")
+    cur.execute(
+        "SELECT " + ", ".join(SNAPSHOT_EXPORT_COLUMNS) + " FROM state_snapshots"
+        " WHERE snapped_at >= %(start)s AND snapped_at < %(end)s"
+        " AND (%(instance)s::text IS NULL OR instance_id = %(instance)s)"
+        " ORDER BY snapped_at, instance_id",
+        {"start": start, "end": end, "instance": instance})
+    rows = cur.fetchall()
+    if as_csv:
+        print(",".join(SNAPSHOT_EXPORT_COLUMNS))
+        for row in rows:
+            print(",".join(_csv_cell(v) for v in row))
+        return
+    print(json.dumps({"table": "_meta", "snapshots": True, "from": start, "to": end,
+                      "instance": instance}))
+    for row in rows:
+        rec = {"table": "state_snapshots"}
+        rec.update(dict(zip(SNAPSHOT_EXPORT_COLUMNS, row)))
+        print(json.dumps(rec, default=str))
 
 
 def export_study(cur, days, instance):
@@ -342,6 +389,10 @@ def main(argv=None):
     parser.add_argument("--export-study", action="store_true")
     parser.add_argument("--export-archive", action="store_true")
     parser.add_argument("--days", type=int, default=7)
+    parser.add_argument("--export-snapshots", action="store_true")
+    parser.add_argument("--from", dest="from_ts")
+    parser.add_argument("--to", dest="to_ts")
+    parser.add_argument("--csv", action="store_true")
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL")
@@ -358,6 +409,12 @@ def main(argv=None):
                 return 0
             if args.export_archive:
                 export_archive(cur, args.instance)
+                return 0
+            if args.export_snapshots:
+                if not args.from_ts or not args.to_ts:
+                    print("--export-snapshots needs --from and --to (ISO UTC).")
+                    return 1
+                export_snapshots(cur, args.from_ts, args.to_ts, args.instance, args.csv)
                 return 0
 
             if args.codes or args.depth:

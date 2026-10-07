@@ -27,6 +27,10 @@ while the endpoint reads the broker date, so it failed 21:00-24:00Z.
 
 Tests first. Predicted at the tests-only commit: SN1-SN6 FAIL; SN7 (the
 C122 change) passes at any hour once its fixture is dated by broker time.
+SN8 was added with the code for a mutation survivor (see verify_c137_sr_table).
+SN5's fixture was corrected with the code: each minute's heartbeats are 10 s
+old at that minute (the tests commit reused 12:00's, which age past 120 s by
+12:02, so the export had one row where two were meant).
 
     python scripts/verify_c137_snapshots.py   (SN1, SN3, SN5 need VERIFY_DATABASE_URL)
 """
@@ -54,9 +58,9 @@ COLUMNS = [
 ]
 
 
-def hb(seconds_old, **over):
+def hb(seconds_old, at=None, **over):
     payload = {
-        "_received_at": (NOW - timedelta(seconds=seconds_old)).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00"),
+        "_received_at": ((at or NOW) - timedelta(seconds=seconds_old)).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00"),
         "instance_id": "GRIND_GBPUSD_OPTB", "account_login": 53066709,
         "account_balance": 10184.45, "account_equity": 9993.91, "net_mtm": -190.54,
         "open_layers_long": 4, "open_layers_short": 6, "api_count": 193,
@@ -233,13 +237,14 @@ def check_sn5():
     if not URL:
         raise AssertionError("VERIFY_DATABASE_URL is not set (scratch database only)")
     import archive_worker as aw
-    rc = FakeRedis({
-        "fxmatrix:state:GRIND_GBPUSD_OPTB": hb(10),
-        "fxmatrix:state:GRIND_EURUSD_OPTB": hb(10, instance_id="GRIND_EURUSD_OPTB"),
-    })
     conn = _fresh_pg()
-    for m in range(3):                                   # 12:00, 12:01, 12:02
-        aw.write_state_snapshots(conn, rc, now=NOW + timedelta(minutes=m))
+    for m in range(3):                                   # 12:00, 12:01, 12:02, each heartbeat 10 s old
+        at = NOW + timedelta(minutes=m)
+        rc = FakeRedis({
+            "fxmatrix:state:GRIND_GBPUSD_OPTB": hb(10, at=at),
+            "fxmatrix:state:GRIND_EURUSD_OPTB": hb(10, at=at, instance_id="GRIND_EURUSD_OPTB"),
+        })
+        aw.write_state_snapshots(conn, rc, now=at)
     conn.close()
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
     import archive_counts as ac
@@ -290,8 +295,21 @@ def check_sn7():
     return "C122: verify_c110 passes at this hour (its fixture is dated by broker time)"
 
 
+def check_sn8():
+    """Survivor (the MTM counted any five-part comment): only GRIND comments
+    count; a hand order's 'MANUAL|X|L|L00|ENT' does not."""
+    import archive_worker as aw
+    book = {"positions": [{"comment": "GRIND|OPTB|L|L00|ENT", "profit": -1.0},
+                          {"comment": "MANUAL|X|L|L00|ENT", "profit": 100.0},
+                          {"comment": "OTHER|X|S|L00|EXT", "profit": 50.0}]}
+    row = aw.snapshot_row_from_state("X", hb(5, book=book), NOW)
+    if (row["mtm_long"], row["mtm_short"]) != (-1.0, 0.0):
+        raise AssertionError(f"only GRIND|... comments: expected (-1.0, 0.0), got {(row['mtm_long'], row['mtm_short'])}")
+    return "MTM per side counts GRIND comments only"
+
+
 CHECKS = [("SN1", check_sn1), ("SN2", check_sn2), ("SN3", check_sn3), ("SN4", check_sn4),
-          ("SN5", check_sn5), ("SN6", check_sn6), ("SN7", check_sn7)]
+          ("SN5", check_sn5), ("SN6", check_sn6), ("SN7", check_sn7), ("SN8", check_sn8)]
 
 
 def main():

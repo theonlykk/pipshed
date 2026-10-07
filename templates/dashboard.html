@@ -461,6 +461,16 @@
     /* C129: geometry per pair and fleet; amber = differs from fleet B (the anchor) */
     .g-diff { color: #ffb300; font-weight: 600; }
     #fleetGeometry { margin-top: 12px; }
+    /* C137: scalps per roll; S/R - k* green above 0, red at or below, grey under 3 rolls */
+    #fleetSR { margin-top: 12px; }
+    .sr-pos { color: var(--green); font-weight: 600; }
+    .sr-neg { color: var(--red); font-weight: 600; }
+    .sr-grey { color: var(--muted); }
+    .fleet-books tr.sr-grey-row td { color: var(--muted); }
+    .sr-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+    .sr-tab { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px;
+      background: transparent; color: var(--muted); cursor: pointer; }
+    .sr-tab.active { color: var(--text); border-color: var(--text); }
     .fleet-books-grid .tbl-title { color: var(--muted); font-size: 11px; font-weight: 600;
       letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px;
       font-family: var(--font-sans, system-ui, sans-serif); }
@@ -1051,6 +1061,7 @@
 <div id="fleetStrip" class="fleet-strip"></div>
 <div id="fleetBooks" class="fleet-books"></div>
 <div id="fleetGeometry" class="fleet-books"></div>
+<div id="fleetSR" class="fleet-books"></div>
 <details class="fleet-legend">
   <summary>How to read the fleet alerts (red means act, amber means look, grey means resolved)</summary>
   <p>Each banner line is <code>WHAT PAIR SLOT: detail</code>. Slot OPT/ALT = cycle 3, OPTB/ALTB = Fleet B, OPTC/ALTC = Fleet C. "x2, last 21:05Z" = twice in the last 24 h, latest at 21:05 UTC.</p>
@@ -2591,6 +2602,82 @@
     el.innerHTML = html;
   }
 
+  // C137: S/R - k* is the side's edge over its break-even (fxmatrix
+  // docs/research/scalps-per-roll.md s1): green above 0, red at or below, grey
+  // when the side has fewer than 3 roll closes in the window (too few to read).
+  function srEdgeClass(cell) {
+    if (!cell || cell.grey || cell.edge === null || cell.edge === undefined) return 'sr-grey';
+    return cell.edge > 0 ? 'sr-pos' : 'sr-neg';
+  }
+
+  var srState = { win: 'today', fleet: null, last: null };
+  try {
+    var srSaved = JSON.parse(localStorage.getItem('pipshed.sr') || 'null');
+    if (srSaved && typeof srSaved === 'object') {
+      if (srSaved.win) srState.win = srSaved.win;
+      if (srSaved.fleet) srState.fleet = srSaved.fleet;
+    }
+  } catch (e) { /* storage unavailable: defaults */ }
+
+  function srPick(kind, value) {
+    srState[kind] = value;
+    try { localStorage.setItem('pipshed.sr', JSON.stringify({ win: srState.win, fleet: srState.fleet })); }
+    catch (e) { /* storage unavailable */ }
+    renderFleetSR(srState.last);
+  }
+
+  function srNum(x, dp) {
+    return (typeof x === 'number' && isFinite(x)) ? x.toFixed(dp) : '&ndash;';
+  }
+
+  function renderFleetSR(sr) {
+    srState.last = sr;
+    var el = document.getElementById('fleetSR');
+    if (!el) return;
+    if (!sr) { el.innerHTML = ''; return; }
+    if (!sr.available) {
+      el.innerHTML = '<div class="fleet-books-caption">scalps per roll: not available (the archive worker\'s table is missing or older than 5 minutes)</div>';
+      return;
+    }
+    var fleets = sr.fleets || [];
+    if (fleets.indexOf(srState.fleet) < 0) srState.fleet = fleets.indexOf('B') >= 0 ? 'B' : fleets[0];
+    var wins = [['today', 'today'], ['d5', '5 days'], ['cycle', 'cycle']];
+    if (!wins.some(function (w) { return w[0] === srState.win; })) srState.win = 'today';
+    var w = srState.win;
+    var labels = sr.windows || {};
+    var html = '<div class="tbl-title">scalps per roll</div><div class="sr-tabs">';
+    wins.forEach(function (x) {
+      html += '<button class="sr-tab' + (x[0] === w ? ' active' : '') + '" onclick="srPick(\'win\', \'' + x[0] + '\')">' + x[1] + '</button>';
+    });
+    html += '<span style="width:12px"></span>';
+    fleets.forEach(function (f) {
+      html += '<button class="sr-tab' + (f === srState.fleet ? ' active' : '') + '" onclick="srPick(\'fleet\', \'' + f + '\')">' + f + '</button>';
+    });
+    html += '</div><table><tr><th>pair</th><th>side</th><th>S</th><th>R</th><th title="rolls started (ROLL_ACCEPTED)">started</th>' +
+      '<th>S/R</th><th title="break-even scalps per roll at the live geometry, with costs">k*</th>' +
+      '<th title="mean roll loss + c over mean scalp gain - c">k* paid</th><th>S/R &minus; k*</th>' +
+      '<th>pips</th><th title="ejections (not rolls)">E</th><th>geometry</th></tr>';
+    ((sr.rows || {})[srState.fleet] || []).forEach(function (row) {
+      var c = row[w] || {};
+      var g = row.geometry;
+      var geo = g ? ('c' + g.cap + ' A' + g.add + ' X' + g.exit) : '&ndash;';
+      html += '<tr class="' + (c.grey ? 'sr-grey-row' : '') + '"><td class="pair">' + row.pair + '</td><td>' + row.side + '</td>' +
+        '<td>' + (c.S || 0) + '</td><td>' + (c.R || 0) + '</td><td>' + (c.rolls_started || 0) + '</td>' +
+        '<td>' + srNum(c.sr, 2) + '</td><td>' + srNum(c.k_star, 2) + '</td><td>' + srNum(c.k_actual, 2) + '</td>' +
+        '<td class="' + srEdgeClass(c) + '">' + srNum(c.edge, 2) + '</td>' +
+        '<td>' + srNum(c.realised_pips, 1) + '</td><td>' + (c.E || 0) + '</td><td>' + geo + '</td></tr>';
+    });
+    html += '</table>';
+    var lab = labels[w] || {};
+    var span = lab.start ? (' (' + lab.start + ' to ' + lab.end + ')') : '';
+    html += '<div class="fleet-books-caption">Window: ' + (lab.label || w) + span + '. S = scalps, R = roll closes ' +
+      '(on cycle 3 an ejection), realised pips = e&middot;S &minus; (D &minus; e)&middot;R. k* = (N&middot;a &minus; e + c)/(e &minus; c) at the live ' +
+      'geometry, c = the account\'s commission per close in the pair\'s pips. <span class="sr-pos">Green</span> = scalping ' +
+      'more than break-even, <span class="sr-neg">red</span> = less, grey = under 3 rolls (too few to read). ' +
+      'Export: <code>/api/g/&lt;token&gt;/sr?format=csv</code>.</div>';
+    el.innerHTML = html;
+  }
+
   function renderFleetStrip(payload) {
     var el = document.getElementById('fleetStrip');
     if (!el) return;
@@ -2697,10 +2784,12 @@
       renderFleetStrip(data);
       renderFleetBooks(data && data.books, data && data.gaps, data && data.quotes);
       renderFleetGeometry(data && data.geometry);
+      renderFleetSR(data && data.scalps_per_roll);
     } catch (e) {
       renderFleetStrip(null);
       renderFleetBooks(null);
       renderFleetGeometry(null);
+      renderFleetSR(null);
     }
   }
 
@@ -3027,7 +3116,7 @@
     }
 
     layersEl.textContent = summary.open_layers_long + ' long / ' + summary.open_layers_short + ' short';
-    activityEl.textContent = summary.scalps + ' scalps';
+    activityEl.textContent = summary.scalps + ' closes since init';  // C136: the EA's layer-removal count
     apiEl.textContent = (summary.api_count ?? 0).toLocaleString() + ' / ' + apiLimit.toLocaleString();
 
     const realisedVal = summary.realised_pnl_today;
@@ -3221,9 +3310,9 @@
       const mtmClass = isLive ? grindFmtSignedMtmClass(card.net_mtm) : '';
       const pnlClass = isLive ? grindFmtSignedMtmClass(card.realised_pnl_today) : '';
       const scalpLine = isLive
-        ? ('Scalps <strong>' + grindFmtNum(card.scalps) + '</strong> · last P&amp;L <strong>' +
+        ? ('Closes since init <strong>' + grindFmtNum(card.scalps) + '</strong> · last P&amp;L <strong>' +
            grindFmtSigned(card.scalp_pnl_last) + '</strong>')
-        : 'Scalps <strong>—</strong>';
+        : 'Closes since init <strong>—</strong>';
       const microLine = isLive
         ? ('<div class="grind-micro-line">Exit pen mean <strong>' +
            grindFmtNum(card.exit_penetration_pips_mean, 2) +

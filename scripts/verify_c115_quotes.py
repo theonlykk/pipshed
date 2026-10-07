@@ -211,9 +211,15 @@ def qt3_no_roll_left(q):
 
 
 def qt4_no_lattice_on_a(q):
-    w = want(offer=0.8521, offer_kind="entry")
+    # C137 (changed by hand): A runs the IC strategy with the lattice since 7 Oct
+    # 22:08Z (FTMO 1514878887), so its capped side shows the lattice's next level
+    # like B, C, D: 8 long at 0.8540 down by 3 pips, deepest 0.8519, none rolled ->
+    # virtual bid 0.8519 - 3 pips = 0.8516, rolls left 8, gap to the 0.8521 offer
+    # 5.0 pips. (Before C137: no lattice on A, so no virtual level.)
+    w = want(offer=0.8521, offer_kind="entry", rolls_left_long=8, virtual_bid=0.8516,
+             virtual_gap_pips=5.0)
     got = cell(q, "EURGBP", "A")
-    check("QT4", got == w, f"EURGBP A (FTMO, no lattice) {got}")
+    check("QT4", got == w, f"EURGBP A (FTMO-IC, lattice) {got}")
 
 
 def qt5_virtual_offer(q):
@@ -287,7 +293,7 @@ def main():
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets/1").get_json() or {}
     q = data.get("quotes")
     lattice = {e["letter"]: e.get("lattice") for e in pipshed.FLEET_STRIP}
-    if lattice != {"A": False, "B": True, "C": True, "D": True}:
+    if lattice != {"A": True, "B": True, "C": True, "D": True}:
         print(f"NOTE lattice flags {lattice}")
     qt1_real_both_sides(q)
     qt2_virtual_bid(q)

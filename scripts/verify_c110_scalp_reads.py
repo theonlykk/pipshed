@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -152,7 +153,9 @@ CAP = pipshed.SCALP_HISTORY_LIST_MAX + 1
 
 
 def scalp_row(inst, i, minutes_ago, **over):
-    ct = now - timedelta(minutes=minutes_ago)
+    # C122: dated by BROKER time (the endpoints pick "today" by the broker date,
+    # Europe/Athens); by UTC the "today" list was empty 21:00-24:00Z and SR3 failed.
+    ct = (now - timedelta(minutes=minutes_ago)).astimezone(ZoneInfo(pipshed.BROKER_TIMEZONE))
     row = {
         "close_time": ct.strftime("%Y-%m-%d %H:%M:%S"),
         "trade_date": ct.strftime("%Y-%m-%d"),

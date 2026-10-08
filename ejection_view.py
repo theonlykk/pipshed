@@ -101,10 +101,32 @@ def _layer_from_ent(fill_rows, position_ids):
     return None, None, None
 
 
+def _rows_by_position(fill_rows):
+    """C102: each position's fill rows with their place in fill_rows."""
+    index = {}
+    for i, row in enumerate(fill_rows):
+        index.setdefault(row.get("position_id"), []).append((i, row))
+    return index
+
+
+def _rows_for_positions(index, position_ids):
+    """C102: the fill rows of these positions in their original order: the
+    same rows, in the same order, that a scan of fill_rows would visit."""
+    pairs = []
+    for pos in position_ids:
+        pairs.extend(index.get(pos, ()))
+    pairs.sort(key=lambda p: p[0])
+    return [row for _, row in pairs]
+
+
 def closed_trades_from_fills(fill_rows, roll_positions=None, eject_positions=None):
-    """Build closed-trade buckets from broker fill_logs (ADR-159 close-by grouping)."""
+    """Build closed-trade buckets from broker fill_logs (ADR-159 close-by grouping).
+
+    C102: each close reads only its positions' rows (an index built once)
+    instead of scanning every fill row twice per close."""
     roll_positions = set(roll_positions or [])
     eject_positions = set(eject_positions or [])
+    index = _rows_by_position(fill_rows)
     by_order = {}
     single_out = []
     for row in fill_rows:
@@ -134,14 +156,15 @@ def closed_trades_from_fills(fill_rows, roll_positions=None, eject_positions=Non
             continue
         close_ms = max(int(d.get("ea_time_ms") or 0) for d in out_deals)
         inst = out_deals[0].get("instance_id")
-        layer_pos, side, layer_index = _layer_from_ent(fill_rows, positions)
+        own = _rows_for_positions(index, positions)
+        layer_pos, side, layer_index = _layer_from_ent(own, positions)
         incomplete = layer_pos is None
         if side is None:
             for deal in out_deals:
                 side = _side_letter(deal)
                 if side:
                     break
-        gross, commission, swap, net = _sum_deals_for_positions(fill_rows, positions)
+        gross, commission, swap, net = _sum_deals_for_positions(own, positions)
         if incomplete:
             net = None
             commission = None
@@ -176,11 +199,12 @@ def closed_trades_from_fills(fill_rows, roll_positions=None, eject_positions=Non
         positions = {pos}
         close_ms = int(row.get("ea_time_ms") or 0)
         inst = row.get("instance_id")
-        layer_pos, side, layer_index = _layer_from_ent(fill_rows, positions)
+        own = _rows_for_positions(index, positions)
+        layer_pos, side, layer_index = _layer_from_ent(own, positions)
         incomplete = layer_pos is None
         if side is None:
             side = _side_letter(row)
-        gross, commission, swap, net = _sum_deals_for_positions(fill_rows, positions)
+        gross, commission, swap, net = _sum_deals_for_positions(own, positions)
         if incomplete:
             net = None
             commission = None

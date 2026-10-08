@@ -1,6 +1,7 @@
 """FTMO calendar day helpers and daily snapshot derivations (ADR-159). Pure functions, no I/O."""
 
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 
 WARN_CRITICAL_ALLOW = frozenset({
     "STARTUP_EXIT_SHORTFALL",
@@ -34,6 +35,9 @@ def _last_sunday(year, month):
     return d
 
 
+# C102: pure functions of their argument, called for every close and scalp
+# by the ejection view: cached (their results are immutable).
+@lru_cache(maxsize=64)
 def _cest_window_utc(year):
     march = _last_sunday(year, 3)
     october = _last_sunday(year, 10)
@@ -59,6 +63,7 @@ def _prague_midnight_utc(day):
     return utc_cet
 
 
+@lru_cache(maxsize=4096)
 def ftmo_day_bounds_utc(day):
     start = _prague_midnight_utc(day)
     end = _prague_midnight_utc(day + timedelta(days=1))

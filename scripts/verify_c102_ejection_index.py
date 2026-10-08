@@ -21,6 +21,8 @@ Tests first. Predicted at the tests-only commit: EI1 and EI2 FAIL (the
 rows are scanned 1 + 2 x closes times; no cache); EI3, EI4 and EI5 are
 guards that pass in both states (the same closes and views as the
 2385d24 code).
+EI3's order fixture was changed with the code (71's ENT row first; see
+order_cases) after two mutants that drop the original order survived.
 
     python scripts/verify_c102_ejection_index.py
 """
@@ -99,19 +101,23 @@ def synth(insts, days=7, per_day=5, seed=7):
 
 def order_cases():
     """Rows where the ORDER of a full scan decides the answer:
-    - close-by 900001 over positions 71 and 72, both with an IN/ENT row; 72's
-      row comes first, so the layer is 72 (side S, index 3);
+    - close-by 900001 over positions 71 and 72, both with an IN/ENT row; 71's
+      row comes first in the list, so the layer is 71 (side L, index 5). A
+      set {71, 72} iterates 72 first, so rows gathered per position without
+      restoring the list's order would give 72 (mutation round: two such
+      mutants survived the first version of this fixture, where 72's row
+      came first and the set order happened to agree);
     - position 81's exit deal 880 appears twice with different profit: the
       first copy (1.50) counts, the second (9.99) is a duplicate;
     - position 91: a single OUT with no ENT row (incomplete)."""
     I = "GRIND_GBPUSD_OPTB"
     return [
-        {"instance_id": I, "deal_ticket": 701, "order_ticket": 1, "position_id": 72, "entry_type": "IN",
-         "deal_type": "IN", "side": "S", "layer_index": 3, "role": "ENT", "profit": 0.0, "commission": -0.04,
-         "swap": None, "ea_time_ms": 1},
         {"instance_id": I, "deal_ticket": 702, "order_ticket": 2, "position_id": 71, "entry_type": "IN",
          "deal_type": "IN", "side": "L", "layer_index": 5, "role": "ENT", "profit": 0.0, "commission": -0.04,
          "swap": None, "ea_time_ms": 2},
+        {"instance_id": I, "deal_ticket": 701, "order_ticket": 1, "position_id": 72, "entry_type": "IN",
+         "deal_type": "IN", "side": "S", "layer_index": 3, "role": "ENT", "profit": 0.0, "commission": -0.04,
+         "swap": None, "ea_time_ms": 1},
         {"instance_id": I, "deal_ticket": 703, "order_ticket": 900001, "position_id": 71, "entry_type": "OUT_BY",
          "deal_type": "OUT_BY", "side": "L", "layer_index": 5, "role": None, "profit": 2.0, "commission": 0.0,
          "swap": -0.1, "ea_time_ms": 10},
@@ -200,8 +206,10 @@ def check_ei3():
     lone = next((c for c in closes if c["positions"] == [91]), {})
     if got != want:
         raise AssertionError(f"closes differ from a full scan: {sum(1 for a, b in zip(got, want) if a != b)} of {len(got)}")
-    if (cb.get("layer_position"), cb.get("side"), cb.get("layer_index"), cb.get("gross")) != (72, "S", 3, 1.0):
-        raise AssertionError(f"close-by 900001: the first ENT row (72, S, 3) and gross 1.0; got {cb}")
+    if list({71, 72}) != [72, 71]:
+        raise AssertionError("this check needs a set {71, 72} to iterate 72 first (CPython small-int hashing)")
+    if (cb.get("layer_position"), cb.get("side"), cb.get("layer_index"), cb.get("gross")) != (71, "L", 5, 1.0):
+        raise AssertionError(f"close-by 900001: the first ENT row in the list (71, L, 5) and gross 1.0; got {cb}")
     if (dup.get("gross"), dup.get("commission")) != (1.5, -0.08) or lone.get("incomplete") is not True:
         raise AssertionError(f"duplicate deal counted once (1.5, -0.08), lone OUT incomplete; got {dup}, {lone}")
     return "every close's layer and money equal a full scan's (first ENT, first copy of a deal)"

@@ -28,6 +28,9 @@ Options:
     --export-archive EVERY row of config_events, ea_events, fill_logs and
                      scalp_history as JSON lines (C83: the offline copy of the
                      trade history; no day window, all codes); honours --instance
+    --export-sends   every send_logs row of ONE --instance (required) as JSON lines,
+                     a _meta line first, oldest first by ea_time_ms: the orders the
+                     EA sent (fxmatrix replay calibration; send_logs keep 14 days)
     --export-snapshots  C137: state_snapshots rows (one per instance per minute)
                      with snapped_at in [--from, --to) (ISO UTC, e.g.
                      2026-10-08T00:00Z) as JSON lines (a _meta line first), or
@@ -89,6 +92,18 @@ def export_archive(cur, instance):
             rec = {"table": table}
             rec.update(dict(zip(cols, row)))
             print(json.dumps(rec, default=str))
+
+
+def export_sends(cur, instance):
+    """Every send_logs row of one instance, oldest first (the replay calibration)."""
+    print(json.dumps({"table": "_meta", "sends": True, "instance": instance}))
+    cur.execute("SELECT * FROM send_logs WHERE instance_id = %(instance)s"
+                " ORDER BY ea_time_ms, seq, id", {"instance": instance})
+    cols = [desc[0] for desc in cur.description]
+    for row in cur.fetchall():
+        rec = {"table": "send_logs"}
+        rec.update(dict(zip(cols, row)))
+        print(json.dumps(rec, default=str))
 
 
 SNAPSHOT_EXPORT_COLUMNS = (
@@ -390,10 +405,15 @@ def main(argv=None):
     parser.add_argument("--export-archive", action="store_true")
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--export-snapshots", action="store_true")
+    parser.add_argument("--export-sends", action="store_true")
     parser.add_argument("--from", dest="from_ts")
     parser.add_argument("--to", dest="to_ts")
     parser.add_argument("--csv", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.export_sends and not args.instance:
+        print("--export-sends needs --instance.")
+        return 1
 
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -409,6 +429,9 @@ def main(argv=None):
                 return 0
             if args.export_archive:
                 export_archive(cur, args.instance)
+                return 0
+            if args.export_sends:
+                export_sends(cur, args.instance)
                 return 0
             if args.export_snapshots:
                 if not args.from_ts or not args.to_ts:

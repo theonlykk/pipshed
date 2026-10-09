@@ -1,4 +1,5 @@
-"""Verification for archive_counts --export-study on a real, SCRATCH PostgreSQL.
+"""Verification for archive_counts --export-study / --export-archive / --export-sends on a
+real, SCRATCH PostgreSQL.
 
 Needs VERIFY_DATABASE_URL pointing at an empty scratch database (never the
 production archive): applies migrations 001-004 if needed, deletes the rows of
@@ -30,8 +31,22 @@ def setup(cur):
                      "003_adr160_gated.sql", "004_c56_rolls.sql"):
             with open(os.path.join(ROOT, "migrations", name), encoding="ascii") as f:
                 cur.execute(f.read())
-    for t in ("fill_logs", "ea_events", "config_events", "scalp_history"):
+    for t in ("fill_logs", "ea_events", "config_events", "scalp_history", "send_logs"):
         cur.execute(f"DELETE FROM {t}")
+    sends = [
+        # instance, seq, ea_time_ms, action, role, layer, price
+        ("GRIND_EURUSD_OPTB", 2, 1790850000000, "MODIFY", "EXT", 3, 1.13002),
+        ("GRIND_EURUSD_OPTB", 1, 1790840000000, "PLACE", "ENT", 0, 1.13241),
+        ("GRIND_EURUSD_OPTC", 1, 1790840000500, "PLACE", "ENT", 0, 1.13240),
+    ]
+    for inst, seq, ms, action, role, layer, price in sends:
+        cur.execute(
+            "INSERT INTO send_logs (instance_id, magic, session_id, seq, ea_time_ms, received_at,"
+            " action, order_type, side, layer_index, role, requested_price, volume, order_ticket,"
+            " position_ticket, comment, ok, retcode, broker_time) VALUES (%s, 1, 's', %s, %s, %s,"
+            " %s, 'SELL_LIMIT', 'S', %s, %s, %s, 0.01, 77, 0, 'c', true, 10009, %s)",
+            (inst, seq, ms, NOW - timedelta(hours=1), action, layer, role, price,
+             datetime(2026, 10, 1, 9, 0, 0)))
     fills = [
         # instance, deal_ticket, role, hours ago
         ("GRIND_EURGBP_OPT", 101, "ENT", 5),
@@ -157,8 +172,39 @@ def check_ex6():
     return "archive export: every row of the four tables, all codes"
 
 
+def check_ex7():
+    # Replay calibration (fxmatrix replay-calibration-eurusd.md s7): every send_logs row of
+    # ONE instance, oldest first by the EA's clock, every column (side, layer, role,
+    # requested price, tickets, broker time). send_logs keep 14 days, so this is the copy.
+    code, out = run(["--export-sends", "--instance", "GRIND_EURUSD_OPTB"])
+    if code != 0:
+        raise AssertionError(f"exit code {code}")
+    rows = parse(out)
+    if rows[0] != {"table": "_meta", "sends": True, "instance": "GRIND_EURUSD_OPTB"}:
+        raise AssertionError(f"first line must be the sends _meta, got {rows[0]}")
+    body = rows[1:]
+    if [r["seq"] for r in body] != [1, 2] or any(r["table"] != "send_logs" for r in body):
+        raise AssertionError(f"OPTB's two send_logs rows oldest first expected, got {body}")
+    r = body[1]
+    want = {"action": "MODIFY", "role": "EXT", "layer_index": 3, "side": "S",
+            "requested_price": 1.13002, "order_ticket": 77, "ok": True, "retcode": 10009,
+            "broker_time": "2026-10-01 09:00:00", "ea_time_ms": 1790850000000}
+    got = {k: r.get(k) for k in want}
+    if got != want:
+        raise AssertionError(f"columns expected {want}, got {got}")
+    return "send_logs of one instance, oldest first, every column"
+
+
+def check_ex8():
+    code, out = run(["--export-sends"])
+    if code != 1 or "--instance" not in out:
+        raise AssertionError(f"--export-sends without --instance must refuse (exit 1), got {code}: {out!r}")
+    return "--export-sends needs --instance"
+
+
 CHECKS = [("EX1", check_ex1), ("EX2", check_ex2), ("EX3", check_ex3),
-          ("EX4", check_ex4), ("EX5", check_ex5), ("EX6", check_ex6)]
+          ("EX4", check_ex4), ("EX5", check_ex5), ("EX6", check_ex6),
+          ("EX7", check_ex7), ("EX8", check_ex8)]
 
 
 def main():

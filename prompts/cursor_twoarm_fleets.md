@@ -6,17 +6,22 @@ This message has a line count at the bottom
 |---|---|
 | Written | 17 Oct 2026 (fxmatrix HANDOFF s85 continued 9), Claude (Lead Engineer) |
 | Why | fxmatrix rules next week's layout (`docs/research/fleet-d-two-arm-ring-2026-10-16.md` s10-s11; presets merged in fxmatrix `2426f94`, `ea/presets_{c,d,e}/*_t1.set`): D and C gain ALT arms and retire pairs; a new FTMO demo runs as fleet E with its own page service `linuxe.pipshed.com` (operator, 17 Oct) |
-| Base | Branch `twoarm-fleets` from pipshed `main` at the commit that adds THIS file. Files: `app.py`, `scripts/verify_twoarm_fleets.py` (new), and only the existing verify scripts named in s5 |
+| Base | Branch `twoarm-fleets` from pipshed `main` at the commit that adds THIS file. Files: `app.py`, `templates/dashboard.html` (s3's three edits only), `scripts/verify_twoarm_fleets.py` (new), and the existing verify scripts in the table Claude approves (s5) |
 | Deploy | AFTER D's and C's charts change (Wed 21 Oct or later), never before: the retirements hide instances from the strip (C119's rule). The operator creates the Railway service "pipshed Fleet E" (`GRIND_FLEET=E`, domain `linuxe.pipshed.com`, start command as "pipshed Copy") after this is deployed |
-| Review | Gemini (Argon, in Cursor) reviews this file before Cursor sees it; questions in s7 |
+| Review | Argon on `aa3cada`: `review/argon-twoarm-fleets` `0f983aa`, checked by Claude in source; five findings taken, one void (s9). Cursor reads THIS version |
 
 ## 0. RESTATE AND STOP (do this first; write nothing else)
 
-1. Restate each item of s2-s5 in one line, quoting this prompt.
+1. Restate each item of s2-s4 in one line, quoting this prompt.
 2. For every check of s4: its id and what it asserts, with the expected lists written out.
 3. Run every `scripts/verify_*.py` on `main` (the base) and report which pass and which cannot run here
-   (e.g. need PostgreSQL); this is the BASELINE. Say which checks fail at your tests commit and why.
-4. STOP. Wait for the operator's "go".
+   (e.g. need PostgreSQL); this is the BASELINE.
+4. **The s5 table:** apply s2-s3 in your working tree WITHOUT committing, run every `scripts/verify_*.py`,
+   list EVERY existing check that newly fails (file, check id, line), each with its reason class (s5)
+   and the exact old -> new expectation or fixture you propose; then discard the trial (`git restore .`,
+   and delete any new file). Commit nothing.
+5. Say which checks fail at your tests commit and why.
+6. STOP. Wait for the operator's "go" (Claude reviews the s5 table first).
 
 ## 1. AUDIT TRAIL (verified by Claude in source at pipshed `6ea487e`)
 
@@ -60,10 +65,20 @@ This message has a line count at the bottom
   and `built`, and set `cycle_start` and the account's commission (`sr_table.py`), when it attaches.
 - **`GRIND_FLEET_INSTANCES`:** add `"E": GRIND_E_INSTANCES`.
 - **`_grind_slot`:** also strip the letter for `OPTE` and `ALTE`.
+- **`GRIND_DEFAULT_INSTANCE` (`app.py` 2088):** the first id of `GRIND_INSTANCES` that is NOT in
+  `GRIND_RETIRED_INSTANCES` (fallback: the first id). C's list starts with `GRIND_GBPUSD_OPTC`, retired by
+  s2: without this C's page opens on a dead instance (C109's bug). A, B, D: unchanged (their first id is live).
+- **Cross-fleet tables (books, gaps, quotes, geometry):** `_fleet_book_pair` names an ALT instance
+  `<PAIR>*` (`app.py` 1508-1513). A live ALT arm on C or D therefore gets its own starred row: intended
+  (OPT and ALT are separate books). No code change; the expected rows are TA10's.
+- **`templates/dashboard.html`, three edits only:** `fleetStripPair` (line ~2296) strips
+  `/_(OPT|ALT)[BCDE]?$/`; `fleetStripAlertLabel` (lines ~2330-2335) takes the slot from the same match
+  (so `_OPTD`, `_ALTD`, `_OPTE`, `_ALTE` read as on B and C); `.fleet-strip` at `min-width: 1600px`
+  (line ~409) `repeat(5, 1fr)` (five cards on one row).
 - **`GRIND_RINGS`:** add `"gbpchf": {"label": "GBPCHF", "symbols": ["GBPCHF"]}` (C's each-currency-once
   set; with a comment). Nothing else in `GRIND_RINGS` changes.
-- Nothing else in `app.py` changes. No change to `archive_worker.py`, `sr_table.py`, `ftmo_daily.py`,
-  `ejection_view.py`, templates or migrations.
+- Nothing else in `app.py` or `templates/dashboard.html` changes. No change to `archive_worker.py`,
+  `sr_table.py`, `ftmo_daily.py`, `ejection_view.py` or migrations.
 
 ## 4. TESTS (`scripts/verify_twoarm_fleets.py`, its own commit first; hand-written expectations)
 
@@ -84,26 +99,34 @@ on any failure). Expected values are the lists of s2, written out in the script,
   `books` `fleets` stays A, B, C, D (placeholders skipped).
 - **TA8** with `GRIND_FLEET=C` (a subprocess probe): `_grind_instances_for_ring("gbpchf")` is `GRIND_GBPCHF_OPTC`,
   `GRIND_GBPCHF_ALTC`; every C instance is in exactly one ring.
+- **TA10** the strip response's `books` rows (empty Redis, as TA7) are, in order: `GBPUSD`, `EURUSD`,
+  `EURGBP`, `AUDCHF`, `CADCHF`, `NZDCAD`, `AUDNZD`, `AUDCAD`, `NZDCHF` (A's seven, then B), `EURUSD*`,
+  `AUDCAD*`, `GBPCHF`, `GBPCHF*` (C), `GBPUSD*`, `EURGBP*`, `AUDCHF*`, `CADCHF*` (D): 17 rows.
+- **TA11** with `GRIND_FLEET=C` (subprocess probe): `GRIND_DEFAULT_INSTANCE` is `GRIND_EURUSD_OPTC`; with
+  `GRIND_FLEET=D`: `GRIND_GBPUSD_OPTD`; with `GRIND_FLEET=E`: `GRIND_GBPUSD_OPTE`.
 - **TA9** guard: `GRIND_A_INSTANCES`, `GRIND_A_STRIP_INSTANCES`, `GRIND_B_INSTANCES` and A-D's strip
   entries other than `instances` are unchanged from `main` (hand-written).
 
-At the tests commit TA1-TA8 fail (no E, no new ids); TA9 passes (a guard). Report it.
+At the tests commit TA1-TA8, TA10, TA11 fail (no E, no new ids, the old default); TA9 passes (a guard).
 
-## 5. EXISTING CHECKS THAT PIN TODAY'S LISTS (update ONLY these, ONLY to s2-s3)
+## 5. EXISTING CHECKS THAT THE CHANGE BREAKS (a table in the restate; Claude approves it)
 
-These requirements change, so their expectations change; each update is written by hand from s2-s3:
+Many existing checks pin today's fleets or use instances s2 retires as LIVE fixtures (Argon found at
+least fourteen files, e.g. `verify_critical_resolved.py` on `GRIND_GBPUSD_OPTC`, `verify_c90_d_commission.py`
+and `verify_c97_orphan_ext.py` on `GRIND_NZDCAD_OPTD`, `verify_c108_retired_critical.py`'s exact retired
+set). Their requirements change, so their expectations change, but ONLY by these rules:
 
-- `verify_fleet_strip.py` 306-307: letters A-E; its C and D lists (lines ~30-60) to s2's full lists.
-- `verify_c119_twins_retired.py` 118: fleet list lengths 11 (B), 15 (C), 17 (D); the twins still in
-  each; the retired set is a superset of C119's ten.
-- `verify_c113_fleet_books.py` 155-158: `want_rows` gains `GBPCHF` at the END (rows follow first appearance
-  across the non-placeholder strips A, B, C, D: A's seven, B adds AUDCAD and NZDCHF, C adds GBPCHF);
-  `want_fleets` unchanged (E is a placeholder).
-- `verify_fleet_c_status.py`, `verify_fleet_d_status.py`: their copies of the C and D lists to s2's.
-- Any OTHER existing check that fails after the code commit and passed at the baseline: STOP and report
-  it with the line; do not edit it.
+- **R1 a pinned list, count, letter set, row list or retired set** that s2-s3 change -> the new value
+  from s2-s3 or TA10 / TA11, written out.
+- **R2 a retired instance used as a LIVE fixture** (a heartbeat, an alert, a halt, a book) -> the same
+  role on a LIVE instance of the same fleet (C: one of its six; D: one of its twelve), with any
+  pair-dependent fixture value (a price, a pip) recomputed by hand for the new pair and shown.
+- **R3 an assertion on a cell or tile for a pair no longer on that fleet's strip** -> assert its absence
+  (`None` / not listed), or move the assertion to a live pair with hand-recomputed values, shown.
 
-Report every updated expectation as old -> new, file and line.
+Each row of the table: file, check id, line(s), R1 / R2 / R3, old -> new (exact text), and for R2 / R3
+the arithmetic. A failure that fits none of R1-R3, or that existed at the baseline: STOP, report, do not
+edit. After "go", apply exactly the approved table, nothing more.
 
 ## 6. NEGATIVE SPACE (do NOT)
 
@@ -131,9 +154,24 @@ commit, commit and push it; Claude reads it there.
 
 ## 8. COMMITS AND REPORT
 
-1. `scripts/verify_twoarm_fleets.py` (tests). 2. `app.py` and the s5 updates. Nothing else. Push
+1. `scripts/verify_twoarm_fleets.py` (tests). 2. `app.py`, `templates/dashboard.html` and the approved
+s5 table. Nothing else. Push
 `twoarm-fleets`. Report both hashes; the baseline, tests-commit and final results of every
 `scripts/verify_*.py` (pass / fail / cannot run here); s5's updates as old -> new; `git diff --stat
 main..twoarm-fleets`. STOP on any failure you cannot explain from this prompt.
 
-Line count: 139
+## 9. THE REVIEW (Argon, `0f983aa`, on `aa3cada`) AND CLAUDE'S CHECK
+
+Every quoted line checked at `aa3cada`.
+
+- **Taken (verified):** the cross-fleet tables star an ALT row (`app.py` 1508-1513), so the rows are 17
+  (TA10); the default instance on C would be retired `GRIND_GBPUSD_OPTC` (`app.py` 2088; C109) -> s3, TA11;
+  `fleetStripPair` / `fleetStripAlertLabel` lack `OPTD` / `ALTD` (an existing D bug) and E -> s3; the strip
+  grid is four columns at >= 1600 px -> s3; s5 far too narrow (fixtures on retired instances across many
+  files) -> s5 rewritten as rules R1-R3 with a table approved before "go".
+- **Void:** its 3.2 (an `IndexError` for an EMPTY E list: s2 gives E twelve ids) and its Q2 (GBPCHF added
+  to the EUR / GBP / USD ring: s3 adds a separate `gbpchf` ring). The review's Q1-Q5 headings are not this
+  prompt's questions (02_TRAPS: reviewers invent when they summarise); its answers were read as findings.
+- Its line numbers drift in places (`app.py` 251 for 2088); the substance was checked, not the numbers.
+
+Line count: 177

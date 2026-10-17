@@ -32,7 +32,7 @@ fs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fs)
 
 TOKEN = fs.TOKEN
-DUP_INST = "GRIND_NZDCAD_OPTD"
+DUP_INST = "GRIND_GBPUSD_OPTD"
 
 
 def _crit_rows():

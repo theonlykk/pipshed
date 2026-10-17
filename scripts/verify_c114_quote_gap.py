@@ -142,7 +142,7 @@ def qg2_one_sided_and_absent(gaps):
     want = {
         ("EURGBP", "B"): {"live": True, "bid": 0.8501, "offer": None, "gap_pips": None},
         ("AUDCHF", "B"): {"live": True, "bid": None, "offer": None, "gap_pips": None},
-        ("NZDCHF", "C"): {"live": False},
+        ("NZDCHF", "C"): None,
         ("AUDCAD", "A"): None,
     }
     bad = [f"{k}: {cell(gaps, *k)}" for k, v in want.items() if cell(gaps, *k) != v]

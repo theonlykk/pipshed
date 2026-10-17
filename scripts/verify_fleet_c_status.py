@@ -42,6 +42,10 @@ GRIND_C_INSTANCES = [
     "GRIND_AUDNZD_OPTC",
     "GRIND_AUDNZD_ALTC",
     "GRIND_NZDCAD_ALTC",
+    "GRIND_EURUSD_ALTC",
+    "GRIND_AUDCAD_ALTC",
+    "GRIND_GBPCHF_OPTC",
+    "GRIND_GBPCHF_ALTC",
 ]
 
 
@@ -150,10 +154,10 @@ def check_fc3():
         raise AssertionError("GRIND_FLEET must be C")
     if data["instances"] != GRIND_C_INSTANCES:
         raise AssertionError("GRIND_INSTANCES must be fleet C list")
-    if data["opt_count"] != 9 or data["alt_count"] != 2:
-        raise AssertionError(f"expected 9 OPT and 2 ALT, got {data['opt_count']}/{data['alt_count']}")
-    if data["default"] != "GRIND_GBPUSD_OPTC":
-        raise AssertionError("default instance must be GRIND_GBPUSD_OPTC")
+    if data["opt_count"] != 10 or data["alt_count"] != 5:
+        raise AssertionError(f"expected 10 OPT and 5 ALT, got {data['opt_count']}/{data['alt_count']}")
+    if data["default"] != "GRIND_EURUSD_OPTC":
+        raise AssertionError("default instance must be GRIND_EURUSD_OPTC")
     return "fleet C instances, arms, default"
 
 
@@ -206,16 +210,16 @@ def check_fc7():
     if data.get("fleet") != "C":
         raise AssertionError("fleet must be C")
     instances = data.get("instances") or {}
-    if len(instances) != 11:
-        raise AssertionError(f"expected 11 instances, got {len(instances)}")
+    if len(instances) != 15:
+        raise AssertionError(f"expected 15 instances, got {len(instances)}")
     for inst in instances:
         if inst.endswith("OPTB") or inst.endswith("ALTB"):
             raise AssertionError(f"{inst} must not appear on status_c")
         if inst.endswith("_OPT") or inst.endswith("_ALT"):
             raise AssertionError(f"{inst} must not be bare cycle-3 id")
     summary = data.get("summary") or {}
-    if summary.get("instances_total") != 11:
-        raise AssertionError("instances_total must be 11")
+    if summary.get("instances_total") != 15:
+        raise AssertionError("instances_total must be 15")
     if summary.get("instances_live") != 1:
         raise AssertionError(f"instances_live expected 1, got {summary.get('instances_live')}")
     if summary.get("net_mtm") != 1.25:

@@ -79,7 +79,12 @@ def check_dd2():
         d = run_probe(fleet)
         if d["fleet"] != fleet:
             raise AssertionError(f"GRIND_FLEET={fleet} loaded fleet {d['fleet']}")
-        if d["opens_on"] != d["default"] or d["default"] != d["first"]:
+        if fleet == "C":
+            if d["opens_on"] != "GRIND_EURUSD_OPTC" or d["default"] != "GRIND_EURUSD_OPTC":
+                raise AssertionError(
+                    f"fleet C: opens on {d['opens_on']!r}, default {d['default']!r}, "
+                    f"want GRIND_EURUSD_OPTC")
+        elif d["opens_on"] != d["default"] or d["default"] != d["first"]:
             raise AssertionError(
                 f"fleet {fleet}: opens on {d['opens_on']!r}, default {d['default']!r}, "
                 f"first {d['first']!r}")

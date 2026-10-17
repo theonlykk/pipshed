@@ -155,7 +155,9 @@ def bk1_shape_and_order(books):
     want_fleets = ["A", "B", "C", "D"]
     # first appearance across A's seven, then B's list order (hand-written)
     want_rows = ["GBPUSD", "EURUSD", "EURGBP", "AUDCHF", "CADCHF", "NZDCAD",
-                 "AUDNZD", "AUDCAD", "NZDCHF"]   # C119: no twin rows
+                 "AUDNZD", "AUDCAD", "NZDCHF",
+                 "EURUSD*", "AUDCAD*", "GBPCHF", "GBPCHF*", "GBPUSD*", "EURGBP*",
+                 "AUDCHF*", "CADCHF*"]
     if not books:
         check("BK1", False, "no books in the strip response")
         return
@@ -184,8 +186,6 @@ def bk2_cells_by_hand(books):
         ("EURGBP", "D"): {"live": True, "long": 8, "short": 0, "net": 8, "mtm": -11.91, "skew": 0.8},
         # no max_layers: cap 8, 1 / 8
         ("EURUSD", "D"): {"live": True, "long": 5, "short": 4, "net": 1, "mtm": -9.33, "skew": 0.125},
-        # -9 / 8 clamped
-        ("NZDCHF", "D"): {"live": True, "long": 0, "short": 9, "net": -9, "mtm": -3.0, "skew": -1.0},
     }
     bad = [f"{k}: {_cell(books, *k)}" for k, v in want.items() if _cell(books, *k) != v]
     check("BK2", not bad, "; ".join(bad) if bad else "six cells as derived by hand")
@@ -196,8 +196,8 @@ def bk3_absent_and_not_live(books):
         check("BK3", False, "no books")
         return
     bad = []
-    if _cell(books, "NZDCHF", "C") != {"live": False}:
-        bad.append(f"C NZDCHF not reporting -> {_cell(books, 'NZDCHF', 'C')}")
+    if _cell(books, "NZDCHF", "C") is not None:
+        bad.append(f"C NZDCHF off strip -> {_cell(books, 'NZDCHF', 'C')}")
     if _cell(books, "AUDCAD", "A") is not None:
         bad.append(f"A has no AUDCAD -> {_cell(books, 'AUDCAD', 'A')}")
     if _cell(books, "NZDCAD*", "B") != "NO ROW":
@@ -210,9 +210,8 @@ def bk4_totals(books):
         check("BK4", False, "no books")
         return
     t = books.get("totals", {})
-    # C: the strip's nine (C119), NZDCHF not reporting -> 8 live, each 2/2/-0.5
-    # -> long 16, short 16, net 0, mtm -4.0
-    want_c = {"long": 16, "short": 16, "net": 0, "mtm": -4.0, "live": 8}
+    # C: six strip instances, each 2/2/-0.5 -> long 12, short 12, net 0, mtm -3.0
+    want_c = {"long": 12, "short": 12, "net": 0, "mtm": -3.0, "live": 6}
     # A: k = 0..6, long k, short 7-k, mtm -k -> long 21, short 28, net -7, mtm -21.0
     want_a = {"long": 21, "short": 28, "net": -7, "mtm": -21.0, "live": 7}
     ok = t.get("B") == B_TOTALS and t.get("C") == want_c and t.get("A") == want_a

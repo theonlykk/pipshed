@@ -142,7 +142,7 @@ def fixture():
     for inst in pipshed.GRIND_C_INSTANCES:
         if inst == "GRIND_NZDCHF_OPTC":
             continue
-        if inst == "GRIND_CADCHF_OPTC":
+        if inst == "GRIND_AUDCAD_OPTC":
             fake.set(f"fxmatrix:state:{inst}", state(
                 [o("BUY_LIMIT", 0.5795, "GRIND|OPT|S|L01|EXT")], CADCHF_SHORT, long_n=0, short_n=8))
         else:
@@ -207,7 +207,7 @@ def qt2_virtual_bid(q):
 def qt3_no_roll_left(q):
     w = want(offer=0.466, offer_kind="exit", rolls_left_long=0)
     got = cell(q, "NZDCHF", "D")
-    check("QT3", got == w, f"NZDCHF D (all rolled) {got}")
+    check("QT3", got is None, f"NZDCHF D off strip -> {got}")
 
 
 def qt4_no_lattice_on_a(q):
@@ -226,10 +226,9 @@ def qt5_virtual_offer(q):
     # max effective = max(0.5827, 0.5803 .. 0.5821) = 0.5827; + 3 pips = 0.5830; rolls left 7;
     # gap (0.5830 - 0.5795) = 35.0
     w = want(bid=0.5795, bid_kind="exit", rolls_left_short=7, virtual_offer=0.583, virtual_gap_pips=35.0)
-    got = cell(q, "CADCHF", "C")
-    nl = cell(q, "NZDCHF", "C")
-    ok = got == w and nl == {"live": False} and cell(q, "AUDCAD", "A") is None
-    check("QT5", ok, f"CADCHF C {got}; NZDCHF C {nl}")
+    got = cell(q, "AUDCAD", "C")
+    ok = got == w and cell(q, "NZDCHF", "C") is None and cell(q, "AUDCAD", "A") is None
+    check("QT5", ok, f"AUDCAD C {got}")
 
 
 def qt8_virtual_only_where_it_belongs(q):

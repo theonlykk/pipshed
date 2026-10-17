@@ -32,7 +32,12 @@ NOTE = "resolved: instance retired"
 RETIRED = {"GRIND_AUDNZD_ALT", "GRIND_NZDCAD_ALT", "GRIND_AUDCAD_OPT", "GRIND_NZDCHF_OPT",
            # C119 (3 Oct): the six IC twins retire at the Monday build
            "GRIND_AUDNZD_ALTB", "GRIND_NZDCAD_ALTB", "GRIND_AUDNZD_ALTC",
-           "GRIND_NZDCAD_ALTC", "GRIND_AUDNZD_ALTD", "GRIND_NZDCAD_ALTD"}
+           "GRIND_NZDCAD_ALTC", "GRIND_AUDNZD_ALTD", "GRIND_NZDCAD_ALTD",
+           # two-arm build (fxmatrix fleet D note s10)
+           "GRIND_NZDCHF_OPTD", "GRIND_NZDCAD_OPTD", "GRIND_AUDNZD_OPTD",
+           "GRIND_GBPUSD_OPTC", "GRIND_EURGBP_OPTC", "GRIND_AUDCHF_OPTC",
+           "GRIND_CADCHF_OPTC", "GRIND_NZDCHF_OPTC", "GRIND_NZDCAD_OPTC",
+           "GRIND_AUDNZD_OPTC"}
 
 
 def _row(inst, level, code):

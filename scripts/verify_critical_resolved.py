@@ -53,9 +53,9 @@ def _rows():
     return {
         "generated_at": now.isoformat(),
         "rows": [
-            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "CRITICAL", "code": "INVARIANT_FAIL",
+            {"instance_id": "GRIND_EURUSD_OPTC", "level": "CRITICAL", "code": "INVARIANT_FAIL",
              "count": 2, "first_at": "2026-09-28T16:27:38Z", "last_at": "2026-09-28T16:27:40Z"},
-            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "CRITICAL", "code": "QUARANTINE_HALT",
+            {"instance_id": "GRIND_EURUSD_OPTC", "level": "CRITICAL", "code": "QUARANTINE_HALT",
              "count": 1, "first_at": "2026-09-28T16:27:38Z", "last_at": "2026-09-28T16:27:38Z"},
             {"instance_id": "GRIND_GBPUSD_OPT", "level": "WARN", "code": "QUARANTINE_ENTER",
              "count": 16, "first_at": "2026-09-28T09:00:00Z", "last_at": "2026-09-28T17:37:00Z"},
@@ -83,13 +83,13 @@ def _resolved(payload):
 
 def check_cr1():
     fake = FakeRedis()
-    fake.set("fxmatrix:state:GRIND_GBPUSD_OPTC", HB())
+    fake.set("fxmatrix:state:GRIND_EURUSD_OPTC", HB())
     fake.set("fxmatrix:state:GRIND_EURUSD_OPTB", HB())
     fake.set("fxmatrix:state:GRIND_GBPUSD_OPT", HB())
     got = _resolved(_get(fake))
     want = [
-        ("GRIND_GBPUSD_OPTC", "INVARIANT_FAIL", True),
-        ("GRIND_GBPUSD_OPTC", "QUARANTINE_HALT", True),
+        ("GRIND_EURUSD_OPTC", "INVARIANT_FAIL", True),
+        ("GRIND_EURUSD_OPTC", "QUARANTINE_HALT", True),
         ("GRIND_GBPUSD_OPT", "QUARANTINE_ENTER", False),
         ("GRIND_EURUSD_OPTB", "STARTUP_EXIT_SHORTFALL_SIDE", False),
     ]
@@ -104,7 +104,7 @@ def check_cr1():
 def check_cr2():
     fake = FakeRedis()
     # halted with invariant_ok TRUE (REBUILD_EXIT_FAILED is not an invariant)
-    fake.set("fxmatrix:state:GRIND_GBPUSD_OPTC",
+    fake.set("fxmatrix:state:GRIND_EURUSD_OPTC",
              HB(halted=True, halt_reason="REBUILD_EXIT_FAILED", invariant_ok=True))
     got = _resolved(_get(fake))
     if any(r[2] for r in got):
@@ -114,14 +114,14 @@ def check_cr2():
 
 def check_cr3():
     fake = FakeRedis()
-    fake.set("fxmatrix:state:GRIND_GBPUSD_OPTC", HB(invariant_ok=False))
+    fake.set("fxmatrix:state:GRIND_EURUSD_OPTC", HB(invariant_ok=False))
     got = _resolved(_get(fake))
     if any(r[2] for r in got):
         raise AssertionError(f"invariant_ok false: nothing resolved, got {got}")
     fake2 = FakeRedis()
     raw = json.loads(HB())
     raw.pop("invariant_ok")
-    fake2.set("fxmatrix:state:GRIND_GBPUSD_OPTC", json.dumps(raw))
+    fake2.set("fxmatrix:state:GRIND_EURUSD_OPTC", json.dumps(raw))
     got2 = _resolved(_get(fake2))
     if any(r[2] for r in got2):
         raise AssertionError(f"missing invariant_ok: nothing resolved, got {got2}")

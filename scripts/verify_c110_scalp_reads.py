@@ -347,7 +347,7 @@ def sr2_steady_state_reads_little():
     fake.scalp_bytes = 0
     s3 = fleets_summaries(c)
     third = fake.scalp_bytes
-    missing = [k for k, v in s3.items() if v is None and k != "D"] if s3 else ["all"]
+    missing = [k for k, v in s3.items() if v is None and k not in ("D", "E")] if s3 else ["all"]
     ok = (ref > 0 and second <= ref * 0.01 and third <= ref * 0.02
           and not missing and s1 == s2)
     check("SR2", ok,

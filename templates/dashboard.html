@@ -406,7 +406,7 @@
       .fleet-strip { grid-template-columns: 1fr; }
     }
     @media (min-width: 1600px) {
-      .fleet-strip { grid-template-columns: repeat(4, 1fr); }
+      .fleet-strip { grid-template-columns: repeat(5, 1fr); }
     }
     .fleet-strip-card {
       background: var(--surface);
@@ -2293,7 +2293,7 @@
   function fleetStripPair(instanceId) {
     if (!instanceId) return '--';
     var s = String(instanceId).replace(/^GRIND_/, '');
-    s = s.replace(/_(OPT|ALT|OPTB|ALTB|OPTC|ALTC)$/, '');
+    s = s.replace(/_(OPT|ALT)[BCDE]?$/, '');
     return s;
   }
 
@@ -2326,13 +2326,8 @@
     var inst = alert.instance_id || '';
     if (!inst) return head + ': ' + (alert.detail || '');
     var pair = fleetStripPair(inst);
-    var slot = '';
-    if (inst.indexOf('_OPTB') >= 0) slot = 'OPTB';
-    else if (inst.indexOf('_ALTB') >= 0) slot = 'ALTB';
-    else if (inst.indexOf('_OPTC') >= 0) slot = 'OPTC';
-    else if (inst.indexOf('_ALTC') >= 0) slot = 'ALTC';
-    else if (inst.indexOf('_OPT') >= 0) slot = 'OPT';
-    else if (inst.indexOf('_ALT') >= 0) slot = 'ALT';
+    var slotMatch = inst.match(/_(OPT|ALT)[BCDE]?$/);
+    var slot = slotMatch ? slotMatch[0].slice(1) : '';
     var who = pair + (slot ? ' ' + slot : '');
     return head + ' ' + who + ': ' + (alert.detail || '');
   }

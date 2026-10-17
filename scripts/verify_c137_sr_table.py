@@ -450,10 +450,10 @@ def check_st8():
     if not a or a["today"].get("k_star") != 6.66 or a["today"].get("E") != 1:
         raise AssertionError(f"A GBPUSD long on the new account: {a}")
     # every strip instance has both sides, zero rows where nothing closed
-    nzd = _find(sr["rows"]["D"], "GRIND_NZDCAD_OPTD", "S")
-    if not nzd or nzd["today"].get("S") != 0 or nzd["today"].get("grey") is not True \
-            or nzd.get("geometry") is not None:
-        raise AssertionError(f"silent D NZDCAD short: zero, grey, no geometry; got {nzd}")
+    achf = _find(sr["rows"]["D"], "GRIND_AUDCHF_OPTD", "S")
+    if not achf or achf["today"].get("S") != 0 or achf["today"].get("grey") is not True \
+            or achf.get("geometry") is not None:
+        raise AssertionError(f"silent D AUDCHF short: zero, grey, no geometry; got {achf}")
     if sr.get("windows", {}).get("today", {}).get("label") != "FTMO day 2026-10-08":
         raise AssertionError(f"window label: {sr.get('windows')}")
     pipshed.r = _strip_fixture(built_at=fs.now - timedelta(seconds=400))

@@ -35,7 +35,7 @@ fs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fs)
 
 TOKEN = fs.TOKEN
-INST = "GRIND_NZDCAD_OPTD"
+INST = "GRIND_GBPUSD_OPTD"
 INST2 = "GRIND_AUDCAD_OPTD"
 
 

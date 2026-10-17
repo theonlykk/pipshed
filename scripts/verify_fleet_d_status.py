@@ -50,6 +50,27 @@ GRIND_D_INSTANCES = [
     "GRIND_AUDNZD_OPTD",
     "GRIND_AUDNZD_ALTD",
     "GRIND_NZDCAD_ALTD",
+    "GRIND_GBPUSD_ALTD",
+    "GRIND_EURUSD_ALTD",
+    "GRIND_EURGBP_ALTD",
+    "GRIND_AUDCAD_ALTD",
+    "GRIND_AUDCHF_ALTD",
+    "GRIND_CADCHF_ALTD",
+]
+
+GRIND_D_STRIP_INSTANCES = [
+    "GRIND_GBPUSD_OPTD",
+    "GRIND_EURUSD_OPTD",
+    "GRIND_EURGBP_OPTD",
+    "GRIND_AUDCAD_OPTD",
+    "GRIND_AUDCHF_OPTD",
+    "GRIND_CADCHF_OPTD",
+    "GRIND_GBPUSD_ALTD",
+    "GRIND_EURUSD_ALTD",
+    "GRIND_EURGBP_ALTD",
+    "GRIND_AUDCAD_ALTD",
+    "GRIND_AUDCHF_ALTD",
+    "GRIND_CADCHF_ALTD",
 ]
 
 
@@ -162,8 +183,8 @@ def check_fd3():
         raise AssertionError("GRIND_FLEET must be D")
     if data["instances"] != GRIND_D_INSTANCES:
         raise AssertionError("GRIND_INSTANCES must be fleet D list")
-    if data["opt_count"] != 9 or data["alt_count"] != 2:
-        raise AssertionError(f"expected 9 OPT and 2 ALT, got {data['opt_count']}/{data['alt_count']}")
+    if data["opt_count"] != 9 or data["alt_count"] != 8:
+        raise AssertionError(f"expected 9 OPT and 8 ALT, got {data['opt_count']}/{data['alt_count']}")
     if data["default"] != "GRIND_GBPUSD_OPTD":
         raise AssertionError("default instance must be GRIND_GBPUSD_OPTD")
     return "fleet D instances, arms, default"
@@ -219,16 +240,16 @@ def check_fd7():
     if data.get("fleet") != "D":
         raise AssertionError("fleet must be D")
     instances = data.get("instances") or {}
-    if len(instances) != 11:
-        raise AssertionError(f"expected 11 instances, got {len(instances)}")
+    if len(instances) != 17:
+        raise AssertionError(f"expected 17 instances, got {len(instances)}")
     for inst in instances:
         if not (inst.endswith("OPTD") or inst.endswith("ALTD")):
             raise AssertionError(f"{inst} must not appear on status_d")
         if inst.endswith("_OPT") or inst.endswith("_ALT"):
             raise AssertionError(f"{inst} must not be bare cycle-3 id")
     summary = data.get("summary") or {}
-    if summary.get("instances_total") != 11:
-        raise AssertionError("instances_total must be 11")
+    if summary.get("instances_total") != 17:
+        raise AssertionError("instances_total must be 17")
     if summary.get("instances_live") != 1:
         raise AssertionError(f"instances_live expected 1, got {summary.get('instances_live')}")
     if summary.get("net_mtm") != 1.25:
@@ -278,8 +299,7 @@ def _strip_d(fake):
 def check_fd10():
     import app as pipshed
     entry = next(e for e in pipshed.FLEET_STRIP if e["letter"] == "D")
-    # C119: D's strip is its nine _OPT instances (the twins retired)
-    if entry.get("instances") != [i for i in GRIND_D_INSTANCES if "_ALT" not in i] \
+    if entry.get("instances") != GRIND_D_STRIP_INSTANCES \
             or entry.get("url") != "https://linuxd.pipshed.com":
         raise AssertionError(f"D strip entry: {entry.get('url')}, {entry.get('instances')}")
     if entry.get("placeholder") or entry.get("cycle_start") != "2026-10-01":

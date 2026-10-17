@@ -152,8 +152,7 @@ def gt1_anchor_and_add_probe(g):
     b = cell(g, "GBPUSD", "B")
     c = cell(g, "GBPUSD", "C")
     wb = live(8, (2.5, 2.5), (9.0, 9.0), (10.0, 10.0), [])
-    wc = live(8, (2.5, 2.5), (8.0, 8.0), (10.0, 10.0), ["add_long", "add_short"])
-    check("GT1", b == wb and c == wc and (g or {}).get("anchor") == "B", f"GBPUSD B {b}; C {c}")
+    check("GT1", b == wb and c is None and (g or {}).get("anchor") == "B", f"GBPUSD B {b}; C {c}")
 
 
 def gt2_sides_differ(g):
@@ -163,7 +162,7 @@ def gt2_sides_differ(g):
     a = cell(g, "AUDCAD", "C")
     we = live(8, (1.0, 1.0), (2.5, 4.0), (5.0, 5.0), ["add_long", "add_short"])
     wa = live(8, (1.5, 1.5), (5.0, 6.0), (10.0, 10.0), ["add_long"])
-    check("GT2", e == we and a == wa, f"EURGBP C {e}; AUDCAD C {a}")
+    check("GT2", e is None and a == wa, f"EURGBP C {e}; AUDCAD C {a}")
 
 
 def gt3_ftmo_base_values(g):
@@ -179,8 +178,7 @@ def gt4_exit_probe_and_cap(g):
     d = cell(g, "GBPUSD", "D")
     n = cell(g, "NZDCAD", "D")
     wd = live(8, (2.5, 2.5), (9.0, 9.0), (9.0, 9.0), ["exit_long", "exit_short"])
-    wn = live(10, (2.0, 2.0), (8.0, 8.0), (10.0, 10.0), ["cap"])
-    check("GT4", d == wd and n == wn, f"GBPUSD D {d}; NZDCAD D {n}")
+    check("GT4", d == wd and n is None, f"GBPUSD D {d}; NZDCAD D {n}")
 
 
 def gt5_not_live_absent_no_anchor(g):
@@ -190,7 +188,7 @@ def gt5_not_live_absent_no_anchor(g):
     nc = cell(g, "NZDCHF", "C")
     nd = cell(g, "NZDCHF", "D")
     wd = live(8, (1.0, 1.0), (3.0, 3.0), (9.0, 9.0), None)
-    ok = nb == {"live": False} and nc == {"live": False} and nd == wd and cell(g, "AUDCAD", "A") is None
+    ok = nb == {"live": False} and nc is None and nd is None and cell(g, "AUDCAD", "A") is None
     check("GT5", ok, f"NZDCHF B {nb}; C {nc}; D {nd}; AUDCAD A {cell(g, 'AUDCAD', 'A')}")
 
 

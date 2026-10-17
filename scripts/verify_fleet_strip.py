@@ -38,6 +38,10 @@ GRIND_C_INSTANCES = [
     "GRIND_AUDNZD_OPTC",
     "GRIND_AUDNZD_ALTC",
     "GRIND_NZDCAD_ALTC",
+    "GRIND_EURUSD_ALTC",
+    "GRIND_AUDCAD_ALTC",
+    "GRIND_GBPCHF_OPTC",
+    "GRIND_GBPCHF_ALTC",
 ]
 
 EJECTION_VIEW_KEY = "fxmatrix:ejection:view"
@@ -78,6 +82,12 @@ GRIND_D_INSTANCES = [
     "GRIND_AUDNZD_OPTD",
     "GRIND_AUDNZD_ALTD",
     "GRIND_NZDCAD_ALTD",
+    "GRIND_GBPUSD_ALTD",
+    "GRIND_EURUSD_ALTD",
+    "GRIND_EURGBP_ALTD",
+    "GRIND_AUDCAD_ALTD",
+    "GRIND_AUDCHF_ALTD",
+    "GRIND_CADCHF_ALTD",
 ]
 
 
@@ -303,8 +313,8 @@ def check_fs2():
         raise AssertionError(f"expected 200, got {resp.status_code}")
     data = resp.get_json()
     letters = [c.get("letter") for c in data.get("fleets") or []]
-    if letters != ["A", "B", "C", "D"]:
-        raise AssertionError(f"letters expected ABCD, got {letters}")
+    if letters != ["A", "B", "C", "D", "E"]:
+        raise AssertionError(f"letters expected ABCDE, got {letters}")
     if data.get("ftmo_day") != today.isoformat():
         raise AssertionError(f"ftmo_day expected {today.isoformat()}, got {data.get('ftmo_day')}")
     return "fleets shape and ftmo_day"
@@ -326,18 +336,18 @@ def check_fs3():
     if d.get("url") != "https://linuxd.pipshed.com":
         raise AssertionError(f"D url expected linuxd, got {d.get('url')}")
     health = d.get("health") or {}
-    # C119: D's strip is its nine _OPT instances (the twins retired)
-    if health.get("instances_total") != 9 or health.get("instances_live") != 0:
-        raise AssertionError(f"D counts expected 9/0, got {health}")
+    # two-arm: D's strip is twelve live ids (six _OPTD + six _ALTD)
+    if health.get("instances_total") != 12 or health.get("instances_live") != 0:
+        raise AssertionError(f"D counts expected 12/0, got {health}")
     if d.get("badge") != "NO CONNECTION":
         raise AssertionError(f"D badge with no heartbeats: NO CONNECTION, got {d.get('badge')}")
     if (d.get("cycle") or {}).get("start_date") != "2026-10-01":
         raise AssertionError(f"D cycle start expected 2026-10-01, got {d.get('cycle')}")
-    for inst in GRIND_D_INSTANCES:
+    for inst in pipshed.GRIND_D_STRIP_INSTANCES:
         fake.set(f"fxmatrix:state:{inst}", HB(30, account_login=53077984))
     d = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "D")
-    if d.get("badge") != "LIVE" or (d.get("health") or {}).get("instances_live") != 9:
-        raise AssertionError(f"D with all heartbeats: LIVE 9 (strip), got {d.get('badge')}, {d.get('health')}")
+    if d.get("badge") != "LIVE" or (d.get("health") or {}).get("instances_live") != 12:
+        raise AssertionError(f"D with all heartbeats: LIVE 12 (strip), got {d.get('badge')}, {d.get('health')}")
     return "D live card (attached 1 Oct)"
 
 
@@ -456,11 +466,9 @@ def check_fs9():
     import app as pipshed
 
     fake = FakeRedis()
-    for inst in GRIND_C_INSTANCES:
-        if inst == "GRIND_NZDCAD_OPTC":   # C119: a strip instance (the twin retired)
-            fake.set(f"fxmatrix:state:{inst}", HB(90))
-        else:
-            fake.set(f"fxmatrix:state:{inst}", HB(30))
+    for inst in pipshed.GRIND_C_STRIP_INSTANCES:
+        fake.set(f"fxmatrix:state:{inst}",
+                 HB(90 if inst == "GRIND_EURUSD_OPTC" else 30))
     pipshed.r = fake
     c = _fleet_by_letter(
         pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "C"
@@ -477,11 +485,9 @@ def check_fs10():
     import app as pipshed
 
     fake = FakeRedis()
-    for inst in GRIND_C_INSTANCES:
-        if inst == "GRIND_NZDCAD_OPTC":   # C119: a strip instance (the twin retired)
-            fake.set(f"fxmatrix:state:{inst}", HB(200))
-        else:
-            fake.set(f"fxmatrix:state:{inst}", HB(30))
+    for inst in pipshed.GRIND_C_STRIP_INSTANCES:
+        fake.set(f"fxmatrix:state:{inst}",
+                 HB(200 if inst == "GRIND_EURUSD_OPTC" else 30))
     pipshed.r = fake
     c = _fleet_by_letter(
         pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "C"
@@ -698,7 +704,7 @@ def check_fs20():
 
     fake = FakeRedis()
     _apply_fixture_fb2(fake)
-    for inst in GRIND_C_INSTANCES:
+    for inst in pipshed.GRIND_C_STRIP_INSTANCES:
         fake.set(f"fxmatrix:state:{inst}", HB(30))
     pipshed.r = fake
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
@@ -953,11 +959,11 @@ def _crit_rows_resolved():
     return {
         "generated_at": now.isoformat(),
         "rows": [
-            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "CRITICAL", "code": "INVARIANT_FAIL",
+            {"instance_id": "GRIND_AUDCAD_OPTC", "level": "CRITICAL", "code": "INVARIANT_FAIL",
              "count": 2, "first_at": "2026-09-28T16:27:38Z", "last_at": "2026-09-28T16:27:40Z"},
-            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "CRITICAL", "code": "QUARANTINE_HALT",
+            {"instance_id": "GRIND_AUDCAD_OPTC", "level": "CRITICAL", "code": "QUARANTINE_HALT",
              "count": 1, "first_at": "2026-09-28T16:27:38Z", "last_at": "2026-09-28T16:27:38Z"},
-            {"instance_id": "GRIND_GBPUSD_OPTC", "level": "WARN", "code": "QUARANTINE_ENTER",
+            {"instance_id": "GRIND_AUDCAD_OPTC", "level": "WARN", "code": "QUARANTINE_ENTER",
              "count": 12, "first_at": "2026-09-28T09:56:58Z", "last_at": "2026-09-28T16:59:00Z"},
             {"instance_id": "GRIND_EURUSD_OPTC", "level": "CRITICAL", "code": "STARTUP_EXIT_SHORTFALL_SIDE",
              "count": 1, "first_at": "2026-09-28T16:57:11Z", "last_at": "2026-09-28T16:57:11Z"},
@@ -965,10 +971,11 @@ def _crit_rows_resolved():
     }
 
 
-def _fleet_c_live(fake, gbpusd_hb):
-    for inst in GRIND_C_INSTANCES:
+def _fleet_c_live(fake, audcad_hb):
+    import app as pipshed
+    for inst in pipshed.GRIND_C_STRIP_INSTANCES:
         fake.set(f"fxmatrix:state:{inst}",
-                 gbpusd_hb if inst == "GRIND_GBPUSD_OPTC"
+                 audcad_hb if inst == "GRIND_AUDCAD_OPTC"
                  else HBB(30, account_login=53071896, invariant_ok=True))
     fake.set(DAILY_TABLE_KEY, json.dumps({"generated_at": now.isoformat(), "rows": _daily_rows_fb()}))
 
@@ -990,9 +997,9 @@ def check_fs31():
            if a.get("kind") == "EVENT"]            # the fixture's LEDGER alert is out of scope
     expected = [
         ("red", "STARTUP_EXIT_SHORTFALL_SIDE", "GRIND_EURUSD_OPTC"),
-        ("amber", "QUARANTINE_ENTER", "GRIND_GBPUSD_OPTC"),
-        ("resolved", "INVARIANT_FAIL", "GRIND_GBPUSD_OPTC"),
-        ("resolved", "QUARANTINE_HALT", "GRIND_GBPUSD_OPTC"),
+        ("amber", "QUARANTINE_ENTER", "GRIND_AUDCAD_OPTC"),
+        ("resolved", "INVARIANT_FAIL", "GRIND_AUDCAD_OPTC"),
+        ("resolved", "QUARANTINE_HALT", "GRIND_AUDCAD_OPTC"),
     ]
     if got != expected:
         raise AssertionError(f"expected {expected}, got {got}")
@@ -1010,7 +1017,7 @@ def check_fs32():
                             halt_reason="REBUILD_EXIT_FAILED", invariant_ok=True))
     c = _c_alerts(fake)
     got = [(a.get("level"), a.get("code")) for a in c.get("alerts") or []
-           if a.get("instance_id") == "GRIND_GBPUSD_OPTC"]
+           if a.get("instance_id") == "GRIND_AUDCAD_OPTC"]
     for want in (("red", "HALTED"), ("red", "INVARIANT_FAIL"), ("red", "QUARANTINE_HALT")):
         if want not in got:
             raise AssertionError(f"halted instance must keep {want}, got {got}")
@@ -1046,7 +1053,7 @@ def check_fs35():
     _fleet_c_live(fake, HBB(30, account_login=53071896, invariant_ok=False))
     c = _c_alerts(fake)
     got = [(a.get("level"), a.get("code")) for a in c.get("alerts") or []
-           if a.get("instance_id") == "GRIND_GBPUSD_OPTC"]
+           if a.get("instance_id") == "GRIND_AUDCAD_OPTC"]
     if ("red", "INVARIANT_FAIL") not in got or ("red", "QUARANTINE_HALT") not in got:
         raise AssertionError(f"invariant_ok false keeps halt events red, got {got}")
     # and a heartbeat with no invariant_ok key at all (older builds) stays red too
@@ -1054,7 +1061,7 @@ def check_fs35():
     _fleet_c_live(fake2, HBB(30, account_login=53071896))
     c2 = _c_alerts(fake2)
     got2 = [(a.get("level"), a.get("code")) for a in c2.get("alerts") or []
-            if a.get("instance_id") == "GRIND_GBPUSD_OPTC"]
+            if a.get("instance_id") == "GRIND_AUDCAD_OPTC"]
     if ("red", "INVARIANT_FAIL") not in got2:
         raise AssertionError(f"missing invariant_ok must not resolve, got {got2}")
     return "quarantined or unknown invariant state keeps halt events red"

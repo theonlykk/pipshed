@@ -109,7 +109,7 @@ def fixture():
         else:
             fake.set(f"fxmatrix:state:{inst}", plain)
     for inst in pipshed.GRIND_C_INSTANCES:
-        if inst == "GRIND_CADCHF_OPTC":
+        if inst == "GRIND_AUDCAD_OPTC":
             fake.set(f"fxmatrix:state:{inst}", state(
                 [o("BUY_LIMIT", 0.5795, "GRIND|OPT|S|L01|EXT")], CADCHF_SHORT, add=3.0, long_n=0, short_n=8,
                 extra={"add_pips_long": 3.0, "add_pips_short": 5.0}))
@@ -159,8 +159,8 @@ def sa1_short_uses_its_own_add(q):
     # max effective = 0.5827 (the rolled L0); + 5 pips = 0.5832; rolls left 7;
     # gap (0.5832 - 0.5795) / 0.0001 = 37.0. (C115 gave 0.5830 / 35.0.)
     w = want(bid=0.5795, bid_kind="exit", rolls_left_short=7, virtual_offer=0.5832, virtual_gap_pips=37.0)
-    got = cell(q, "CADCHF", "C")
-    check("SA1", got == w, f"CADCHF C {got}")
+    got = cell(q, "AUDCAD", "C")
+    check("SA1", got == w, f"AUDCAD C {got}")
 
 
 def sa2_long_uses_its_own_add(q):

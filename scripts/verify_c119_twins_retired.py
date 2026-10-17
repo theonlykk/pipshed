@@ -34,8 +34,29 @@ _spec.loader.exec_module(fs)
 TOKEN = fs.TOKEN
 TWINS = {f"GRIND_{p}_ALT{f}" for p in ("AUDNZD", "NZDCAD") for f in "BCD"}
 CYCLE3 = {"GRIND_AUDNZD_ALT", "GRIND_NZDCAD_ALT", "GRIND_AUDCAD_OPT", "GRIND_NZDCHF_OPT"}
+TWOARM = {
+    "GRIND_NZDCHF_OPTD", "GRIND_NZDCAD_OPTD", "GRIND_AUDNZD_OPTD",
+    "GRIND_GBPUSD_OPTC", "GRIND_EURGBP_OPTC", "GRIND_AUDCHF_OPTC",
+    "GRIND_CADCHF_OPTC", "GRIND_NZDCHF_OPTC", "GRIND_NZDCAD_OPTC", "GRIND_AUDNZD_OPTC",
+}
 PAIRS = ["GBPUSD", "EURUSD", "EURGBP", "AUDCAD", "AUDCHF", "CADCHF", "NZDCHF", "NZDCAD", "AUDNZD"]
 LOGIN = {"B": 53066709, "C": 53071896, "D": 53077984}
+STRIP_B = [f"GRIND_{p}_OPTB" for p in PAIRS]
+STRIP_C = [
+    "GRIND_EURUSD_OPTC", "GRIND_AUDCAD_OPTC", "GRIND_EURUSD_ALTC", "GRIND_AUDCAD_ALTC",
+    "GRIND_GBPCHF_OPTC", "GRIND_GBPCHF_ALTC",
+]
+STRIP_D = [
+    "GRIND_GBPUSD_OPTD", "GRIND_EURUSD_OPTD", "GRIND_EURGBP_OPTD", "GRIND_AUDCAD_OPTD",
+    "GRIND_AUDCHF_OPTD", "GRIND_CADCHF_OPTD", "GRIND_GBPUSD_ALTD", "GRIND_EURUSD_ALTD",
+    "GRIND_EURGBP_ALTD", "GRIND_AUDCAD_ALTD", "GRIND_AUDCHF_ALTD", "GRIND_CADCHF_ALTD",
+]
+STRIPS = {"B": STRIP_B, "C": STRIP_C, "D": STRIP_D}
+STRIP_COUNTS = {"B": 9, "C": 6, "D": 12}
+BOOK_ROWS = [
+    "GBPUSD", "EURUSD", "EURGBP", "AUDCHF", "CADCHF", "NZDCAD", "AUDNZD", "AUDCAD", "NZDCHF",
+    "EURUSD*", "AUDCAD*", "GBPCHF", "GBPCHF*", "GBPUSD*", "EURGBP*", "AUDCHF*", "CADCHF*",
+]
 
 
 def _strip(fake):
@@ -48,8 +69,8 @@ def _strip(fake):
 def _fake_all_ic(include_twins):
     fake = fs.FakeRedis()
     for letter in "BCD":
-        for p in PAIRS:
-            fake.set(f"fxmatrix:state:GRIND_{p}_OPT{letter}", fs.HB(30, account_login=LOGIN[letter]))
+        for inst in STRIPS[letter]:
+            fake.set(f"fxmatrix:state:{inst}", fs.HB(30, account_login=LOGIN[letter]))
         if include_twins:
             for p in ("AUDNZD", "NZDCAD"):
                 fake.set(f"fxmatrix:state:GRIND_{p}_ALT{letter}", fs.HB(30, account_login=LOGIN[letter]))
@@ -60,31 +81,30 @@ def check_tr1():
     import app as pipshed
 
     got = set(pipshed.GRIND_RETIRED_INSTANCES)
-    if got != CYCLE3 | TWINS:
-        raise AssertionError(f"retired must be cycle 3's four + the six twins, got {sorted(got)}")
-    return "GRIND_RETIRED_INSTANCES = 4 + 6"
+    if got != CYCLE3 | TWINS | TWOARM:
+        raise AssertionError(f"retired must be cycle 3 + twins + two-arm ten, got {sorted(got)}")
+    return "GRIND_RETIRED_INSTANCES = 20"
 
 
 def check_tr2():
     import app as pipshed
 
     for entry in pipshed.FLEET_STRIP:
-        if entry["letter"] in "BCD":
-            want = [f"GRIND_{p}_OPT{entry['letter']}" for p in PAIRS]
-            if list(entry["instances"]) != want:
-                raise AssertionError(f"{entry['letter']} strip must be the nine _OPT ids, got {entry['instances']}")
-    return "B, C, D strips = the nine _OPT ids, pair order kept"
+        if entry["letter"] in STRIPS:
+            if list(entry["instances"]) != STRIPS[entry["letter"]]:
+                raise AssertionError(f"{entry['letter']} strip mismatch: {entry['instances']}")
+    return "B, C, D strips match two-arm lists"
 
 
 def check_tr3():
-    # all nine OPT reporting and the twins silent: LIVE 9/9 on B, C and D
     data = _strip(_fake_all_ic(include_twins=False))
     for letter in "BCD":
         card = fs._fleet_by_letter(data, letter)
         h = card.get("health") or {}
-        if card.get("badge") != "LIVE" or h.get("instances_total") != 9 or h.get("instances_live") != 9:
-            raise AssertionError(f"{letter}: LIVE 9/9 expected, got {card.get('badge')}, {h}")
-    return "twins silent: B, C, D LIVE 9/9 (not PARTIAL)"
+        n = STRIP_COUNTS[letter]
+        if card.get("badge") != "LIVE" or h.get("instances_total") != n or h.get("instances_live") != n:
+            raise AssertionError(f"{letter}: LIVE {n}/{n} expected, got {card.get('badge')}, {h}")
+    return "strip instances live: B 9/9, C 6/6, D 12/12"
 
 
 def check_tr4():
@@ -92,32 +112,34 @@ def check_tr4():
     data = _strip(_fake_all_ic(include_twins=True))
     h = fs._fleet_by_letter(data, "B").get("health") or {}
     if h.get("instances_total") != 9 or h.get("instances_live") != 9:
-        raise AssertionError(f"B counts only its nine: got {h}")
+        raise AssertionError(f"B counts only its strip nine: got {h}")
     return "a twin heartbeat is not counted on the strip"
 
 
 def check_tr5():
     data = _strip(_fake_all_ic(include_twins=True))
     rows = [r["pair"] for r in (data.get("books") or {}).get("rows", [])]
-    starred = [p for p in rows if p.endswith("*")]
-    if starred or set(rows) != set(PAIRS):
-        raise AssertionError(f"books rows must be the nine pairs, no twin rows: {rows}")
+    if rows != BOOK_ROWS:
+        raise AssertionError(f"books rows must be TA10 order (17), got {rows}")
     for key in ("gaps", "quotes"):
         prow = [r["pair"] for r in (data.get(key) or {}).get("rows", [])]
-        if any(p.endswith("*") for p in prow):
-            raise AssertionError(f"{key} still has a twin row: {prow}")
-    return "books, gaps, quotes: nine rows, no AUDNZD* / NZDCAD*"
+        if prow != BOOK_ROWS:
+            raise AssertionError(f"{key} rows must match books (17): {prow}")
+        if any(p in ("AUDNZD*", "NZDCAD*") for p in prow):
+            raise AssertionError(f"{key} must not list retired IC twin rows: {prow}")
+    return "books, gaps, quotes: seventeen rows including ALT arms"
 
 
 def check_tr6():
     """GUARD: each fleet's own page keeps its full eleven-id list."""
     import app as pipshed
 
+    want_len = {"B": 11, "C": 15, "D": 17}
     for letter, lst in (("B", pipshed.GRIND_B_INSTANCES), ("C", pipshed.GRIND_C_INSTANCES),
                         ("D", pipshed.GRIND_D_INSTANCES)):
-        if len(lst) != 11 or not {f"GRIND_AUDNZD_ALT{letter}", f"GRIND_NZDCAD_ALT{letter}"} <= set(lst):
-            raise AssertionError(f"{letter} page list must stay eleven with its twins")
-    return "fleet pages keep eleven tiles"
+        if len(lst) != want_len[letter]:
+            raise AssertionError(f"{letter} page list len {want_len[letter]}, got {len(lst)}")
+    return "fleet pages: B 11, C 15, D 17 tiles"
 
 
 CHECKS = [("TR1", check_tr1), ("TR2", check_tr2), ("TR3", check_tr3),

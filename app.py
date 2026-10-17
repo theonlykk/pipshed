@@ -118,6 +118,10 @@ GRIND_C_INSTANCES = [
     "GRIND_AUDNZD_OPTC",
     "GRIND_AUDNZD_ALTC",
     "GRIND_NZDCAD_ALTC",
+    "GRIND_EURUSD_ALTC",
+    "GRIND_AUDCAD_ALTC",
+    "GRIND_GBPCHF_OPTC",
+    "GRIND_GBPCHF_ALTC",
 ]
 
 GRIND_D_INSTANCES = [
@@ -132,6 +136,27 @@ GRIND_D_INSTANCES = [
     "GRIND_AUDNZD_OPTD",
     "GRIND_AUDNZD_ALTD",
     "GRIND_NZDCAD_ALTD",
+    "GRIND_GBPUSD_ALTD",
+    "GRIND_EURUSD_ALTD",
+    "GRIND_EURGBP_ALTD",
+    "GRIND_AUDCAD_ALTD",
+    "GRIND_AUDCHF_ALTD",
+    "GRIND_CADCHF_ALTD",
+]
+
+GRIND_E_INSTANCES = [
+    "GRIND_GBPUSD_OPTE",
+    "GRIND_GBPUSD_ALTE",
+    "GRIND_EURUSD_OPTE",
+    "GRIND_EURUSD_ALTE",
+    "GRIND_EURGBP_OPTE",
+    "GRIND_EURGBP_ALTE",
+    "GRIND_AUDCAD_OPTE",
+    "GRIND_AUDCAD_ALTE",
+    "GRIND_AUDCHF_OPTE",
+    "GRIND_AUDCHF_ALTE",
+    "GRIND_CADCHF_OPTE",
+    "GRIND_CADCHF_ALTE",
 ]
 
 # Cycle 3 (FTMO 1514731800) runs the seven-pair ring since 2 Oct 2026
@@ -154,6 +179,17 @@ GRIND_RETIRED_INSTANCES = frozenset({
     "GRIND_NZDCAD_ALTC",
     "GRIND_AUDNZD_ALTD",
     "GRIND_NZDCAD_ALTD",
+    # Two-arm build (fxmatrix fleet D note s10); deploy after the charts change.
+    "GRIND_NZDCHF_OPTD",
+    "GRIND_NZDCAD_OPTD",
+    "GRIND_AUDNZD_OPTD",
+    "GRIND_GBPUSD_OPTC",
+    "GRIND_EURGBP_OPTC",
+    "GRIND_AUDCHF_OPTC",
+    "GRIND_CADCHF_OPTC",
+    "GRIND_NZDCHF_OPTC",
+    "GRIND_NZDCAD_OPTC",
+    "GRIND_AUDNZD_OPTC",
 })
 RETIRED_RESOLVED_NOTE = "resolved: instance retired"
 
@@ -172,6 +208,7 @@ GRIND_A_STRIP_INSTANCES = [
 GRIND_B_STRIP_INSTANCES = [i for i in GRIND_B_INSTANCES if i not in GRIND_RETIRED_INSTANCES]
 GRIND_C_STRIP_INSTANCES = [i for i in GRIND_C_INSTANCES if i not in GRIND_RETIRED_INSTANCES]
 GRIND_D_STRIP_INSTANCES = [i for i in GRIND_D_INSTANCES if i not in GRIND_RETIRED_INSTANCES]
+GRIND_E_STRIP_INSTANCES = [i for i in GRIND_E_INSTANCES if i not in GRIND_RETIRED_INSTANCES]
 
 FLEET_STRIP = [
     {
@@ -227,6 +264,21 @@ FLEET_STRIP = [
         "placeholder": False,
         "built": True,
     },
+    {
+        # New FTMO demo on a new Linux + wine server; flip placeholder and built,
+        # and set cycle_start and the account's commission (sr_table.py), when it attaches.
+        "letter": "E",
+        "name": "Fleet E (FTMO two-arm)",
+        "broker": "FTMO",
+        "url": "https://linuxe.pipshed.com",
+        "instances": GRIND_E_STRIP_INSTANCES,
+        "lattice": True,
+        "daily_loss_limit_usd": 500.0,
+        "cycle_start": "2026-10-21",
+        "start_balance": 10000.0,
+        "placeholder": True,
+        "built": False,
+    },
 ]
 FLEET_STRIP_STALE_S = 180
 
@@ -236,6 +288,7 @@ GRIND_FLEET_INSTANCES = {
     "B": GRIND_B_INSTANCES,
     "C": GRIND_C_INSTANCES,
     "D": GRIND_D_INSTANCES,
+    "E": GRIND_E_INSTANCES,
 }
 if _grind_fleet_raw not in GRIND_FLEET_INSTANCES:
     logging.getLogger(__name__).warning(
@@ -255,7 +308,7 @@ def _grind_slot(inst):
     if len(parts) < 3:
         return ""
     slot = parts[2]
-    if slot in ("OPTB", "ALTB", "OPTC", "ALTC", "OPTD", "ALTD"):
+    if slot in ("OPTB", "ALTB", "OPTC", "ALTC", "OPTD", "ALTD", "OPTE", "ALTE"):
         return slot[:-1]
     return slot
 
@@ -2083,9 +2136,17 @@ GRIND_RINGS = {
         "label": "NZD extension",
         "symbols": ["NZDCAD", "AUDNZD"],
     },
+    # C's each-currency-once set includes GBPCHF (two-arm build).
+    "gbpchf": {
+        "label": "GBPCHF",
+        "symbols": ["GBPCHF"],
+    },
 }
 
-GRIND_DEFAULT_INSTANCE = GRIND_INSTANCES[0]
+GRIND_DEFAULT_INSTANCE = next(
+    (i for i in GRIND_INSTANCES if i not in GRIND_RETIRED_INSTANCES),
+    GRIND_INSTANCES[0] if GRIND_INSTANCES else None,
+)
 
 PUBLIC_GRIND_STATUS_TOKEN = "k7m9p2x4q"
 

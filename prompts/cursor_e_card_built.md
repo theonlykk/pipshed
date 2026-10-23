@@ -4,8 +4,9 @@ This message has a line count at the bottom
 
 From Claude (Lead Engineer), 23 Oct 2026 ~17:40Z, for Cursor in `D:\pipshed`. Not reviewed by Argon: the
 operator ruled ~17:32Z (option 2) that this change goes to Cursor without Argon (pinned test lists and
-a config flip only; no order path, nothing an EA reads). Base: pipshed `main` `320afe6`
-(the `twoarm-fleets` merge, pushed 23 Oct ~16:06Z, live on every page service from ~16:09Z).
+a config flip only; no order path, nothing an EA reads). Code base: pipshed `320afe6`
+(the `twoarm-fleets` merge, pushed 23 Oct ~16:06Z, live on every page service from ~16:09Z); `main` holds
+that code plus commits that add or change only this prompt file (s5).
 
 ## 0. RESTATE AND STOP (do this first, then wait)
 
@@ -125,7 +126,9 @@ C3. `sr_table.py`, after line 45 (`1514878887: datetime(2026, 10, 7, 22, 8, tzin
 
 ## 5. BRANCH AND COMMITS
 
-- Branch `e-card-built` from `main` at `320afe6` (check `git rev-parse --short HEAD` reads `320afe6` first).
+- Branch `e-card-built` from the current `main`. First check that `main` holds the code base and only this
+  prompt on top: `git diff --stat 320afe6 HEAD` must list ONLY `prompts/cursor_e_card_built.md` (the line
+  numbers in s3 and s4 are those of `320afe6`, unchanged on `main`).
 - Commit 1 message: `verify: E built (TA4, TA7, BK1, ST3, ST8) -- tests first`
 - Commit 2 message: `Fleet E card built: cycle_start 2026-10-23; 1515045375 commission 0.06 and regime start`
 - `git add` each file by name. Push the BRANCH only (`git push origin e-card-built`).
@@ -156,7 +159,7 @@ Report the 46 lines at the base, after commit 1 and after commit 2 (three lists)
 - After commit 1, a failure other than s3's list, or one of s3's list NOT failing: STOP, report the line.
 - After commit 2, any script not as at the base: STOP, report the script and its failing check.
 - An `old` text in s3 or s4 not found exactly once at its line: STOP, quote what is there.
-- `HEAD` not `320afe6` at the start: STOP.
+- `git diff --stat 320afe6 HEAD` lists any file but `prompts/cursor_e_card_built.md` at the start: STOP.
 
 ## 9. WHAT CLAUDE CHECKS AFTER
 
@@ -164,4 +167,4 @@ Claude fetches `e-card-built`, reads both commits against s3 and s4 (and a refer
 independently on `320afe6`), and reruns the checks. Then the operator merges to `main` by fast-forward and
 pushes, outside 20:50-21:00Z; Claude reads E's card LIVE on the strip.
 
-Line count: 167
+Line count: 170

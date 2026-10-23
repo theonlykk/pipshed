@@ -152,7 +152,7 @@ def strip_books():
 
 
 def bk1_shape_and_order(books):
-    want_fleets = ["A", "B", "C", "D"]
+    want_fleets = ["A", "B", "C", "D", "E"]
     # first appearance across A's seven, then B's list order (hand-written)
     want_rows = ["GBPUSD", "EURUSD", "EURGBP", "AUDCHF", "CADCHF", "NZDCAD",
                  "AUDNZD", "AUDCAD", "NZDCHF",

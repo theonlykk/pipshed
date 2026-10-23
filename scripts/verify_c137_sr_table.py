@@ -208,7 +208,8 @@ def check_st3():
             raise AssertionError(f"at {now}: expected today {t0}-{t1}, d5 from {d0}; got {w}")
     starts = st.REGIME_START_BY_ACCOUNT
     want = {53066709: T("2026-10-07 02:25:00"), 53071896: T("2026-10-07 02:25:00"),
-            53077984: T("2026-10-07 02:25:00"), 1514878887: T("2026-10-07 22:08:00")}
+            53077984: T("2026-10-07 02:25:00"), 1514878887: T("2026-10-07 22:08:00"),
+            1515045375: T("2026-10-23 03:04:00")}
     if starts != want:
         raise AssertionError(f"regime starts: expected {want}, got {starts}")
     return ("today = the FTMO day (22:00Z in summer); d5 = the last five weekday FTMO days "
@@ -430,7 +431,7 @@ def check_st8():
     pipshed.r = _strip_fixture()
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets/1").get_json() or {}
     sr = data.get("scalps_per_roll")
-    if not sr or sr.get("available") is not True or sr.get("fleets") != ["A", "B", "C", "D"]:
+    if not sr or sr.get("available") is not True or sr.get("fleets") != ["A", "B", "C", "D", "E"]:
         raise AssertionError(f"strip scalps_per_roll: {str(sr)[:300]}")
     b = _find(sr["rows"]["B"], "GRIND_GBPUSD_OPTB", "L")
     want_geo = {"cap": 8, "add": 9.0, "exit": 10.0}

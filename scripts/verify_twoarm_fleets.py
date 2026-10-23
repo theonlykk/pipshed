@@ -227,10 +227,10 @@ E_FLEET_ENTRY = {
     "url": "https://linuxe.pipshed.com",
     "lattice": True,
     "daily_loss_limit_usd": 500.0,
-    "cycle_start": "2026-10-21",
+    "cycle_start": "2026-10-23",
     "start_balance": 10000.0,
-    "placeholder": True,
-    "built": False,
+    "placeholder": False,
+    "built": True,
 }
 
 
@@ -345,7 +345,7 @@ def check_ta4():
     got = {k: e.get(k) for k in want}
     if got != want:
         raise AssertionError(f"E entry {got} != {want}")
-    return "five fleets; E placeholder fields"
+    return "five fleets; E built fields"
 
 
 def check_ta5():
@@ -384,14 +384,14 @@ def check_ta7():
     if len(cards) != 5:
         raise AssertionError(f"expected 5 cards, got {len(cards)}")
     e = next(c for c in cards if c.get("letter") == "E")
-    if not e.get("placeholder") or e.get("badge") != "NOT BUILT":
+    if e.get("placeholder") or e.get("badge") == "NOT BUILT":
         raise AssertionError(f"E card {e.get('badge')} placeholder={e.get('placeholder')}")
     if e.get("url") != "https://linuxe.pipshed.com":
         raise AssertionError(f"E url {e.get('url')}")
     books = data.get("books") or {}
-    if books.get("fleets") != ["A", "B", "C", "D"]:
+    if books.get("fleets") != ["A", "B", "C", "D", "E"]:
         raise AssertionError(f"books fleets {books.get('fleets')}")
-    return "five cards; E NOT BUILT; books ABCD"
+    return "five cards; E built; books ABCDE"
 
 
 def check_ta8():

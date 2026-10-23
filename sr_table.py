@@ -27,6 +27,7 @@ D5_DAYS = 5
 COMMISSION_PER_CLOSE_BY_ACCOUNT = {
     1514731800: 0.06,   # FTMO cycle 3
     1514878887: 0.06,   # FTMO-IC trial from 7 Oct 22:08Z (card 7 Oct: 84 closes, -$5.04)
+    1515045375: 0.06,   # FTMO trial, Fleet E (wine-e) from 23 Oct 03:04Z: FTMO's measured rate, to check on its ledger
     53066709: 0.08,     # IC Fleet B (box 1)
     53071896: 0.08,     # IC Fleet C (box 2)
     53077984: 0.08,     # IC Fleet D (wine-d): same Raw account type, checked on its ledger
@@ -43,6 +44,7 @@ REGIME_START_BY_ACCOUNT = {
     53071896: datetime(2026, 10, 7, 2, 25, tzinfo=timezone.utc),
     53077984: datetime(2026, 10, 7, 2, 25, tzinfo=timezone.utc),
     1514878887: datetime(2026, 10, 7, 22, 8, tzinfo=timezone.utc),
+    1515045375: datetime(2026, 10, 23, 3, 4, tzinfo=timezone.utc),
 }
 
 

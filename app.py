@@ -265,8 +265,8 @@ FLEET_STRIP = [
         "built": True,
     },
     {
-        # New FTMO demo on a new Linux + wine server; flip placeholder and built,
-        # and set cycle_start and the account's commission (sr_table.py), when it attaches.
+        # FTMO free trial 1515045375 on wine-e; twelve charts attached 23 Oct
+        # 03:04-03:25Z (fxmatrix HANDOFF s88 continued 5), first fill 03:29:01Z.
         "letter": "E",
         "name": "Fleet E (FTMO two-arm)",
         "broker": "FTMO",
@@ -274,10 +274,10 @@ FLEET_STRIP = [
         "instances": GRIND_E_STRIP_INSTANCES,
         "lattice": True,
         "daily_loss_limit_usd": 500.0,
-        "cycle_start": "2026-10-21",
+        "cycle_start": "2026-10-23",
         "start_balance": 10000.0,
-        "placeholder": True,
-        "built": False,
+        "placeholder": False,
+        "built": True,
     },
 ]
 FLEET_STRIP_STALE_S = 180

@@ -68,6 +68,7 @@ URL = os.environ.get("VERIFY_DATABASE_URL")
 UTC = timezone.utc
 NOW = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)   # Thursday; FTMO day 2026-10-08
 B_ACC, C_ACC, A_OLD, A_NEW = 53066709, 53071896, 1514731800, 1514878887
+E_ACC = 1515045375   # FTMO trial, Fleet E (C158: the strip's FTMO case since A's card retired)
 
 
 def T(text):
@@ -407,13 +408,26 @@ def _hb(inst, account, cap, add_l, add_s, exit_l, exit_s, **extra):
     return json.dumps(payload)
 
 
+# the strip's FTMO case (C158): E's GBPUSD long closes as A's a3-a5 on A_NEW, on E's account
+E_STRIP_ROWS = [
+    ("e3", "GRIND_GBPUSD_OPTE", E_ACC, "LONG", 1.3400, 1.3410, 1.00, "2026-10-07 23:00:00", False, False),
+    ("e4", "GRIND_GBPUSD_OPTE", E_ACC, "LONG", 1.3400, 1.3380, -2.00, "2026-10-08 01:00:00", False, True),
+    ("e5", "GRIND_GBPUSD_OPTE", E_ACC, "LONG", 1.3400, 1.3338, -6.20, "2026-10-08 02:00:00", True, False),
+]
+
+
 def _strip_fixture(built_at=None):
     import sr_table as st
     fake = fs.FakeRedis()
     fake.set("fxmatrix:state:GRIND_GBPUSD_OPTB", _hb("GRIND_GBPUSD_OPTB", B_ACC, 8, 9.0, 9.0, 10.0, 10.0))
+    # A still posts and the worker's table still holds a1-a5; A is off the strip (C158)
     fake.set("fxmatrix:state:GRIND_GBPUSD_OPT", _hb("GRIND_GBPUSD_OPT", A_NEW, 8, 9.0, 9.0, 10.0, 10.0))
+    fake.set("fxmatrix:state:GRIND_GBPUSD_OPTE", _hb("GRIND_GBPUSD_OPTE", E_ACC, 8, 9.0, 9.0, 10.0, 10.0))
     fake.set("fxmatrix:state:GRIND_EURUSD_OPTC", _hb("GRIND_EURUSD_OPTC", C_ACC, 8, 7.0, 6.0, 10.0, 10.0))
-    payload = st.aggregate(pure_rows(), pure_rolls(), NOW)
+    e_rows = [{"instance_id": inst, "account_login": acc, "direction": d, "entry_price": ep,
+               "exit_price": xp, "gross_pnl": g, "close_utc": T(t), "rolled": rolled, "ejected": ejected}
+              for _k, inst, acc, d, ep, xp, g, t, rolled, ejected in E_STRIP_ROWS]
+    payload = st.aggregate(pure_rows() + e_rows, pure_rolls(), NOW)
     payload["built_at"] = (built_at or fs.now).strftime("%Y-%m-%dT%H:%M:%SZ")
     fake.set(st.SR_TABLE_KEY, json.dumps(payload))
     return fake
@@ -431,7 +445,8 @@ def check_st8():
     pipshed.r = _strip_fixture()
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets/1").get_json() or {}
     sr = data.get("scalps_per_roll")
-    if not sr or sr.get("available") is not True or sr.get("fleets") != ["A", "B", "C", "D", "E"]:
+    if not sr or sr.get("available") is not True or sr.get("fleets") != ["B", "C", "D", "E"] \
+            or "A" in (sr.get("rows") or {}):
         raise AssertionError(f"strip scalps_per_roll: {str(sr)[:300]}")
     b = _find(sr["rows"]["B"], "GRIND_GBPUSD_OPTB", "L")
     want_geo = {"cap": 8, "add": 9.0, "exit": 10.0}
@@ -446,10 +461,12 @@ def check_st8():
     c = _find(sr["rows"]["C"], "GRIND_EURUSD_OPTC", "S")
     if not c or c.get("geometry") != {"cap": 8, "add": 6.0, "exit": 10.0} or c["today"].get("k_star") != 4.22:
         raise AssertionError(f"C EURUSD short uses its own add (6): {c}")
-    # A: 1514878887 at 0.06 a close: c = 0.6, k* = (72 - 10 + 0.6) / 9.4 = 6.6596
-    a = _find(sr["rows"]["A"], "GRIND_GBPUSD_OPT", "L")
-    if not a or a["today"].get("k_star") != 6.66 or a["today"].get("E") != 1:
-        raise AssertionError(f"A GBPUSD long on the new account: {a}")
+    # E: 1515045375 at 0.06 a close: c = 0.6, k* = (72 - 10 + 0.6) / 9.4 = 6.6596;
+    # e4 ejected on a non-cycle-3 account -> E 1
+    e = _find(sr["rows"]["E"], "GRIND_GBPUSD_OPTE", "L")
+    if not e or e["today"].get("k_star") != 6.66 or e["today"].get("E") != 1 \
+            or e["today"].get("c_pips") != 0.6:
+        raise AssertionError(f"E GBPUSD long on FTMO 1515045375: {e}")
     # every strip instance has both sides, zero rows where nothing closed
     achf = _find(sr["rows"]["D"], "GRIND_AUDCHF_OPTD", "S")
     if not achf or achf["today"].get("S") != 0 or achf["today"].get("grey") is not True \
@@ -507,9 +524,12 @@ def check_st10():
     if want not in lines or any(not ln.startswith("B,") for ln in lines[1:]) \
             or any(",d5," not in ln for ln in lines[1:]) or len(lines) != 1 + 18:
         raise AssertionError(f"CSV rows for B, d5 (9 pairs x 2 sides): {lines[:4]} ... {len(lines)}")
-    one = client.get(f"/api/g/{TOKEN}/sr/x?format=csv&instance=GRIND_GBPUSD_OPT").get_data(as_text=True)
+    one = client.get(f"/api/g/{TOKEN}/sr/x?format=csv&instance=GRIND_GBPUSD_OPTE").get_data(as_text=True)
     if len([ln for ln in one.splitlines() if ln]) != 1 + 2 * 3:
         raise AssertionError(f"instance filter: 2 sides x 3 windows; got {one.splitlines()[:3]}")
+    gone = client.get(f"/api/g/{TOKEN}/sr/x?format=csv&instance=GRIND_GBPUSD_OPT").get_data(as_text=True)
+    if len([ln for ln in gone.splitlines() if ln]) != 1:
+        raise AssertionError(f"A retired (C158): its instance exports the header only; got {gone.splitlines()[:3]}")
     if client.get("/api/g/wrong/sr/x").status_code != 404:
         raise AssertionError("a wrong token must 404")
     return "/api/g/<token>/sr exports JSON or CSV, filtered by fleet, instance and window"
@@ -518,16 +538,15 @@ def check_st10():
 def check_st11():
     import app as pipshed
     import sr_table as st
-    a = next(e for e in pipshed.FLEET_STRIP if e["letter"] == "A")
-    want = {"name": "FTMO-IC 1514878887", "lattice": True, "cycle_start": "2026-10-08"}
-    got = {k: a.get(k) for k in want}
-    if got != want:
-        raise AssertionError(f"A: expected {want}, got {got}")
+    letters = [e["letter"] for e in pipshed.FLEET_STRIP]
+    if "A" in letters:
+        raise AssertionError(f"C158: A's card retired, strip letters {letters}")
     rates = pipshed.COMMISSION_PER_CLOSE_BY_ACCOUNT
     if rates is not st.COMMISSION_PER_CLOSE_BY_ACCOUNT or rates.get(1514878887) != 0.06 \
-            or rates.get(1514731800) != 0.06 or rates.get(53066709) != 0.08:
-        raise AssertionError(f"one commission table (app re-exports sr_table's) with 1514878887 at 0.06: {rates}")
-    return "A = FTMO-IC 1514878887: lattice on, cycle from 8 Oct, commission 0.06 a close"
+            or rates.get(1514731800) != 0.06 or rates.get(53066709) != 0.08 \
+            or rates.get(1515045375) != 0.06:
+        raise AssertionError(f"one commission table (app re-exports sr_table's); A's accounts kept at 0.06: {rates}")
+    return "A off the strip; commission table keeps 1514878887 and 1514731800 at 0.06 (history), E 0.06"
 
 
 def check_st12():

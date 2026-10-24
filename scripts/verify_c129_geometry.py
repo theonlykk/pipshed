@@ -112,19 +112,21 @@ SPECIAL = {
     "GRIND_GBPUSD_OPTD": hb(2.5, 9.0, 9.0, sides=((2.5, 2.5), (9.0, 9.0), (9.0, 9.0))),
     "GRIND_NZDCAD_OPTD": hb(2.0, 8.0, 10.0, cap=10, sides=((2.0, 2.0), (8.0, 8.0), (10.0, 10.0))),
     "GRIND_NZDCHF_OPTD": hb(1.0, 3.0, 9.0, sides=((1.0, 1.0), (3.0, 3.0), (9.0, 9.0))),
-    # A (FTMO, aa6970a): no per-side keys
-    "GRIND_GBPUSD_OPT": hb(5.0, 10.0, 10.0),
+    # E (FTMO two-arm; the no-per-side case, moved from A when A's card retired, C158)
+    "GRIND_GBPUSD_OPTE": hb(5.0, 10.0, 10.0),
 }
 ABSENT = {"GRIND_NZDCHF_OPTB", "GRIND_NZDCHF_OPTC"}
 
 
 def fixture():
     fake = FakeRedis()
-    for letter in ("A", "B", "C", "D"):
+    for letter in ("B", "C", "D", "E"):
         for inst in strip(letter):
             if inst in ABSENT:
                 continue
             fake.set(f"fxmatrix:state:{inst}", SPECIAL.get(inst, hb(5.0, 6.0, 10.0)))
+    # A's GBPUSD still posts; A is off the strip (C158), so it has no cell (GT3)
+    fake.set("fxmatrix:state:GRIND_GBPUSD_OPT", hb(5.0, 10.0, 10.0))
     return fake
 
 
@@ -166,12 +168,14 @@ def gt2_sides_differ(g):
 
 
 def gt3_ftmo_base_values(g):
-    # A sends only width_pips / add_pips / exit_pips (5 / 10 / 10): both sides from the base;
-    # against B (2.5 / 9 / 10) width and add differ on both sides, exit does not
-    a = cell(g, "GBPUSD", "A")
-    wa = live(8, (5.0, 5.0), (10.0, 10.0), (10.0, 10.0),
+    # E's GBPUSD here sends only width_pips / add_pips / exit_pips (5 / 10 / 10): both sides
+    # from the base; against B (2.5 / 9 / 10) width and add differ on both sides, exit does
+    # not. A's GBPUSD posts the same and has no cell (A retired, C158).
+    e = cell(g, "GBPUSD", "E")
+    we = live(8, (5.0, 5.0), (10.0, 10.0), (10.0, 10.0),
               ["add_long", "add_short", "width_long", "width_short"])
-    check("GT3", a == wa, f"GBPUSD A {a}")
+    a = cell(g, "GBPUSD", "A")
+    check("GT3", e == we and a == "MISSING", f"GBPUSD E {e}; A {a}")
 
 
 def gt4_exit_probe_and_cap(g):
@@ -183,13 +187,13 @@ def gt4_exit_probe_and_cap(g):
 
 def gt5_not_live_absent_no_anchor(g):
     # NZDCHF: B and C silent -> {"live": false}; D live with no anchor to compare -> vs_anchor null;
-    # AUDCAD on A: A has no such instance -> null
+    # GBPCHF on B: B has no such instance -> null
     nb = cell(g, "NZDCHF", "B")
     nc = cell(g, "NZDCHF", "C")
     nd = cell(g, "NZDCHF", "D")
     wd = live(8, (1.0, 1.0), (3.0, 3.0), (9.0, 9.0), None)
-    ok = nb == {"live": False} and nc is None and nd is None and cell(g, "AUDCAD", "A") is None
-    check("GT5", ok, f"NZDCHF B {nb}; C {nc}; D {nd}; AUDCAD A {cell(g, 'AUDCAD', 'A')}")
+    ok = nb == {"live": False} and nc is None and nd is None and cell(g, "GBPCHF", "B") is None
+    check("GT5", ok, f"NZDCHF B {nb}; C {nc}; D {nd}; GBPCHF B {cell(g, 'GBPCHF', 'B')}")
 
 
 def gt6_zero_side_falls_back_and_order(g, books):

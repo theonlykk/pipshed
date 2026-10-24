@@ -10,8 +10,8 @@ Rule (C113):
    reads, no new poll):
    - `fleets`: the strip's letters in order, placeholders left out;
    - `rows`: one per pair in order of first appearance across the
-     strip's instance lists (A, B, C, D); a twin (`_ALT*` slot) is its own
-     row, `PAIR*`;
+     strip's instance lists (B, C, D, E since A's card retired, C158); a
+     twin (`_ALT*` slot) is its own row, `PAIR*`;
    - each row's `cells[letter]`: null when that fleet has no such
      instance; `{"live": false}` when it is listed but not reporting;
      else `{"live": true, "long", "short", "net" = long - short, "mtm",
@@ -19,7 +19,7 @@ Rule (C113):
      8 when absent), clamped to [-1, 1], 3 decimals;
    - `totals[letter]`: long, short, net, mtm (2 dp) and live count over the
      live cells only.
-   Retired instances never appear (A lists its strip seven).
+   Retired instances never appear; A (closed 21 Oct) has no column (C158).
 2. Page: `<div id="fleetBooks">` directly after the fleet strip, drawn by
    `renderFleetBooks(data.books)` from `fetchFleetStrip`, beside
    `renderFleetStrip` (no new setInterval or pollNoOverlap; renderFleetStrip
@@ -115,7 +115,8 @@ def fixture():
     fake = FakeRedis()
     for inst, (l, s, m) in B_BOOK.items():
         fake.set(f"fxmatrix:state:{inst}", state(l, s, m))
-    # A: the seven, simple values
+    # A: the seven still post in this fixture; A is off the strip (C158), so
+    # none of them may reach the books (BK5)
     for k, inst in enumerate(pipshed.GRIND_A_STRIP_INSTANCES):
         fake.set(f"fxmatrix:state:{inst}", state(k, 7 - k, -1.0 * k))
     # C: every instance live except NZDCHF (not reporting)
@@ -152,10 +153,12 @@ def strip_books():
 
 
 def bk1_shape_and_order(books):
-    want_fleets = ["A", "B", "C", "D", "E"]
-    # first appearance across A's seven, then B's list order (hand-written)
-    want_rows = ["GBPUSD", "EURUSD", "EURGBP", "AUDCHF", "CADCHF", "NZDCAD",
-                 "AUDNZD", "AUDCAD", "NZDCHF",
+    want_fleets = ["B", "C", "D", "E"]
+    # first appearance across B's nine (list order), then C's new rows
+    # (EURUSD*, AUDCAD*, GBPCHF, GBPCHF*), then D's (GBPUSD*, EURGBP*,
+    # AUDCHF*, CADCHF*); E adds none (hand-written, C158)
+    want_rows = ["GBPUSD", "EURUSD", "EURGBP", "AUDCAD", "AUDCHF", "CADCHF",
+                 "NZDCHF", "NZDCAD", "AUDNZD",
                  "EURUSD*", "AUDCAD*", "GBPCHF", "GBPCHF*", "GBPUSD*", "EURGBP*",
                  "AUDCHF*", "CADCHF*"]
     if not books:
@@ -198,8 +201,8 @@ def bk3_absent_and_not_live(books):
     bad = []
     if _cell(books, "NZDCHF", "C") is not None:
         bad.append(f"C NZDCHF off strip -> {_cell(books, 'NZDCHF', 'C')}")
-    if _cell(books, "AUDCAD", "A") is not None:
-        bad.append(f"A has no AUDCAD -> {_cell(books, 'AUDCAD', 'A')}")
+    if _cell(books, "GBPCHF", "B") is not None:
+        bad.append(f"B has no GBPCHF -> {_cell(books, 'GBPCHF', 'B')}")
     if _cell(books, "NZDCAD*", "B") != "NO ROW":
         bad.append(f"C119: the retired twin has no row -> {_cell(books, 'NZDCAD*', 'B')}")
     check("BK3", not bad, "; ".join(bad) if bad else "absent = null, not reporting = live false")
@@ -212,10 +215,9 @@ def bk4_totals(books):
     t = books.get("totals", {})
     # C: six strip instances, each 2/2/-0.5 -> long 12, short 12, net 0, mtm -3.0
     want_c = {"long": 12, "short": 12, "net": 0, "mtm": -3.0, "live": 6}
-    # A: k = 0..6, long k, short 7-k, mtm -k -> long 21, short 28, net -7, mtm -21.0
-    want_a = {"long": 21, "short": 28, "net": -7, "mtm": -21.0, "live": 7}
-    ok = t.get("B") == B_TOTALS and t.get("C") == want_c and t.get("A") == want_a
-    check("BK4", ok, f"A {t.get('A')}; B {t.get('B')}; C {t.get('C')}")
+    # A: off the strip (C158): no totals although its seven post in the fixture
+    ok = t.get("B") == B_TOTALS and t.get("C") == want_c and "A" not in t
+    check("BK4", ok, f"A {t.get('A', 'absent')}; B {t.get('B')}; C {t.get('C')}")
 
 
 def bk5_no_retired(data, books):
@@ -224,9 +226,9 @@ def bk5_no_retired(data, books):
         return
     ids = json.dumps(books)
     leaked = [i for i in pipshed.GRIND_RETIRED_INSTANCES if i in ids]
-    a_rows = [r["pair"] for r in books["rows"] if r["cells"].get("A") is not None]
-    ok = not leaked and len(a_rows) == len(pipshed.GRIND_A_STRIP_INSTANCES)
-    check("BK5", ok, f"retired ids in books {leaked}; A rows {len(a_rows)}")
+    a_cells = [r["pair"] for r in books["rows"] if "A" in r["cells"]]
+    ok = not leaked and not a_cells
+    check("BK5", ok, f"retired ids in books {leaked}; rows with an A cell {a_cells}")
 
 
 def _template():

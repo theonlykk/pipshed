@@ -313,8 +313,8 @@ def check_fs2():
         raise AssertionError(f"expected 200, got {resp.status_code}")
     data = resp.get_json()
     letters = [c.get("letter") for c in data.get("fleets") or []]
-    if letters != ["A", "B", "C", "D", "E"]:
-        raise AssertionError(f"letters expected ABCDE, got {letters}")
+    if letters != ["B", "C", "D", "E"]:
+        raise AssertionError(f"letters expected BCDE (A retired, C158), got {letters}")
     if data.get("ftmo_day") != today.isoformat():
         raise AssertionError(f"ftmo_day expected {today.isoformat()}, got {data.get('ftmo_day')}")
     return "fleets shape and ftmo_day"
@@ -357,14 +357,15 @@ def check_fs4():
     fake = FakeRedis()
     _apply_fixture_fb(fake)
     pipshed.r = fake
-    a = _fleet_by_letter(
-        pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "A"
-    )
-    # 2 Oct 2026: cycle 3 cut to the seven-pair ring after FTMO's
-    # hyperactivity warning (fxmatrix geometry-cycle3 A7); was 11.
-    if (a.get("health") or {}).get("instances_total") != 7:
-        raise AssertionError("A must total 7 strip instances (the ring)")
-    return "A total 7"
+    data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
+    # C158: A (FTMO 1514878887, closed 21 Oct) has no card; E (FTMO 1515045375)
+    # totals its twelve two-arm strip instances
+    if any(c.get("letter") == "A" for c in data.get("fleets") or []):
+        raise AssertionError("A's card must be gone (C158)")
+    e = _fleet_by_letter(data, "E")
+    if (e.get("health") or {}).get("instances_total") != 12:
+        raise AssertionError(f"E must total 12 strip instances, got {e.get('health')}")
+    return "no A card; E total 12"
 
 
 def check_fs5():
@@ -451,7 +452,7 @@ def check_fs8():
     _apply_fixture_fb(fake)
     pipshed.r = fake
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
-    for letter in ("A", "B", "C"):
+    for letter in ("B", "C", "E"):
         money = (_fleet_by_letter(data, letter).get("money") or {})
         if money.get("closed_net_today") is not None:
             raise AssertionError(f"{letter} closed_net_today must be null")
@@ -503,21 +504,22 @@ def check_fs11():
     fake = FakeRedis()
     _apply_fixture_fb(fake)
     pipshed.r = fake
-    a = _fleet_by_letter(
-        pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "A"
+    # C158: the silent-fleet case moves from A to E (no E heartbeats in fixture fb)
+    e = _fleet_by_letter(
+        pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "E"
     )
-    if a.get("status") != "no_data":
-        raise AssertionError(f"A status expected no_data, got {a.get('status')}")
+    if e.get("status") != "no_data":
+        raise AssertionError(f"E status expected no_data, got {e.get('status')}")
     for key in ("open_mtm",):
-        if (a.get("money") or {}).get(key) is not None:
-            raise AssertionError(f"A money.{key} must be null")
-    risk = a.get("risk") or {}
+        if (e.get("money") or {}).get(key) is not None:
+            raise AssertionError(f"E money.{key} must be null")
+    risk = e.get("risk") or {}
     for key in ("open_layers_long", "deepest", "day_pnl"):
         if risk.get(key) is not None:
-            raise AssertionError(f"A risk.{key} must be null")
-    if (a.get("account") or {}).get("login") is not None:
-        raise AssertionError("A account.login must be null")
-    return "A no_data nulls"
+            raise AssertionError(f"E risk.{key} must be null")
+    if (e.get("account") or {}).get("login") is not None:
+        raise AssertionError("E account.login must be null")
+    return "E no_data nulls"
 
 
 def _side(count, closed_net):
@@ -712,8 +714,8 @@ def check_fs20():
         raise AssertionError("B badge must be PARTIAL")
     if _fleet_by_letter(data, "C").get("badge") != "LIVE":
         raise AssertionError("C badge must be LIVE")
-    if _fleet_by_letter(data, "A").get("badge") != "NO CONNECTION":
-        raise AssertionError("A badge must be NO CONNECTION")
+    if _fleet_by_letter(data, "E").get("badge") != "NO CONNECTION":
+        raise AssertionError("E badge must be NO CONNECTION (no E heartbeats here)")
     if _fleet_by_letter(data, "D").get("badge") != "NO CONNECTION":
         raise AssertionError("D badge must be NO CONNECTION (attached 1 Oct; no D heartbeats here)")
     return "badges FB2"
@@ -762,7 +764,7 @@ def check_fs22():
                 "last_at": "2026-09-27T11:30:00Z",
             },
             {
-                "instance_id": "GRIND_GBPUSD_OPT",
+                "instance_id": "GRIND_GBPUSD_OPTE",
                 "level": "CRITICAL",
                 "code": "X",
                 "count": 1,
@@ -787,9 +789,9 @@ def check_fs22():
     red_event = next(a for a in b["alerts"] if a.get("kind") == "EVENT" and a.get("level") == "red")
     if red_event.get("code") != "STARTUP_EXIT_SHORTFALL_SIDE":
         raise AssertionError("red EVENT code mismatch")
-    a_alerts = _alert_triples(_fleet_by_letter(data, "A"))
-    if ("red", "EVENT", "GRIND_GBPUSD_OPT") not in a_alerts:
-        raise AssertionError(f"A must include GBPUSD OPT event, got {a_alerts}")
+    e_alerts = _alert_triples(_fleet_by_letter(data, "E"))
+    if ("red", "EVENT", "GRIND_GBPUSD_OPTE") not in e_alerts:
+        raise AssertionError(f"E must include GBPUSD OPTE event, got {e_alerts}")
     c_events = [t for t in _alert_triples(_fleet_by_letter(data, "C")) if t[1] == "EVENT"]
     if c_events:
         raise AssertionError(f"C must have no EVENT alerts, got {c_events}")
@@ -1107,8 +1109,8 @@ def _fixture_summary():
     _push(fake, "GRIND_EURGBP_OPTB", _scalp_rec("GRIND_EURGBP_OPTB", 0.86092, 0.85804, -3.85, ejected=True))
     # B: 1 GBPUSD scalp +10.0 pips
     _push(fake, "GRIND_GBPUSD_OPTB", _scalp_rec("GRIND_GBPUSD_OPTB", 1.32000, 1.32100, 1.00))
-    # A (FTMO): 1 EURGBP scalp +5.0 pips; must not appear on B's card
-    _push(fake, "GRIND_EURGBP_OPT", _scalp_rec("GRIND_EURGBP_OPT", 0.85000, 0.85050, 0.67, login=1514731800))
+    # E (FTMO 1515045375): 1 EURGBP scalp +5.0 pips; must not appear on B's card
+    _push(fake, "GRIND_EURGBP_OPTE", _scalp_rec("GRIND_EURGBP_OPTE", 0.85000, 0.85050, 0.67, login=1515045375))
     return fake
 
 
@@ -1131,10 +1133,10 @@ def check_fs36():
 
 def check_fs37():
     data = _strip(_fixture_summary())
-    a = (_fleet_by_letter(data, "A").get("summary") or {})
-    # A: 1 FTMO scalp +5.0 pips, 0.67 USD; 1 close x 0.06
-    if ((a.get("scalps") or {}).get("count"), a.get("commission"), a.get("net_usd")) != (1, -0.06, 0.61):
-        raise AssertionError(f"fleet A summary {a}")
+    e = (_fleet_by_letter(data, "E").get("summary") or {})
+    # E: 1 FTMO scalp +5.0 pips, 0.67 USD; 1 close x 0.06 -> net 0.61
+    if ((e.get("scalps") or {}).get("count"), e.get("commission"), e.get("net_usd")) != (1, -0.06, 0.61):
+        raise AssertionError(f"fleet E summary {e}")
     c = (_fleet_by_letter(data, "C").get("summary") or {})
     if (c.get("scalps") or {}).get("count") != 0 or c.get("closes") != 0:
         raise AssertionError(f"fleet C must be empty, got {c}")
@@ -1202,7 +1204,6 @@ def check_fs42():
 
     fake = _fixture_summary()
     data = _strip(fake)
-    a = _fleet_by_letter(data, "A").get("summary") or {}
     old = pipshed.GRIND_INSTANCES
     try:
         pipshed.GRIND_INSTANCES = list(GRIND_B_INSTANCES)   # the text summary of Fleet B's host
@@ -1221,11 +1222,11 @@ def check_fs42():
     return "card and text summary agree for the same fleet"
 
 
-# FS43-FS44 (2 Oct 2026, fxmatrix geometry-cycle3 A7): cycle 3 runs the
-# seven-pair ring. Retired: GRIND_AUDNZD_ALT, GRIND_NZDCAD_ALT (15:14Z),
-# GRIND_AUDCAD_OPT, GRIND_NZDCHF_OPT (~15:40Z). Predicted at the tests-only
-# commit: FS4 and FS43 FAIL (the strip still lists eleven); FS44 is a guard
-# (a kept instance's event still shows) and passes in both states.
+# FS43-FS44 (C158, 24 Oct 2026): A's card retired (FTMO 1514878887 closed
+# 21 Oct). FS43: with A's seven AND E's twelve reporting, no card is A's, E
+# is LIVE 12/12, and an event on an A instance is alerted on no card. FS44 is
+# a guard (an E instance's event shows on E) and passes in both states.
+# (Before C158: A's seven-pair ring, geometry-cycle3 A7.)
 A_RING = [
     "GRIND_GBPUSD_OPT",
     "GRIND_EURUSD_OPT",
@@ -1235,12 +1236,15 @@ A_RING = [
     "GRIND_NZDCAD_OPT",
     "GRIND_AUDNZD_OPT",
 ]
-A_RETIRED = {"GRIND_AUDNZD_ALT", "GRIND_NZDCAD_ALT", "GRIND_AUDCAD_OPT", "GRIND_NZDCHF_OPT"}
 
 
-def _fleet_a_ring_live(fake, crit_rows):
+def _fleets_a_and_e_live(fake, crit_rows):
+    import app as pipshed
+
     for inst in A_RING:
-        fake.set(f"fxmatrix:state:{inst}", HBB(30, account_login=1514731800, invariant_ok=True))
+        fake.set(f"fxmatrix:state:{inst}", HBB(30, account_login=1514878887, invariant_ok=True))
+    for inst in pipshed.GRIND_E_STRIP_INSTANCES:
+        fake.set(f"fxmatrix:state:{inst}", HBB(30, account_login=1515045375, invariant_ok=True))
     fake.set(DAILY_TABLE_KEY, json.dumps({"generated_at": now.isoformat(), "rows": _daily_rows_fb()}))
     fake.set(CRITICAL_KEY, json.dumps({"generated_at": now.isoformat(), "rows": crit_rows}))
 
@@ -1248,39 +1252,40 @@ def _fleet_a_ring_live(fake, crit_rows):
 def check_fs43():
     import app as pipshed
 
-    if list(pipshed.GRIND_A_STRIP_INSTANCES) != A_RING:
-        raise AssertionError(f"A strip must be the ring {A_RING}, got {pipshed.GRIND_A_STRIP_INSTANCES}")
     fake = FakeRedis()
-    _fleet_a_ring_live(fake, [
-        {"instance_id": "GRIND_AUDCAD_OPT", "level": "CRITICAL", "code": "INVARIANT_FAIL",
+    _fleets_a_and_e_live(fake, [
+        {"instance_id": "GRIND_GBPUSD_OPT", "level": "CRITICAL", "code": "INVARIANT_FAIL",
          "count": 2, "first_at": "2026-10-01T17:55:00Z", "last_at": "2026-10-01T17:55:30Z"},
     ])
     pipshed.r = fake
-    a = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "A")
-    health = a.get("health") or {}
-    if a.get("badge") != "LIVE" or health.get("instances_live") != 7 or health.get("instances_total") != 7:
-        raise AssertionError(f"A with the seven reporting: LIVE 7/7, got {a.get('badge')}, {health}")
-    named = {al.get("instance_id") for al in a.get("alerts") or []}
-    if named & A_RETIRED:
-        raise AssertionError(f"retired instances must not be alerted on A: {sorted(named & A_RETIRED)}")
-    return "A = the seven-pair ring, LIVE 7/7, no alerts for retired instances"
+    data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
+    if any(c.get("letter") == "A" for c in data.get("fleets") or []):
+        raise AssertionError("A's card must be gone though its seven report (C158)")
+    e = _fleet_by_letter(data, "E")
+    health = e.get("health") or {}
+    if e.get("badge") != "LIVE" or health.get("instances_live") != 12 or health.get("instances_total") != 12:
+        raise AssertionError(f"E with the twelve reporting: LIVE 12/12, got {e.get('badge')}, {health}")
+    named = {al.get("instance_id") for c in data.get("fleets") or [] for al in c.get("alerts") or []}
+    if named & set(A_RING):
+        raise AssertionError(f"A's instances must not be alerted on any card: {sorted(named & set(A_RING))}")
+    return "no A card though A reports; E LIVE 12/12; no alerts for A's instances"
 
 
 def check_fs44():
     import app as pipshed
 
     fake = FakeRedis()
-    _fleet_a_ring_live(fake, [
-        {"instance_id": "GRIND_AUDNZD_OPT", "level": "CRITICAL", "code": "STARTUP_EXIT_SHORTFALL",
+    _fleets_a_and_e_live(fake, [
+        {"instance_id": "GRIND_AUDCHF_ALTE", "level": "CRITICAL", "code": "STARTUP_EXIT_SHORTFALL",
          "count": 1, "first_at": "2026-10-01T15:51:00Z", "last_at": "2026-10-01T15:51:00Z"},
     ])
     pipshed.r = fake
-    a = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "A")
-    hits = [al for al in a.get("alerts") or []
-            if al.get("instance_id") == "GRIND_AUDNZD_OPT" and al.get("code") == "STARTUP_EXIT_SHORTFALL"]
+    e = _fleet_by_letter(pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json(), "E")
+    hits = [al for al in e.get("alerts") or []
+            if al.get("instance_id") == "GRIND_AUDCHF_ALTE" and al.get("code") == "STARTUP_EXIT_SHORTFALL"]
     if not hits:
-        raise AssertionError(f"a kept ring instance's event must still show on A: {a.get('alerts')}")
-    return "events of kept instances still show on A"
+        raise AssertionError(f"an E instance's event must show on E: {e.get('alerts')}")
+    return "events of E's instances show on E"
 
 
 CHECKS = [

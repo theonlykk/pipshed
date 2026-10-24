@@ -127,7 +127,8 @@ GRIND_D_STRIP = [
 ]
 
 BOOKS_ROWS = [
-    "GBPUSD", "EURUSD", "EURGBP", "AUDCHF", "CADCHF", "NZDCAD", "AUDNZD", "AUDCAD", "NZDCHF",
+    # C158: A retired; first appearance across B's nine, then C, D, E (by hand)
+    "GBPUSD", "EURUSD", "EURGBP", "AUDCAD", "AUDCHF", "CADCHF", "NZDCHF", "NZDCAD", "AUDNZD",
     "EURUSD*", "AUDCAD*", "GBPCHF", "GBPCHF*", "GBPUSD*", "EURGBP*", "AUDCHF*", "CADCHF*",
 ]
 
@@ -337,7 +338,7 @@ def check_ta4():
     import app as pipshed
 
     letters = [e["letter"] for e in pipshed.FLEET_STRIP]
-    if letters != ["A", "B", "C", "D", "E"]:
+    if letters != ["B", "C", "D", "E"]:
         raise AssertionError(f"FLEET_STRIP letters {letters}")
     e = next(x for x in pipshed.FLEET_STRIP if x["letter"] == "E")
     want = dict(E_FLEET_ENTRY)
@@ -345,7 +346,7 @@ def check_ta4():
     got = {k: e.get(k) for k in want}
     if got != want:
         raise AssertionError(f"E entry {got} != {want}")
-    return "five fleets; E built fields"
+    return "four fleets (A retired); E built fields"
 
 
 def check_ta5():
@@ -381,17 +382,17 @@ def check_ta7():
     pipshed.r = FakeRedis()
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets").get_json()
     cards = data.get("fleets") or []
-    if len(cards) != 5:
-        raise AssertionError(f"expected 5 cards, got {len(cards)}")
+    if len(cards) != 4 or any(c.get("letter") == "A" for c in cards):
+        raise AssertionError(f"expected 4 cards, no A, got {[c.get('letter') for c in cards]}")
     e = next(c for c in cards if c.get("letter") == "E")
     if e.get("placeholder") or e.get("badge") == "NOT BUILT":
         raise AssertionError(f"E card {e.get('badge')} placeholder={e.get('placeholder')}")
     if e.get("url") != "https://linuxe.pipshed.com":
         raise AssertionError(f"E url {e.get('url')}")
     books = data.get("books") or {}
-    if books.get("fleets") != ["A", "B", "C", "D", "E"]:
+    if books.get("fleets") != ["B", "C", "D", "E"]:
         raise AssertionError(f"books fleets {books.get('fleets')}")
-    return "five cards; E built; books ABCDE"
+    return "four cards (A retired); E built; books BCDE"
 
 
 def check_ta8():

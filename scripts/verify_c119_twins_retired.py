@@ -54,7 +54,8 @@ STRIP_D = [
 STRIPS = {"B": STRIP_B, "C": STRIP_C, "D": STRIP_D}
 STRIP_COUNTS = {"B": 9, "C": 6, "D": 12}
 BOOK_ROWS = [
-    "GBPUSD", "EURUSD", "EURGBP", "AUDCHF", "CADCHF", "NZDCAD", "AUDNZD", "AUDCAD", "NZDCHF",
+    # C158: A retired; first appearance across B's nine, then C, D, E (by hand)
+    "GBPUSD", "EURUSD", "EURGBP", "AUDCAD", "AUDCHF", "CADCHF", "NZDCHF", "NZDCAD", "AUDNZD",
     "EURUSD*", "AUDCAD*", "GBPCHF", "GBPCHF*", "GBPUSD*", "EURGBP*", "AUDCHF*", "CADCHF*",
 ]
 

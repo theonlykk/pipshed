@@ -7,8 +7,8 @@ have one more table that shows the actual limit order prices? maybe a
 colour to indicate if it is add or exit?"
 
 Rule (C115):
-1. FLEET_STRIP entries carry "lattice" (B, C, D: True, the ADR-162 lattice
-   live since C63 / D0; A: False, cycle 3 runs ADR-157 ejection).
+1. FLEET_STRIP entries carry "lattice" (B, C, D, E: True, the ADR-162 lattice
+   live since C63 / D0; A's card retired, C158).
 2. The strip response carries `quotes` (same fleets and row order as
    `books`), from the reads the strip already makes. A live cell:
    - bid / bid_kind: the highest resting BUY_LIMIT and "exit" or "entry"
@@ -115,7 +115,7 @@ AUDCHF_LONG[0]["virtual_level"] = 0.5755
 AUDCHF_LONG[1]["virtual_level"] = 0.5751
 # B NZDCHF: 5 long, below cap, no bid: no rolls count, no virtual
 NZDCHF_B_LONG = [lay("L", i, round(0.4700 - 0.0003 * i, 5)) for i in range(5)]
-# A EURGBP: 8 long, no lattice on A
+# A EURGBP (A off the strip, C158) and E EURGBP (FTMO, lattice): 8 long, none rolled
 A_EURGBP_LONG = [lay("L", i, round(0.8540 - 0.0003 * i, 5)) for i in range(8)]
 
 
@@ -161,6 +161,9 @@ def fixture():
                 [o("SELL_LIMIT", 0.4660, "GRIND|OPT|L|L00|EXT")], NZDCHF_LONG, long_n=8, short_n=0))
         else:
             fake.set(f"fxmatrix:state:{inst}", plain)
+    # E: only EURGBP posts (QT4); A's EURGBP above is the same book, off the strip
+    fake.set("fxmatrix:state:GRIND_EURGBP_OPTE", state(
+        [o("SELL_LIMIT", 0.8521, "GRIND|OPT|S|L00|ENT")], A_EURGBP_LONG, long_n=8, short_n=0))
     return fake
 
 
@@ -210,16 +213,16 @@ def qt3_no_roll_left(q):
     check("QT3", got is None, f"NZDCHF D off strip -> {got}")
 
 
-def qt4_no_lattice_on_a(q):
-    # C137 (changed by hand): A runs the IC strategy with the lattice since 7 Oct
-    # 22:08Z (FTMO 1514878887), so its capped side shows the lattice's next level
-    # like B, C, D: 8 long at 0.8540 down by 3 pips, deepest 0.8519, none rolled ->
-    # virtual bid 0.8519 - 3 pips = 0.8516, rolls left 8, gap to the 0.8521 offer
-    # 5.0 pips. (Before C137: no lattice on A, so no virtual level.)
+def qt4_lattice_on_ftmo(q):
+    # C158 (changed by hand): A's card retired, so the FTMO lattice case moves to
+    # E (FTMO 1515045375, lattice): 8 long at 0.8540 down by 3 pips, deepest 0.8519,
+    # none rolled -> virtual bid 0.8519 - 3 pips = 0.8516, rolls left 8, gap to the
+    # 0.8521 offer 5.0 pips. A's EURGBP posts the same book and has no cell.
     w = want(offer=0.8521, offer_kind="entry", rolls_left_long=8, virtual_bid=0.8516,
              virtual_gap_pips=5.0)
-    got = cell(q, "EURGBP", "A")
-    check("QT4", got == w, f"EURGBP A (FTMO-IC, lattice) {got}")
+    got = cell(q, "EURGBP", "E")
+    a = cell(q, "EURGBP", "A")
+    check("QT4", got == w and a == "MISSING", f"EURGBP E (FTMO, lattice) {got}; A {a}")
 
 
 def qt5_virtual_offer(q):
@@ -227,7 +230,7 @@ def qt5_virtual_offer(q):
     # gap (0.5830 - 0.5795) = 35.0
     w = want(bid=0.5795, bid_kind="exit", rolls_left_short=7, virtual_offer=0.583, virtual_gap_pips=35.0)
     got = cell(q, "AUDCAD", "C")
-    ok = got == w and cell(q, "NZDCHF", "C") is None and cell(q, "AUDCAD", "A") is None
+    ok = got == w and cell(q, "NZDCHF", "C") is None and cell(q, "GBPCHF", "B") is None
     check("QT5", ok, f"AUDCAD C {got}")
 
 
@@ -292,12 +295,12 @@ def main():
     data = pipshed.app.test_client().get(f"/api/g/{TOKEN}/fleets/1").get_json() or {}
     q = data.get("quotes")
     lattice = {e["letter"]: e.get("lattice") for e in pipshed.FLEET_STRIP}
-    if lattice != {"A": True, "B": True, "C": True, "D": True}:
+    if lattice != {"B": True, "C": True, "D": True, "E": True}:
         print(f"NOTE lattice flags {lattice}")
     qt1_real_both_sides(q)
     qt2_virtual_bid(q)
     qt3_no_roll_left(q)
-    qt4_no_lattice_on_a(q)
+    qt4_lattice_on_ftmo(q)
     qt5_virtual_offer(q)
     qt6_page()
     qt7_earlier_tables()

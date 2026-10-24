@@ -83,6 +83,7 @@ def state(orders=None, positions=None):
 
 def fixture():
     fake = FakeRedis()
+    # A's seven still post here; A is off the strip (C158), QG2
     for inst in pipshed.GRIND_A_STRIP_INSTANCES:
         fake.set(f"fxmatrix:state:{inst}", state())
     for inst in pipshed.GRIND_B_INSTANCES:
@@ -143,7 +144,9 @@ def qg2_one_sided_and_absent(gaps):
         ("EURGBP", "B"): {"live": True, "bid": 0.8501, "offer": None, "gap_pips": None},
         ("AUDCHF", "B"): {"live": True, "bid": None, "offer": None, "gap_pips": None},
         ("NZDCHF", "C"): None,
-        ("AUDCAD", "A"): None,
+        ("GBPCHF", "B"): None,
+        # A is off the strip (C158): no A cell at all, though its seven post
+        ("EURUSD", "A"): "MISSING",
     }
     bad = [f"{k}: {cell(gaps, *k)}" for k, v in want.items() if cell(gaps, *k) != v]
     check("QG2", gaps and not bad, "; ".join(bad) if bad else "one-sided, no book, not live, absent")

@@ -212,21 +212,6 @@ GRIND_E_STRIP_INSTANCES = [i for i in GRIND_E_INSTANCES if i not in GRIND_RETIRE
 
 FLEET_STRIP = [
     {
-        "letter": "A",
-        # C137: since 7 Oct 22:08Z FTMO 1514878887 runs the IC strategy (lattice,
-        # re-roll, roll gate 0) static at B's round-2 anchor; cycle 3 (1514731800,
-        # ADR-157 ejection, no lattice) retired 21:23Z. Same seven ids and magics.
-        "name": "FTMO-IC 1514878887",
-        "broker": "FTMO",
-        "url": "https://pipshed.com",
-        "instances": GRIND_A_STRIP_INSTANCES,
-        "lattice": True,
-        "daily_loss_limit_usd": 500.0,
-        "cycle_start": "2026-10-08",
-        "start_balance": 10000.0,
-        "placeholder": False,
-    },
-    {
         "letter": "B",
         "name": "Fleet B (IC)",
         "broker": "IC Markets",
